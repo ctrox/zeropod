@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"sync"
 
 	"github.com/containerd/cgroups"
@@ -123,12 +124,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	log.G(ctx).Info("creating container")
 
-	sandboxContainer, err := runc.IsSandboxContainer(r.Bundle)
-	if err != nil {
-		return nil, err
-	}
+	// sandboxContainer, err := runc.IsSandboxContainer(r.Bundle)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
-	container, err := runc.NewContainer(ctx, s.platform, r, !sandboxContainer)
+	container, err := runc.NewContainer(ctx, s.platform, r, false)
 	if err != nil {
 		return nil, err
 	}
@@ -163,23 +164,65 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 	log.G(ctx).Info("starting container")
 
+	// hold the send lock so that the start events are sent before any exit events in the error case
+	s.eventSendMu.Lock()
+	defer s.eventSendMu.Unlock()
+
+	p, err := container.Start(ctx, r)
+	if err != nil {
+		s.eventSendMu.Unlock()
+		return nil, errdefs.ToGRPC(err)
+	}
+
 	sandboxContainer, err := runc.IsSandboxContainer(container.Bundle)
 	if err != nil {
 		return nil, err
 	}
 
-	// if we don't have a sandbox container and no exec ID is set we can start our zeropod
+	// if we don't have a sandbox container and no exec ID is set we can
+	// checkpoint the container, stop it and start our zeropod in place.
 	if !sandboxContainer && len(r.ExecID) == 0 {
-		log.G(ctx).Info("starting zeropod")
-		return s.StartZeropod(ctx, r)
-	}
+		snapshotDir := snapshotDir(container.Bundle)
+		workDir := path.Join(snapshotDir, "work")
+		log.G(ctx).Infof("checkpointing container to %s", snapshotDir)
 
-	// hold the send lock so that the start events are sent before any exit events in the error case
-	s.eventSendMu.Lock()
-	p, err := container.Start(ctx, r)
-	if err != nil {
-		s.eventSendMu.Unlock()
-		return nil, errdefs.ToGRPC(err)
+		p.SetScaledDown(true)
+
+		// after checkpointing the activator server can't be reached. the
+		// problem (I think) is that the network namespace is destroyed by the
+		// checkpointing with exit.
+		if err := p.(*process.Init).Checkpoint(ctx, &process.CheckpointConfig{
+			Path:                     containerDir(container.Bundle),
+			WorkDir:                  workDir,
+			Exit:                     false,
+			AllowOpenTCP:             true,
+			AllowExternalUnixSockets: true,
+			AllowTerminal:            false,
+			FileLocks:                false,
+			EmptyNamespaces:          []string{},
+		}); err != nil {
+			p.SetScaledDown(false)
+
+			log.G(ctx).Errorf("error checkpointing container: %s", err)
+			b, err := os.ReadFile(path.Join(workDir, "dump.log"))
+			if err != nil {
+				log.G(ctx).Errorf("error reading dump.log: %s", err)
+			}
+			log.G(ctx).Errorf("dump.log: %s", b)
+			return &taskAPI.StartResponse{
+
+				Pid: uint32(p.Pid()),
+			}, nil
+		}
+
+		// we just kill it for the time being
+		p.Kill(ctx, 9, false)
+
+		log.G(ctx).Info("starting zeropod")
+
+		if err := s.StartZeropod(ctx, r); err != nil {
+			return nil, err
+		}
 	}
 
 	switch r.ExecID {
@@ -218,7 +261,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			Pid:         uint32(p.Pid()),
 		})
 	}
-	s.eventSendMu.Unlock()
+
 	return &taskAPI.StartResponse{
 		Pid: uint32(p.Pid()),
 	}, nil
@@ -569,14 +612,16 @@ func (s *service) checkProcesses(e runcC.Exit) {
 				}
 			}
 
-			p.SetExited(e.Status)
-			s.sendL(&eventstypes.TaskExit{
-				ContainerID: container.ID,
-				ID:          p.ID(),
-				Pid:         uint32(e.Pid),
-				ExitStatus:  uint32(e.Status),
-				ExitedAt:    p.ExitedAt(),
-			})
+			if !p.IsScaledDown() {
+				p.SetExited(e.Status)
+				s.sendL(&eventstypes.TaskExit{
+					ContainerID: container.ID,
+					ID:          p.ID(),
+					Pid:         uint32(e.Pid),
+					ExitStatus:  uint32(e.Status),
+					ExitedAt:    p.ExitedAt(),
+				})
+			}
 			return
 		}
 		return

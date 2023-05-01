@@ -2,7 +2,7 @@
 version = 2
 
 [debug]
-  level = "debug"
+  level = "info"
 
 [proxy_plugins]
 # fuse-overlayfs is used for rootless

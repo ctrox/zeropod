@@ -36,7 +36,7 @@ func NewServer(ctx context.Context, port int) *Server {
 func (s *Server) Start(ctx context.Context, hook hookFunc) error {
 	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
 	cfg := net.ListenConfig{}
-	l, err := cfg.Listen(ctx, "tcp", addr)
+	l, err := cfg.Listen(ctx, "tcp4", addr)
 	if err != nil {
 		return err
 	}
@@ -72,6 +72,7 @@ func (s *Server) serve(ctx context.Context) {
 	} else {
 		s.wg.Add(1)
 		go func() {
+			log.G(ctx).Info("accepting connection")
 			s.handleConection(ctx, conn)
 			s.wg.Done()
 		}()
@@ -102,26 +103,58 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	}
 
 	log.G(ctx).Println("proxying initial connection to program")
+
 	// fork is done but we need to finish up the initial connection. We do
 	// this by connecting to our forked process and piping the tcpConn that we
 	// initially accpted.
 	var initialConn net.Conn
 
-	for {
-		initialConn, err = net.DialTimeout("tcp", fmt.Sprintf("localhost:%d", s.port), 5*time.Second)
-		if err != nil {
-			var serr syscall.Errno
-			if errors.As(err, &serr) && serr == syscall.ECONNREFUSED {
-				// executed program might not be ready yet, so retry in a bit.
-				// TODO: do this with an exponential backoff and timeout.
-				time.Sleep(time.Millisecond * 100)
-				log.G(ctx).Println("unable to connect to process")
-				continue
-			}
+	ticker := time.NewTicker(time.Millisecond)
+	start := time.Now()
+	done := make(chan bool)
 
-			log.G(ctx).Fatal(err)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				log.G(ctx).Println("context cancelled")
+				done <- true
+				return
+			case <-done:
+				log.G(ctx).Println("done")
+				return
+			case <-ticker.C:
+				if time.Since(start) > time.Second*5 {
+					log.G(ctx).Error("timeout dialing process")
+
+					tcpConn.Close()
+					done <- true
+					return
+				}
+
+				initialConn, err = net.DialTimeout("tcp4", fmt.Sprintf("localhost:%d", s.port), 5*time.Second)
+				if err != nil {
+					var serr syscall.Errno
+					if errors.As(err, &serr) && serr == syscall.ECONNREFUSED {
+						// executed program might not be ready yet, so retry in a bit.
+						// TODO: do this with an exponential backoff and timeout.
+						continue
+					}
+					log.G(ctx).Errorf("unable to connect to process: %s", err)
+					return
+				}
+
+				log.G(ctx).Println("dial succeeded")
+				done <- true
+				return
+			}
 		}
-		break
+	}()
+
+	<-done
+
+	if initialConn == nil {
+		return
 	}
 
 	if err := pipe(tcpConn, initialConn); err != nil {
@@ -178,6 +211,7 @@ func chanFromConn(conn net.Conn, errChan chan error) chan []byte {
 				c <- res
 			}
 			if err != nil {
+				// TODO: this can panic (send on closed channel)
 				errChan <- err
 				break
 			}

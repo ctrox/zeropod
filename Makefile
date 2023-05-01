@@ -1,5 +1,13 @@
 install-kind: build
-	podman cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin
+	docker cp config.toml kind-control-plane:/etc/containerd/
+	docker exec kind-control-plane systemctl restart containerd
+	docker cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin
 
 build:
-	GOOS=linux GOARCH=arm64 go build -o containerd-shim-zeropod-v2 .
+	GOOS=linux GOARCH=amd64 go build -o containerd-shim-zeropod-v2 .
+
+logs:
+	docker exec -ti kind-control-plane journalctl -fu containerd
+
+install-criu-kind:
+	docker exec kind-control-plane criu || docker exec kind-control-plane sh -c "apt install -y software-properties-common && add-apt-repository ppa:criu/ppa && apt install -y criu"

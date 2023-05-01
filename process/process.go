@@ -53,4 +53,8 @@ type Process interface {
 	Kill(context.Context, uint32, bool) error
 	// SetExited sets the exit status for the process
 	SetExited(status int)
+
+	SetScaledDown(bool)
+	IsScaledDown() bool
+	ScaledDownAt() time.Time
 }

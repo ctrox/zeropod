@@ -76,6 +76,9 @@ type Init struct {
 	NoPivotRoot  bool
 	NoNewKeyring bool
 	CriuWorkPath string
+
+	scaledDown   bool
+	scaledDownAt time.Time
 }
 
 // NewRunc returns a new runc instance for a process
@@ -242,6 +245,21 @@ func (p *Init) Run(ctx context.Context, r *CreateConfig) error {
 	}
 	p.pid = pid
 	return nil
+}
+
+func (p *Init) IsScaledDown() bool {
+	return p.scaledDown
+}
+
+func (p *Init) SetScaledDown(scaledDown bool) {
+	if scaledDown {
+		p.scaledDownAt = time.Now()
+	}
+	p.scaledDown = scaledDown
+}
+
+func (p *Init) ScaledDownAt() time.Time {
+	return p.scaledDownAt
 }
 
 func (p *Init) openStdin(path string) error {

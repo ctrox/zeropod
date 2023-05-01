@@ -59,6 +59,9 @@ type execProcess struct {
 
 	parent    *Init
 	waitBlock chan struct{}
+
+	scaledDown   bool
+	scaledDownAt time.Time
 }
 
 func (e *execProcess) Wait() {
@@ -90,6 +93,22 @@ func (e *execProcess) SetExited(status int) {
 	defer e.mu.Unlock()
 
 	e.execState.SetExited(status)
+}
+
+func (e *execProcess) IsScaledDown() bool {
+	return e.scaledDown
+}
+
+func (e *execProcess) SetScaledDown(scaledDown bool) {
+	if scaledDown {
+		e.scaledDownAt = time.Now()
+	}
+
+	e.scaledDown = scaledDown
+}
+
+func (e *execProcess) ScaledDownAt() time.Time {
+	return e.scaledDownAt
 }
 
 func (e *execProcess) setExited(status int) {
