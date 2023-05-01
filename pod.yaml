@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: echo
+  labels:
+    app: echo
+spec:
+  runtimeClassName: zeropod
+  containers:
+  - name: http-echo
+    image: localhost/http-echo
+    imagePullPolicy: Never
+    command: ["/http-echo"]
+    args:
+      - -text="hello zeropod"
+    ports:
+    - containerPort: 5678
