@@ -4,10 +4,10 @@ install-kind: build
 	docker cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin
 
 build:
-	GOOS=linux GOARCH=amd64 go build -o containerd-shim-zeropod-v2 .
+	GOOS=linux go build -o containerd-shim-zeropod-v2 .
 
 logs:
 	docker exec -ti kind-control-plane journalctl -fu containerd
 
 install-criu-kind:
-	docker exec kind-control-plane criu || docker exec kind-control-plane sh -c "apt install -y software-properties-common && add-apt-repository ppa:criu/ppa && apt install -y criu"
+	docker exec kind-control-plane criu || docker exec kind-control-plane sh -c "apt update && apt install -y software-properties-common && add-apt-repository ppa:criu/ppa && apt install -y criu"
