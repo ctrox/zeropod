@@ -155,6 +155,10 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	}, nil
 }
 
+func LeaveRunning(args []string) []string {
+	return append(args, "--manage-cgroups-mode ignore")
+}
+
 // Start a process
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	container, err := s.getContainer(r.ID)
@@ -187,20 +191,20 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		log.G(ctx).Infof("checkpointing container to %s", snapshotDir)
 
 		p.SetScaledDown(true)
-
+		var actions []runcC.CheckpointAction
 		// after checkpointing the activator server can't be reached. the
 		// problem (I think) is that the network namespace is destroyed by the
-		// checkpointing with exit.
-		if err := p.(*process.Init).Checkpoint(ctx, &process.CheckpointConfig{
-			Path:                     containerDir(container.Bundle),
+		// checkpointing with exit. So for now we just set the leave running
+		// option and kill the process just after the dump.
+		if err := p.(*process.Init).Runtime().Checkpoint(ctx, container.ID, &runcC.CheckpointOpts{
+			ImagePath:                containerDir(container.Bundle),
 			WorkDir:                  workDir,
-			Exit:                     false,
 			AllowOpenTCP:             true,
 			AllowExternalUnixSockets: true,
 			AllowTerminal:            false,
 			FileLocks:                false,
 			EmptyNamespaces:          []string{},
-		}); err != nil {
+		}, append(actions, runcC.LeaveRunning)...); err != nil {
 			p.SetScaledDown(false)
 
 			log.G(ctx).Errorf("error checkpointing container: %s", err)
@@ -208,15 +212,18 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			if err != nil {
 				log.G(ctx).Errorf("error reading dump.log: %s", err)
 			}
-			log.G(ctx).Errorf("dump.log: %s", b)
-			return &taskAPI.StartResponse{
 
+			log.G(ctx).Errorf("dump.log: %s", b)
+
+			return &taskAPI.StartResponse{
 				Pid: uint32(p.Pid()),
 			}, nil
 		}
 
 		// we just kill it for the time being
-		p.Kill(ctx, 9, false)
+		if err := p.Kill(ctx, 9, false); err != nil {
+			return nil, err
+		}
 
 		log.G(ctx).Info("starting zeropod")
 

@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"os"
 	"sync"
 	"syscall"
 	"time"
@@ -22,7 +21,7 @@ type Server struct {
 	hook     hookFunc
 }
 
-type hookFunc func(f *os.File) error
+type hookFunc func() error
 
 func NewServer(ctx context.Context, port int) *Server {
 	s := &Server{
@@ -87,20 +86,11 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	// connection refused if a connection happens between this and starting
 	// the child process?
 	s.listener.Close()
+	defer conn.Close()
 
-	// retrieve copy of connection file descriptor
-	tcpConn, ok := conn.(*net.TCPConn)
-	if !ok {
-		log.G(ctx).Fatalf("failed to cast connection to TCP connection")
-	}
-	f, err := tcpConn.File()
-	if err != nil {
-		log.G(ctx).Fatalf("failed to retrieve copy of the underlying TCP connection file")
-	}
-	defer tcpConn.Close()
-
-	if err := s.hook(f); err != nil {
-		log.G(ctx).Fatal(err)
+	if err := s.hook(); err != nil {
+		log.G(ctx).Error(err)
+		return
 	}
 
 	log.G(ctx).Println("proxying initial connection to program")
@@ -109,6 +99,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	// this by connecting to our forked process and piping the tcpConn that we
 	// initially accpted.
 	var initialConn net.Conn
+	var err error
 
 	ticker := time.NewTicker(time.Millisecond)
 	start := time.Now()
@@ -125,10 +116,9 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 				log.G(ctx).Println("done")
 				return
 			case <-ticker.C:
-				if time.Since(start) > time.Second*5 {
+				if time.Since(start) > time.Second*10 {
 					log.G(ctx).Error("timeout dialing process")
 
-					tcpConn.Close()
 					done <- true
 					return
 				}
@@ -158,66 +148,35 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 		return
 	}
 
-	if err := pipe(tcpConn, initialConn); err != nil {
-		log.G(ctx).Error(err)
-	}
+	defer initialConn.Close()
+
+	proxy(conn, initialConn)
 
 	log.G(ctx).Println("initial connection closed")
 }
 
-// pipe pipes two net.Conn and blocks until one of them reaches an error or
-// EOF. Adapted from https://www.stavros.io/posts/proxying-two-connections-go/
-func pipe(conn1 net.Conn, conn2 net.Conn) error {
-	errChan := make(chan error)
-	chan1 := chanFromConn(conn1, errChan)
-	chan2 := chanFromConn(conn2, errChan)
+// proxy just proxies between conn1 and conn2.
+// TODO: add timeout
+func proxy(conn1, conn2 net.Conn) error {
+	defer conn1.Close()
+	defer conn2.Close()
 
-	defer close(errChan)
-	defer close(chan1)
-	defer close(chan2)
-
-	for {
-		select {
-		case b1 := <-chan1:
-			if _, err := conn2.Write(b1); err != nil {
-				return err
-			}
-		case b2 := <-chan2:
-			if _, err := conn1.Write(b2); err != nil {
-				return err
-			}
-		case err := <-errChan:
-			if err == io.EOF {
-				return nil
-			}
-			return err
-		}
-	}
-}
-
-// chanFromConn creates a channel from a Conn object, and sends everything it
-// Read()s from the socket to the channel.
-func chanFromConn(conn net.Conn, errChan chan error) chan []byte {
-	c := make(chan []byte)
+	var wg sync.WaitGroup
+	wg.Add(2)
 
 	go func() {
-		b := make([]byte, 1024)
-
-		for {
-			n, err := conn.Read(b)
-			if n > 0 {
-				res := make([]byte, n)
-				// Copy the buffer so it doesn't get changed while read by the recipient.
-				copy(res, b[:n])
-				c <- res
-			}
-			if err != nil {
-				// TODO: this can panic (send on closed channel)
-				errChan <- err
-				break
-			}
-		}
+		defer wg.Done()
+		io.Copy(conn1, conn2)
+		// Signal peer that no more data is coming.
+		conn1.Close()
+	}()
+	go func() {
+		defer wg.Done()
+		io.Copy(conn2, conn1)
+		// Signal peer that no more data is coming.
+		conn2.Close()
 	}()
 
-	return c
+	wg.Wait()
+	return nil
 }

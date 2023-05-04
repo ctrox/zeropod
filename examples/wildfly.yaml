@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: wildfly-pod
+spec:
+  runtimeClassName: zeropod
+  containers:
+    - image: jboss/wildfly
+      name: wildfly-pod
+      ports:
+        - containerPort: 8080

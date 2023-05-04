@@ -3,7 +3,6 @@ package task
 import (
 	"context"
 	"fmt"
-	"os"
 	"path"
 	"path/filepath"
 
@@ -38,7 +37,7 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 		ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", runc.RuntimeName))
 		log.G(ctx).Printf("starting activator")
 		// TODO: extract this port from container
-		port := 5678
+		port := 80
 		srv := activator.NewServer(ctx, port)
 
 		s.shutdown.RegisterCallback(func(ctx context.Context) error {
@@ -47,7 +46,7 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 			return nil
 		})
 
-		if err := srv.Start(ctx, func(f *os.File) error {
+		if err := srv.Start(ctx, func() error {
 			log.G(ctx).Printf("got a request")
 
 			// hold the send lock so that the start events are sent before any exit events in the error case
