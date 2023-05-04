@@ -414,6 +414,7 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	if err != nil {
 		return nil, err
 	}
+
 	if err := container.Kill(ctx, r); err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
@@ -612,7 +613,9 @@ func (s *service) checkProcesses(e runcC.Exit) {
 				}
 			}
 
-			if !p.IsScaledDown() {
+			if p.IsScaledDown() {
+				log.G(s.context).Infof("not setting exited because process has scaled down: %v", p.Pid())
+			} else {
 				p.SetExited(e.Status)
 				s.sendL(&eventstypes.TaskExit{
 					ContainerID: container.ID,

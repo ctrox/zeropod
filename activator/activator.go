@@ -50,7 +50,8 @@ func (s *Server) Start(ctx context.Context, hook hookFunc) error {
 	return nil
 }
 
-func (s *Server) Stop() {
+func (s *Server) Stop(ctx context.Context) {
+	log.G(ctx).Info("stopping activator")
 	close(s.quit)
 	s.listener.Close()
 	s.wg.Wait()
@@ -158,7 +159,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	}
 
 	if err := pipe(tcpConn, initialConn); err != nil {
-		log.G(ctx).Fatal(err)
+		log.G(ctx).Error(err)
 	}
 
 	log.G(ctx).Println("initial connection closed")

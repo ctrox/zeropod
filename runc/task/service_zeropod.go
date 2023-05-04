@@ -43,7 +43,7 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 
 		s.shutdown.RegisterCallback(func(ctx context.Context) error {
 			// stop server on shutdown
-			srv.Stop()
+			srv.Stop(ctx)
 			return nil
 		})
 
