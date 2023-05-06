@@ -43,7 +43,7 @@ import (
 )
 
 // NewContainer returns a new runc container
-func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTaskRequest, skipCreate bool) (_ *Container, retErr error) {
+func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTaskRequest) (_ *Container, retErr error) {
 	ns, err := namespaces.NamespaceRequired(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create namespace: %w", err)
@@ -129,11 +129,8 @@ func NewContainer(ctx context.Context, platform stdio.Platform, r *task.CreateTa
 		return nil, errdefs.ToGRPC(err)
 	}
 
-	if !skipCreate {
-		log.G(ctx).Info("not skipping create")
-		if err := p.Create(ctx, config); err != nil {
-			return nil, errdefs.ToGRPC(err)
-		}
+	if err := p.Create(ctx, config); err != nil {
+		return nil, errdefs.ToGRPC(err)
 	}
 
 	container := &Container{

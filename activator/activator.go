@@ -11,28 +11,34 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/log"
+	"github.com/ctrox/zeropod/process"
+	"github.com/ctrox/zeropod/runc"
 )
 
 type Server struct {
-	listener net.Listener
-	port     int
-	quit     chan interface{}
-	wg       sync.WaitGroup
-	hook     hookFunc
+	listener       net.Listener
+	port           int
+	quit           chan interface{}
+	wg             sync.WaitGroup
+	onAccept       onAcceptFunc
+	onClosed       onClosedFunc
+	connectTimeout time.Duration
 }
 
-type hookFunc func() error
+type onAcceptFunc func() (*runc.Container, process.Process, error)
+type onClosedFunc func(*runc.Container, process.Process) error
 
 func NewServer(ctx context.Context, port int) *Server {
 	s := &Server{
-		quit: make(chan interface{}),
-		port: port,
+		quit:           make(chan interface{}),
+		port:           port,
+		connectTimeout: time.Second * 5,
 	}
 
 	return s
 }
 
-func (s *Server) Start(ctx context.Context, hook hookFunc) error {
+func (s *Server) Start(ctx context.Context, onAccept onAcceptFunc, onClosed onClosedFunc) error {
 	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
 	cfg := net.ListenConfig{}
 	l, err := cfg.Listen(ctx, "tcp4", addr)
@@ -42,7 +48,8 @@ func (s *Server) Start(ctx context.Context, hook hookFunc) error {
 
 	log.G(ctx).Infof("listening on %s", addr)
 
-	s.hook = hook
+	s.onAccept = onAccept
+	s.onClosed = onClosed
 	s.listener = l
 	s.wg.Add(1)
 	go s.serve(ctx)
@@ -77,6 +84,7 @@ func (s *Server) serve(ctx context.Context) {
 			s.wg.Done()
 		}()
 	}
+	log.G(ctx).Info("serve done")
 }
 
 func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
@@ -85,10 +93,13 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	// TODO: test what happens with concurrent connections, do we get a
 	// connection refused if a connection happens between this and starting
 	// the child process?
-	s.listener.Close()
+	if err := s.listener.Close(); err != nil {
+		log.G(ctx).Errorf("error during listener close: %s", err)
+	}
 	defer conn.Close()
 
-	if err := s.hook(); err != nil {
+	c, p, err := s.onAccept()
+	if err != nil {
 		log.G(ctx).Error(err)
 		return
 	}
@@ -99,7 +110,6 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	// this by connecting to our forked process and piping the tcpConn that we
 	// initially accpted.
 	var initialConn net.Conn
-	var err error
 
 	ticker := time.NewTicker(time.Millisecond)
 	start := time.Now()
@@ -116,7 +126,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 				log.G(ctx).Println("done")
 				return
 			case <-ticker.C:
-				if time.Since(start) > time.Second*10 {
+				if time.Since(start) > s.connectTimeout {
 					log.G(ctx).Error("timeout dialing process")
 
 					done <- true
@@ -153,6 +163,10 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	proxy(conn, initialConn)
 
 	log.G(ctx).Println("initial connection closed")
+
+	if err := s.onClosed(c, p); err != nil {
+		log.G(ctx).Error(err)
+	}
 }
 
 // proxy just proxies between conn1 and conn2.

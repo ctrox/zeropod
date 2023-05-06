@@ -114,7 +114,9 @@ type service struct {
 	containers map[string]*runc.Container
 
 	shutdown  shutdown.Service
-	activator sync.Once
+	activator sync.Mutex
+
+	stdio stdio.Stdio
 }
 
 // Create a new initial process and container with the underlying OCI runtime
@@ -124,12 +126,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	log.G(ctx).Info("creating container")
 
-	// sandboxContainer, err := runc.IsSandboxContainer(r.Bundle)
-	// if err != nil {
-	// 	return nil, err
-	// }
-
-	container, err := runc.NewContainer(ctx, s.platform, r, false)
+	container, err := runc.NewContainer(ctx, s.platform, r)
 	if err != nil {
 		return nil, err
 	}
@@ -159,6 +156,58 @@ func LeaveRunning(args []string) []string {
 	return append(args, "--manage-cgroups-mode ignore")
 }
 
+func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, container *runc.Container, p process.Process) error {
+	snapshotDir := snapshotDir(container.Bundle)
+
+	if err := os.RemoveAll(snapshotDir); err != nil {
+		return fmt.Errorf("unable to prepare snapshot dir: %w", err)
+	}
+
+	workDir := path.Join(snapshotDir, "work")
+	log.G(ctx).Infof("checkpointing process %d of container to %s", p.Pid(), snapshotDir)
+	s.stdio = p.Stdio()
+
+	p.SetScaledDown(true)
+	var actions []runcC.CheckpointAction
+	// after checkpointing the activator server can't be reached. the
+	// problem (I think) is that the network namespace is destroyed by the
+	// checkpointing with exit. So for now we just set the leave running
+	// option and kill the process just after the dump.
+	if err := p.(*process.Init).Runtime().Checkpoint(ctx, container.ID, &runcC.CheckpointOpts{
+		ImagePath:                containerDir(container.Bundle),
+		WorkDir:                  workDir,
+		AllowOpenTCP:             true,
+		AllowExternalUnixSockets: true,
+		AllowTerminal:            false,
+		FileLocks:                false,
+		EmptyNamespaces:          []string{},
+	}, append(actions, runcC.LeaveRunning)...); err != nil {
+		p.SetScaledDown(false)
+
+		log.G(ctx).Errorf("error checkpointing container: %s", err)
+		b, err := os.ReadFile(path.Join(workDir, "dump.log"))
+		if err != nil {
+			log.G(ctx).Errorf("error reading dump.log: %s", err)
+		}
+
+		log.G(ctx).Errorf("dump.log: %s", b)
+
+		return err
+	}
+
+	// we just kill it for the time being
+	if err := p.Kill(ctx, 9, false); err != nil {
+		return err
+	}
+	log.G(ctx).Info("starting zeropod")
+
+	if err := s.StartZeropod(ctx, r); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 // Start a process
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	container, err := s.getContainer(r.ID)
@@ -176,60 +225,6 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	if err != nil {
 		s.eventSendMu.Unlock()
 		return nil, errdefs.ToGRPC(err)
-	}
-
-	sandboxContainer, err := runc.IsSandboxContainer(container.Bundle)
-	if err != nil {
-		return nil, err
-	}
-
-	// if we don't have a sandbox container and no exec ID is set we can
-	// checkpoint the container, stop it and start our zeropod in place.
-	if !sandboxContainer && len(r.ExecID) == 0 {
-		snapshotDir := snapshotDir(container.Bundle)
-		workDir := path.Join(snapshotDir, "work")
-		log.G(ctx).Infof("checkpointing container to %s", snapshotDir)
-
-		p.SetScaledDown(true)
-		var actions []runcC.CheckpointAction
-		// after checkpointing the activator server can't be reached. the
-		// problem (I think) is that the network namespace is destroyed by the
-		// checkpointing with exit. So for now we just set the leave running
-		// option and kill the process just after the dump.
-		if err := p.(*process.Init).Runtime().Checkpoint(ctx, container.ID, &runcC.CheckpointOpts{
-			ImagePath:                containerDir(container.Bundle),
-			WorkDir:                  workDir,
-			AllowOpenTCP:             true,
-			AllowExternalUnixSockets: true,
-			AllowTerminal:            false,
-			FileLocks:                false,
-			EmptyNamespaces:          []string{},
-		}, append(actions, runcC.LeaveRunning)...); err != nil {
-			p.SetScaledDown(false)
-
-			log.G(ctx).Errorf("error checkpointing container: %s", err)
-			b, err := os.ReadFile(path.Join(workDir, "dump.log"))
-			if err != nil {
-				log.G(ctx).Errorf("error reading dump.log: %s", err)
-			}
-
-			log.G(ctx).Errorf("dump.log: %s", b)
-
-			return &taskAPI.StartResponse{
-				Pid: uint32(p.Pid()),
-			}, nil
-		}
-
-		// we just kill it for the time being
-		if err := p.Kill(ctx, 9, false); err != nil {
-			return nil, err
-		}
-
-		log.G(ctx).Info("starting zeropod")
-
-		if err := s.StartZeropod(ctx, r); err != nil {
-			return nil, err
-		}
 	}
 
 	switch r.ExecID {
@@ -267,6 +262,21 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			ExecID:      r.ExecID,
 			Pid:         uint32(p.Pid()),
 		})
+	}
+
+	sandboxContainer, err := runc.IsSandboxContainer(container.Bundle)
+	if err != nil {
+		return nil, err
+	}
+
+	// if we don't have a sandbox container and no exec ID is set we can
+	// checkpoint the container, stop it and start our zeropod in place.
+	if !sandboxContainer && len(r.ExecID) == 0 {
+		if err := s.scaleDown(ctx, r, container, p); err != nil {
+			return &taskAPI.StartResponse{
+				Pid: uint32(p.Pid()),
+			}, nil
+		}
 	}
 
 	return &taskAPI.StartResponse{
