@@ -1,7 +1,6 @@
 package runc
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -43,22 +42,12 @@ func GetSpec(bundlePath string) (*specs.Spec, error) {
 
 // GetNetworkNS reads the bundle's OCI spec and returns the network NS path of
 // the container.
-func GetNetworkNS(ctx context.Context, bundlePath string) (string, error) {
-	var bundleSpec specs.Spec
-	bundleConfigContents, err := os.ReadFile(filepath.Join(bundlePath, "config.json"))
-	if err != nil {
-		return "", fmt.Errorf("failed to read budle: %w", err)
-	}
-
-	if err := json.Unmarshal(bundleConfigContents, &bundleSpec); err != nil {
-		return "", err
-	}
-
-	for _, ns := range bundleSpec.Linux.Namespaces {
+func GetNetworkNS(spec *specs.Spec) (string, error) {
+	for _, ns := range spec.Linux.Namespaces {
 		if ns.Type == specs.NetworkNamespace {
 			return ns.Path, nil
 		}
 	}
 
-	return "", fmt.Errorf("could not find network namespace in container bundle %s", bundlePath)
+	return "", fmt.Errorf("could not find network namespace in container spec")
 }

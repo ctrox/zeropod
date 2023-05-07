@@ -49,5 +49,4 @@ version = 2
 
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod]
   runtime_type = "io.containerd.zeropod.v2"
-  # TODO: figure out if this works
-  # pod_annotations = ["io.kubernetes.container.ports"]
+  pod_annotations = ["dev.ctrox.zeropod/port", "dev.ctrox.zeropod/scaledownduration"]

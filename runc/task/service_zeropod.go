@@ -27,19 +27,28 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 		return err
 	}
 
+	spec, err := runc.GetSpec(container.Bundle)
+	if err != nil {
+		return err
+	}
+
 	// switch to network ns of container and start our activator listener
-	netNSPath, err := runc.GetNetworkNS(ctx, container.Bundle)
+	netNSPath, err := runc.GetNetworkNS(spec)
 	if err != nil {
 		return err
 	}
 
 	// create a new context in order to not run into deadline of parent context
 	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", runc.RuntimeName))
-	log.G(ctx).Printf("starting activator")
 
-	// TODO: extract this port from container
-	port := 5678
-	srv, err := activator.NewServer(ctx, port, netNSPath)
+	cfg, err := NewConfig(spec)
+	if err != nil {
+		return err
+	}
+
+	log.G(ctx).Infof("starting activator with config: %v", cfg)
+
+	srv, err := activator.NewServer(ctx, cfg.Port, netNSPath)
 	if err != nil {
 		return err
 	}
@@ -77,20 +86,16 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 		// in the meantime. (not sure why that happens though)
 		return container, p, nil
 	}, func(container *runc.Container, p process.Process) error {
-		time.Sleep(time.Second * 5)
-		log.G(ctx).Info("scaling down after scaleup finished")
+		time.Sleep(cfg.ScaleDownDuration)
+		log.G(ctx).Info("scaling down after scale down duration is up")
 		return s.scaleDown(ctx, r, container, p)
 	}); err != nil {
-		log.G(ctx).Errorf("failed to start server on port %d: %s", port, err)
+		log.G(ctx).Errorf("failed to start server: %s", err)
 		return err
 	}
 
 	log.G(ctx).Printf("activator started")
 	return nil
-}
-
-func leaveRunning(args []string) []string {
-	return append(args, "--manage-cgroups-mode ignore")
 }
 
 func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, container *runc.Container, p process.Process) error {
@@ -140,6 +145,7 @@ func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, contai
 	log.G(ctx).Info("starting zeropod")
 
 	if err := s.StartZeropod(ctx, r); err != nil {
+		log.G(ctx).Errorf("unable to start zeropod: %s", err)
 		return err
 	}
 
@@ -147,9 +153,13 @@ func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, contai
 }
 
 func (s *service) restore(ctx context.Context, container *runc.Container) (process.Process, error) {
-	container.ID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprint(time.Now().Unix()))))
+	// generate a random container ID. TODO: does this matter? This seems to
+	// work well enough but not sure what else depends on the container ID.
+	container.ID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprint(time.Now().UnixNano()))))
 
 	runtime := process.NewRunc("", container.Bundle, "k8s", "", "", false)
+
+	log.G(ctx).Infof("stdout %s", s.stdio.Stdout)
 
 	// TODO: we should somehow reuse the original stdio. For now we just
 	// create a file for stdout and stderr.

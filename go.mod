@@ -14,6 +14,7 @@ require (
 	github.com/containernetworking/plugins v1.1.1
 	github.com/gogo/protobuf v1.3.2
 	github.com/hashicorp/go-multierror v1.1.1
+	github.com/mitchellh/mapstructure v1.1.2
 	github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417
 	github.com/sirupsen/logrus v1.8.1
 	golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f

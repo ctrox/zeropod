@@ -19,7 +19,7 @@ import (
 
 type Server struct {
 	listener       net.Listener
-	port           int
+	port           uint16
 	quit           chan interface{}
 	wg             sync.WaitGroup
 	onAccept       onAcceptFunc
@@ -31,7 +31,7 @@ type Server struct {
 type onAcceptFunc func() (*runc.Container, process.Process, error)
 type onClosedFunc func(*runc.Container, process.Process) error
 
-func NewServer(ctx context.Context, port int, nsPath string) (*Server, error) {
+func NewServer(ctx context.Context, port uint16, nsPath string) (*Server, error) {
 	targetNS, err := ns.GetNS(nsPath)
 	if err != nil {
 		return nil, err

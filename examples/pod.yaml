@@ -4,6 +4,9 @@ metadata:
   generateName: echo-
   labels:
     app: echo
+  annotations:
+    dev.ctrox.zeropod/port: "5678"
+    dev.ctrox.zeropod/scaledownduration: 1m
 spec:
   runtimeClassName: zeropod
   containers:
