@@ -7,13 +7,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"runtime"
+	"strings"
 	"time"
 
 	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/process"
 	"github.com/ctrox/zeropod/runc"
-	"github.com/vishvananda/netns"
 
 	eventstypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/log"
@@ -28,16 +27,9 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 		return err
 	}
 
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
 	// switch to network ns of container and start our activator listener
 	netNSPath, err := runc.GetNetworkNS(ctx, container.Bundle)
 	if err != nil {
-		return err
-	}
-
-	if err := setNetNSFromPath(ctx, netNSPath); err != nil {
 		return err
 	}
 
@@ -47,7 +39,10 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 
 	// TODO: extract this port from container
 	port := 5678
-	srv := activator.NewServer(ctx, port)
+	srv, err := activator.NewServer(ctx, port, netNSPath)
+	if err != nil {
+		return err
+	}
 
 	s.shutdown.RegisterCallback(func(ctx context.Context) error {
 		// stop server on shutdown
@@ -67,7 +62,6 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 			// our shim and let containerd recreate it.
 			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
 			os.Exit(1)
-			// return nil, nil, fmt.Errorf("error restoring container: %w", err)
 		}
 		p.SetScaledDown(false)
 		log.G(ctx).Printf("restored process: %d", p.Pid())
@@ -81,56 +75,17 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 
 		// before returning we set the net ns again as it might have changed
 		// in the meantime. (not sure why that happens though)
-		return container, p, setNetNSFromPath(ctx, netNSPath)
+		return container, p, nil
 	}, func(container *runc.Container, p process.Process) error {
 		time.Sleep(time.Second * 5)
 		log.G(ctx).Info("scaling down after scaleup finished")
 		return s.scaleDown(ctx, r, container, p)
 	}); err != nil {
 		log.G(ctx).Errorf("failed to start server on port %d: %s", port, err)
+		return err
 	}
 
 	log.G(ctx).Printf("activator started")
-	return nil
-}
-
-func setNetNSFromPath(ctx context.Context, path string) error {
-	beforeNS, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("error getting current netns: %w", err)
-	}
-	log.G(ctx).Infof("netns before set: %s", beforeNS.String())
-
-	ns, err := netns.GetFromPath(path)
-	if err != nil {
-		return err
-	}
-
-	if err := netns.Set(ns); err != nil {
-		return err
-	}
-
-	log.G(ctx).Infof("set netns to %s", path)
-	return nil
-}
-
-func (s *service) setNetNSOfContainer(ctx context.Context, container *runc.Container) error {
-	// switch to network ns of container and start our activator listener
-	netNSPath, err := runc.GetNetworkNS(ctx, container.Bundle)
-	if err != nil {
-		return err
-	}
-
-	ns, err := netns.GetFromPath(netNSPath)
-	if err != nil {
-		return err
-	}
-
-	if err := netns.Set(ns); err != nil {
-		return err
-	}
-
-	log.G(ctx).Infof("set netns to %s", netNSPath)
 	return nil
 }
 
@@ -138,19 +93,21 @@ func (s *service) restore(ctx context.Context, container *runc.Container) (proce
 	container.ID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprint(time.Now().Unix()))))
 
 	runtime := process.NewRunc("", container.Bundle, "k8s", "", "", false)
+
+	// TODO: we should somehow reuse the original stdio. For now we just
+	// create a file for stdout and stderr.
+	s.stdio.Stdout = strings.TrimPrefix(s.stdio.Stdout, "file://")
+	s.stdio.Stdout = strings.TrimSuffix(s.stdio.Stdout, "-1")
+	s.stdio.Stderr = strings.TrimPrefix(s.stdio.Stdout, "file://")
+	s.stdio.Stderr = strings.TrimSuffix(s.stdio.Stdout, "-1")
+
 	p := process.New(container.ID, runtime, stdio.Stdio{
 		Stdout: "file://" + s.stdio.Stdout + "-1",
 		Stderr: "file://" + s.stdio.Stderr + "-1",
 	})
 	p.Bundle = container.Bundle
 	p.Platform = s.platform
-	// p.Rootfs = rootfs
 	p.WorkDir = filepath.Join(container.Bundle, "work")
-	// p.IoUID = int(options.IoUid)
-	// p.IoGID = int(options.IoGid)
-	// p.NoPivotRoot = options.NoPivotRoot
-	// p.NoNewKeyring = options.NoNewKeyring
-	// p.CriuWorkPath = options.CriuWorkPath
 
 	if p.CriuWorkPath == "" {
 		// if criu work path not set, use container WorkDir
@@ -172,6 +129,10 @@ func (s *service) restore(ctx context.Context, container *runc.Container) (proce
 	if err := p.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start failed during restore: %w", err)
 	}
+
+	s.send(&eventstypes.TaskResumed{
+		ContainerID: container.ID,
+	})
 
 	return p, nil
 }

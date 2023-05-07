@@ -199,6 +199,11 @@ func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, contai
 	if err := p.Kill(ctx, 9, false); err != nil {
 		return err
 	}
+
+	s.send(&eventstypes.TaskCheckpointed{
+		ContainerID: container.ID,
+	})
+
 	log.G(ctx).Info("starting zeropod")
 
 	if err := s.StartZeropod(ctx, r); err != nil {

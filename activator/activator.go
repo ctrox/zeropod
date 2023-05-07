@@ -10,7 +10,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/cenkalti/backoff/v4"
 	"github.com/containerd/containerd/log"
+	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/process"
 	"github.com/ctrox/zeropod/runc"
 )
@@ -23,26 +25,49 @@ type Server struct {
 	onAccept       onAcceptFunc
 	onClosed       onClosedFunc
 	connectTimeout time.Duration
+	ns             ns.NetNS
 }
 
 type onAcceptFunc func() (*runc.Container, process.Process, error)
 type onClosedFunc func(*runc.Container, process.Process) error
 
-func NewServer(ctx context.Context, port int) *Server {
+func NewServer(ctx context.Context, port int, nsPath string) (*Server, error) {
+	targetNS, err := ns.GetNS(nsPath)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
 		quit:           make(chan interface{}),
 		port:           port,
 		connectTimeout: time.Second * 5,
+		ns:             targetNS,
 	}
 
-	return s
+	return s, nil
 }
 
 func (s *Server) Start(ctx context.Context, onAccept onAcceptFunc, onClosed onClosedFunc) error {
 	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
 	cfg := net.ListenConfig{}
-	l, err := cfg.Listen(ctx, "tcp4", addr)
-	if err != nil {
+
+	// for some reason, sometimes the address will still be in use after
+	// checkpointing, so we wrap the listen in a retry.
+	if err := backoff.Retry(
+		func() error {
+			// make sure to run the listener in our target namespace
+			return s.ns.Do(func(_ ns.NetNS) error {
+				l, err := cfg.Listen(ctx, "tcp4", addr)
+				if err != nil {
+					return fmt.Errorf("unable to listen: %w", err)
+				}
+
+				s.listener = l
+				return nil
+			})
+		},
+		newBackOff(),
+	); err != nil {
 		return err
 	}
 
@@ -50,7 +75,7 @@ func (s *Server) Start(ctx context.Context, onAccept onAcceptFunc, onClosed onCl
 
 	s.onAccept = onAccept
 	s.onClosed = onClosed
-	s.listener = l
+
 	s.wg.Add(1)
 	go s.serve(ctx)
 	return nil
@@ -59,7 +84,9 @@ func (s *Server) Start(ctx context.Context, onAccept onAcceptFunc, onClosed onCl
 func (s *Server) Stop(ctx context.Context) {
 	log.G(ctx).Info("stopping activator")
 	close(s.quit)
-	s.listener.Close()
+	if s.listener != nil {
+		s.listener.Close()
+	}
 	s.wg.Wait()
 }
 
@@ -80,6 +107,7 @@ func (s *Server) serve(ctx context.Context) {
 		s.wg.Add(1)
 		go func() {
 			log.G(ctx).Info("accepting connection")
+
 			s.handleConection(ctx, conn)
 			s.wg.Done()
 		}()
@@ -133,8 +161,10 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 					return
 				}
 
-				initialConn, err = net.DialTimeout("tcp4", fmt.Sprintf("localhost:%d", s.port), 5*time.Second)
-				if err != nil {
+				if err := s.ns.Do(func(_ ns.NetNS) error {
+					initialConn, err = net.DialTimeout("tcp4", fmt.Sprintf("localhost:%d", s.port), s.connectTimeout)
+					return err
+				}); err != nil {
 					var serr syscall.Errno
 					if errors.As(err, &serr) && serr == syscall.ECONNREFUSED {
 						// executed program might not be ready yet, so retry in a bit.
@@ -193,4 +223,18 @@ func proxy(conn1, conn2 net.Conn) error {
 
 	wg.Wait()
 	return nil
+}
+
+func newBackOff() *backoff.ExponentialBackOff {
+	b := &backoff.ExponentialBackOff{
+		InitialInterval:     time.Millisecond,
+		RandomizationFactor: backoff.DefaultRandomizationFactor,
+		Multiplier:          backoff.DefaultMultiplier,
+		MaxInterval:         100 * time.Millisecond,
+		MaxElapsedTime:      time.Second,
+		Stop:                backoff.Stop,
+		Clock:               backoff.SystemClock,
+	}
+	b.Reset()
+	return b
 }
