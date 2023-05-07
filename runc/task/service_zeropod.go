@@ -2,31 +2,124 @@ package task
 
 import (
 	"context"
-	"crypto/sha256"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
-	"strings"
+	"sync"
 	"time"
 
 	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/process"
 	"github.com/ctrox/zeropod/runc"
+	"github.com/sirupsen/logrus"
 
+	"github.com/containerd/cgroups"
 	eventstypes "github.com/containerd/containerd/api/events"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/pkg/oom"
+	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
+	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
+	"github.com/containerd/containerd/pkg/shutdown"
 	"github.com/containerd/containerd/pkg/stdio"
+	"github.com/containerd/containerd/runtime/v2/shim"
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
+	"github.com/containerd/containerd/sys/reaper"
+	runcC "github.com/containerd/go-runc"
 )
 
-// StartZeropod starts a zeropod process
-func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) error {
-	container, err := s.getContainer(r.ID)
+func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TaskService, error) {
+	var (
+		ep  oom.Watcher
+		err error
+	)
+	if cgroups.Mode() == cgroups.Unified {
+		ep, err = oomv2.New(publisher)
+	} else {
+		ep, err = oomv1.New(publisher)
+	}
 	if err != nil {
-		return err
+		return nil, err
+	}
+	go ep.Run(ctx)
+	s := &service{
+		context:    ctx,
+		events:     make(chan interface{}, 128),
+		ec:         reaper.Default.Subscribe(),
+		ep:         ep,
+		shutdown:   sd,
+		containers: make(map[string]*runc.Container),
+	}
+	w := &wrapper{service: s}
+	go w.processExits()
+	runcC.Monitor = reaper.Default
+	if err := s.initPlatform(); err != nil {
+		return nil, fmt.Errorf("failed to initialized platform behavior: %w", err)
+	}
+	go s.forward(ctx, publisher)
+	sd.RegisterCallback(func(context.Context) error {
+		close(s.events)
+		return nil
+	})
+
+	if address, err := shim.ReadAddress("address"); err == nil {
+		sd.RegisterCallback(func(context.Context) error {
+			return shim.RemoveSocket(address)
+		})
 	}
 
+	return w, err
+}
+
+type wrapper struct {
+	*service
+
+	activator       sync.Mutex
+	originalProcess process.Process
+}
+
+func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
+	resp, err := s.service.Start(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+
+	container, err := s.getContainer(r.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	p, err := container.Process(r.ExecID)
+	if err != nil {
+		return nil, errdefs.ToGRPC(err)
+	}
+
+	sandboxContainer, err := runc.IsSandboxContainer(container.Bundle)
+	if err != nil {
+		return nil, err
+	}
+
+	// if we don't have a sandbox container and no exec ID is set we can
+	// checkpoint the container, stop it and start our zeropod in place.
+	if !sandboxContainer && len(r.ExecID) == 0 {
+		// before we scale down, we store the original process so we can reuse
+		// some things and also cleanly shutdown when the time comes.
+		s.originalProcess = p
+		// let the process start first before we checkpoint. TODO: this should be done async.
+		time.Sleep(time.Second * 2)
+		if err := s.scaleDown(ctx, container, p); err != nil {
+			return &taskAPI.StartResponse{
+				Pid: uint32(p.Pid()),
+			}, nil
+		}
+	}
+
+	return resp, err
+}
+
+// StartZeropod starts a zeropod process
+func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) error {
 	spec, err := runc.GetSpec(container.Bundle)
 	if err != nil {
 		return err
@@ -88,7 +181,7 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 	}, func(container *runc.Container, p process.Process) error {
 		time.Sleep(cfg.ScaleDownDuration)
 		log.G(ctx).Info("scaling down after scale down duration is up")
-		return s.scaleDown(ctx, r, container, p)
+		return s.scaleDown(ctx, container, p)
 	}); err != nil {
 		log.G(ctx).Errorf("failed to start server: %s", err)
 		return err
@@ -98,7 +191,7 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 	return nil
 }
 
-func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, container *runc.Container, p process.Process) error {
+func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
 	snapshotDir := snapshotDir(container.Bundle)
 
 	if err := os.RemoveAll(snapshotDir); err != nil {
@@ -107,7 +200,6 @@ func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, contai
 
 	workDir := path.Join(snapshotDir, "work")
 	log.G(ctx).Infof("checkpointing process %d of container to %s", p.Pid(), snapshotDir)
-	s.stdio = p.Stdio()
 
 	p.SetScaledDown(true)
 	// after checkpointing criu locks the network until the process is
@@ -144,7 +236,7 @@ func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, contai
 
 	log.G(ctx).Info("starting zeropod")
 
-	if err := s.StartZeropod(ctx, r); err != nil {
+	if err := s.StartZeropod(ctx, container); err != nil {
 		log.G(ctx).Errorf("unable to start zeropod: %s", err)
 		return err
 	}
@@ -152,25 +244,14 @@ func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, contai
 	return nil
 }
 
-func (s *service) restore(ctx context.Context, container *runc.Container) (process.Process, error) {
-	// generate a random container ID. TODO: does this matter? This seems to
-	// work well enough but not sure what else depends on the container ID.
-	container.ID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprint(time.Now().UnixNano()))))
-
+func (s *wrapper) restore(ctx context.Context, container *runc.Container) (process.Process, error) {
 	runtime := process.NewRunc("", container.Bundle, "k8s", "", "", false)
-
-	log.G(ctx).Infof("stdout %s", s.stdio.Stdout)
 
 	// TODO: we should somehow reuse the original stdio. For now we just
 	// create a file for stdout and stderr.
-	s.stdio.Stdout = strings.TrimPrefix(s.stdio.Stdout, "file://")
-	s.stdio.Stdout = strings.TrimSuffix(s.stdio.Stdout, "-1")
-	s.stdio.Stderr = strings.TrimPrefix(s.stdio.Stdout, "file://")
-	s.stdio.Stderr = strings.TrimSuffix(s.stdio.Stdout, "-1")
-
 	p := process.New(container.ID, runtime, stdio.Stdio{
-		Stdout: "file://" + s.stdio.Stdout + "-1",
-		Stderr: "file://" + s.stdio.Stderr + "-1",
+		Stdout: "file://" + s.originalProcess.Stdio().Stdout + "-1",
+		Stderr: "file://" + s.originalProcess.Stdio().Stderr + "-1",
 	})
 	p.Bundle = container.Bundle
 	p.Platform = s.platform
@@ -197,11 +278,63 @@ func (s *service) restore(ctx context.Context, container *runc.Container) (proce
 		return nil, fmt.Errorf("start failed during restore: %w", err)
 	}
 
-	s.send(&eventstypes.TaskResumed{
+	container.SetMainProcess(p)
+
+	s.send(&eventstypes.TaskStart{
 		ContainerID: container.ID,
+		Pid:         uint32(p.Pid()),
 	})
 
 	return p, nil
+}
+
+func (s *wrapper) processExits() {
+	for e := range s.ec {
+		s.checkProcesses(e)
+	}
+}
+
+func (s *wrapper) checkProcesses(e runcC.Exit) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, container := range s.containers {
+		if !container.HasPid(e.Pid) {
+			continue
+		}
+
+		for _, p := range container.All() {
+			if p.Pid() != e.Pid {
+				continue
+			}
+
+			if ip, ok := p.(*process.Init); ok {
+				// Ensure all children are killed
+				if runc.ShouldKillAllOnExit(s.context, container.Bundle) {
+					if err := ip.KillAll(s.context); err != nil {
+						logrus.WithError(err).WithField("id", ip.ID()).
+							Error("failed to kill init's children")
+					}
+				}
+			}
+
+			if p.IsScaledDown() {
+				log.G(s.context).Infof("not setting exited because process has scaled down: %v", p.Pid())
+			} else {
+				p.SetExited(e.Status)
+				s.originalProcess.SetExited(e.Status)
+				s.sendL(&eventstypes.TaskExit{
+					ContainerID: container.ID,
+					ID:          p.ID(),
+					Pid:         uint32(e.Pid),
+					ExitStatus:  uint32(e.Status),
+					ExitedAt:    p.ExitedAt(),
+				})
+			}
+			return
+		}
+		return
+	}
 }
 
 func snapshotDir(bundle string) string {

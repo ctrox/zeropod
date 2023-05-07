@@ -22,12 +22,11 @@ package v2
 import (
 	"context"
 
-	"github.com/ctrox/zeropod/runc/task"
-
 	"github.com/containerd/containerd/pkg/shutdown"
 	"github.com/containerd/containerd/runtime/v2/runc/manager"
 	"github.com/containerd/containerd/runtime/v2/shim"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
+	"github.com/ctrox/zeropod/runc/task"
 )
 
 // TODO(2.0): Remove this package
@@ -68,7 +67,7 @@ func New(ctx context.Context, id string, publisher shim.Publisher, fn func()) (s
 			return nil
 		})
 	}
-	ts, err := task.NewTaskService(ctx, publisher, sd)
+	ts, err := task.NewZeropodService(ctx, publisher, sd)
 	if err != nil {
 		return nil, err
 	}

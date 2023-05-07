@@ -446,8 +446,15 @@ func (c *Container) Kill(ctx context.Context, r *task.KillRequest) error {
 		return err
 	}
 
+	log.G(ctx).Infof("process kill called with exec id: %s", r.ExecID)
+	log.G(ctx).Infof("process is %s with pid %d", p.ID(), p.Pid())
+
+	for id, pc := range c.processes {
+		log.G(ctx).Infof("process %s with pid %d", id, pc.Pid())
+	}
+
 	if p.IsScaledDown() {
-		log.G(ctx).Info("requested scaled down process to be killed")
+		log.G(ctx).Infof("requested scaled down process %s with pid %d to be killed", p.ID(), p.Pid())
 		p.SetExited(0)
 		return p.Kill(ctx, r.Signal, r.All)
 	}

@@ -30,7 +30,6 @@ import (
 	eventstypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/pkg/oom"
 	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
@@ -112,18 +111,13 @@ type service struct {
 
 	containers map[string]*runc.Container
 
-	shutdown  shutdown.Service
-	activator sync.Mutex
-
-	stdio stdio.Stdio
+	shutdown shutdown.Service
 }
 
 // Create a new initial process and container with the underlying OCI runtime
 func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-
-	log.G(ctx).Info("creating container")
 
 	container, err := runc.NewContainer(ctx, s.platform, r)
 	if err != nil {
@@ -151,6 +145,11 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	}, nil
 }
 
+func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
+	shimapi.RegisterTaskService(server, s)
+	return nil
+}
+
 // Start a process
 func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
 	container, err := s.getContainer(r.ID)
@@ -158,12 +157,8 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil, err
 	}
 
-	log.G(ctx).Info("starting container")
-
 	// hold the send lock so that the start events are sent before any exit events in the error case
 	s.eventSendMu.Lock()
-	defer s.eventSendMu.Unlock()
-
 	p, err := container.Start(ctx, r)
 	if err != nil {
 		s.eventSendMu.Unlock()
@@ -206,30 +201,10 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			Pid:         uint32(p.Pid()),
 		})
 	}
-
-	sandboxContainer, err := runc.IsSandboxContainer(container.Bundle)
-	if err != nil {
-		return nil, err
-	}
-
-	// if we don't have a sandbox container and no exec ID is set we can
-	// checkpoint the container, stop it and start our zeropod in place.
-	if !sandboxContainer && len(r.ExecID) == 0 {
-		if err := s.scaleDown(ctx, r, container, p); err != nil {
-			return &taskAPI.StartResponse{
-				Pid: uint32(p.Pid()),
-			}, nil
-		}
-	}
-
+	s.eventSendMu.Unlock()
 	return &taskAPI.StartResponse{
 		Pid: uint32(p.Pid()),
 	}, nil
-}
-
-func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
-	shimapi.RegisterTaskService(server, s)
-	return nil
 }
 
 // Delete the initial process and container
@@ -374,7 +349,6 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	if err != nil {
 		return nil, err
 	}
-
 	if err := container.Kill(ctx, r); err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
@@ -573,18 +547,14 @@ func (s *service) checkProcesses(e runcC.Exit) {
 				}
 			}
 
-			if p.IsScaledDown() {
-				log.G(s.context).Infof("not setting exited because process has scaled down: %v", p.Pid())
-			} else {
-				p.SetExited(e.Status)
-				s.sendL(&eventstypes.TaskExit{
-					ContainerID: container.ID,
-					ID:          p.ID(),
-					Pid:         uint32(e.Pid),
-					ExitStatus:  uint32(e.Status),
-					ExitedAt:    p.ExitedAt(),
-				})
-			}
+			p.SetExited(e.Status)
+			s.sendL(&eventstypes.TaskExit{
+				ContainerID: container.ID,
+				ID:          p.ID(),
+				Pid:         uint32(e.Pid),
+				ExitStatus:  uint32(e.Status),
+				ExitedAt:    p.ExitedAt(),
+			})
 			return
 		}
 		return

@@ -87,7 +87,6 @@ func (s *Server) Stop(ctx context.Context) {
 	if s.listener != nil {
 		s.listener.Close()
 	}
-	s.wg.Wait()
 }
 
 func (s *Server) serve(ctx context.Context) {

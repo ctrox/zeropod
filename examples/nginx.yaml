@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  labels:
+    app: echo
+  annotations:
+    dev.ctrox.zeropod/port: "80"
+    dev.ctrox.zeropod/scaledownduration: 100m
+spec:
+  runtimeClassName: zeropod
+  containers:
+    - name: nginx
+      # image: localhost/http-echo
+      # imagePullPolicy: Never
+      image: nginx
+      ports:
+        - containerPort: 80
