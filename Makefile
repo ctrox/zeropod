@@ -13,3 +13,6 @@ install-criu-kind:
 	docker exec kind-control-plane bash -c "which criu || (apt update && apt install -y software-properties-common && add-apt-repository ppa:criu/ppa && apt install -y criu)"
 	docker exec kind-control-plane mkdir -p /etc/criu
 	docker cp criu-default.conf kind-control-plane:/etc/criu/default.conf
+
+build-criu:
+	docker build -t criu -f criu/Dockerfile --output type=tar,dest=criu.tar .

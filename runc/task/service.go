@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path"
 	"sync"
 
 	"github.com/containerd/cgroups"
@@ -150,67 +149,6 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	return &taskAPI.CreateTaskResponse{
 		Pid: uint32(container.Pid()),
 	}, nil
-}
-
-func LeaveRunning(args []string) []string {
-	return append(args, "--manage-cgroups-mode ignore")
-}
-
-func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, container *runc.Container, p process.Process) error {
-	snapshotDir := snapshotDir(container.Bundle)
-
-	if err := os.RemoveAll(snapshotDir); err != nil {
-		return fmt.Errorf("unable to prepare snapshot dir: %w", err)
-	}
-
-	workDir := path.Join(snapshotDir, "work")
-	log.G(ctx).Infof("checkpointing process %d of container to %s", p.Pid(), snapshotDir)
-	s.stdio = p.Stdio()
-
-	p.SetScaledDown(true)
-	var actions []runcC.CheckpointAction
-	// after checkpointing the activator server can't be reached. the
-	// problem (I think) is that the network namespace is destroyed by the
-	// checkpointing with exit. So for now we just set the leave running
-	// option and kill the process just after the dump.
-	if err := p.(*process.Init).Runtime().Checkpoint(ctx, container.ID, &runcC.CheckpointOpts{
-		ImagePath:                containerDir(container.Bundle),
-		WorkDir:                  workDir,
-		AllowOpenTCP:             true,
-		AllowExternalUnixSockets: true,
-		AllowTerminal:            false,
-		FileLocks:                false,
-		EmptyNamespaces:          []string{},
-	}, append(actions, runcC.LeaveRunning)...); err != nil {
-		p.SetScaledDown(false)
-
-		log.G(ctx).Errorf("error checkpointing container: %s", err)
-		b, err := os.ReadFile(path.Join(workDir, "dump.log"))
-		if err != nil {
-			log.G(ctx).Errorf("error reading dump.log: %s", err)
-		}
-
-		log.G(ctx).Errorf("dump.log: %s", b)
-
-		return err
-	}
-
-	// we just kill it for the time being
-	if err := p.Kill(ctx, 9, false); err != nil {
-		return err
-	}
-
-	s.send(&eventstypes.TaskCheckpointed{
-		ContainerID: container.ID,
-	})
-
-	log.G(ctx).Info("starting zeropod")
-
-	if err := s.StartZeropod(ctx, r); err != nil {
-		return err
-	}
-
-	return nil
 }
 
 // Start a process

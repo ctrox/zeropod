@@ -89,6 +89,63 @@ func (s *service) StartZeropod(ctx context.Context, r *taskAPI.StartRequest) err
 	return nil
 }
 
+func leaveRunning(args []string) []string {
+	return append(args, "--manage-cgroups-mode ignore")
+}
+
+func (s *service) scaleDown(ctx context.Context, r *taskAPI.StartRequest, container *runc.Container, p process.Process) error {
+	snapshotDir := snapshotDir(container.Bundle)
+
+	if err := os.RemoveAll(snapshotDir); err != nil {
+		return fmt.Errorf("unable to prepare snapshot dir: %w", err)
+	}
+
+	workDir := path.Join(snapshotDir, "work")
+	log.G(ctx).Infof("checkpointing process %d of container to %s", p.Pid(), snapshotDir)
+	s.stdio = p.Stdio()
+
+	p.SetScaledDown(true)
+	// after checkpointing criu locks the network until the process is
+	// restored by inserting some iptables rules. We don't want that since our
+	// activator needs to be able to accept connections while the process is
+	// frozen. As a workaround for the time being we patched criu to just not
+	// insert these iptables rules.
+	if err := p.(*process.Init).Checkpoint(ctx, &process.CheckpointConfig{
+		Path:                     containerDir(container.Bundle),
+		WorkDir:                  workDir,
+		Exit:                     true,
+		AllowOpenTCP:             true,
+		AllowExternalUnixSockets: true,
+		AllowTerminal:            false,
+		FileLocks:                false,
+		EmptyNamespaces:          []string{},
+	}); err != nil {
+		p.SetScaledDown(false)
+
+		log.G(ctx).Errorf("error checkpointing container: %s", err)
+		b, err := os.ReadFile(path.Join(workDir, "dump.log"))
+		if err != nil {
+			log.G(ctx).Errorf("error reading dump.log: %s", err)
+		}
+
+		log.G(ctx).Errorf("dump.log: %s", b)
+
+		return err
+	}
+
+	s.send(&eventstypes.TaskCheckpointed{
+		ContainerID: container.ID,
+	})
+
+	log.G(ctx).Info("starting zeropod")
+
+	if err := s.StartZeropod(ctx, r); err != nil {
+		return err
+	}
+
+	return nil
+}
+
 func (s *service) restore(ctx context.Context, container *runc.Container) (process.Process, error) {
 	container.ID = fmt.Sprintf("%x", sha256.Sum256([]byte(fmt.Sprint(time.Now().Unix()))))
 
