@@ -12,8 +12,8 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/pkg/process"
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/ctrox/zeropod/process"
 	"github.com/ctrox/zeropod/runc"
 )
 

@@ -1,7 +1,7 @@
 package runc
 
 import (
-	"github.com/ctrox/zeropod/process"
+	"github.com/containerd/containerd/pkg/process"
 )
 
 const RuntimeName = "io.containerd.zeropod.v2"

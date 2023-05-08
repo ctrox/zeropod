@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"github.com/ctrox/zeropod/activator"
-	"github.com/ctrox/zeropod/process"
 	"github.com/ctrox/zeropod/runc"
+	ptypes "github.com/gogo/protobuf/types"
 	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/cgroups"
@@ -21,6 +21,7 @@ import (
 	"github.com/containerd/containerd/pkg/oom"
 	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
 	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
+	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/shutdown"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime/v2/shim"
@@ -77,6 +78,7 @@ type wrapper struct {
 
 	activator       sync.Mutex
 	originalProcess process.Process
+	scaledDown      bool
 }
 
 func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
@@ -165,7 +167,7 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
 			os.Exit(1)
 		}
-		p.SetScaledDown(false)
+		s.scaledDown = false
 		log.G(ctx).Printf("restored process: %d", p.Pid())
 
 		s.send(&eventstypes.TaskStart{
@@ -191,6 +193,24 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 	return nil
 }
 
+func (s *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
+	if len(r.ExecID) == 0 && s.scaledDown {
+		container, err := s.getContainer(r.ID)
+		if err != nil {
+			return nil, err
+		}
+		p, err := container.Process("")
+		if err != nil {
+			return nil, err
+		}
+		log.G(ctx).Infof("requested scaled down process %d to be killed", p.Pid())
+		s.originalProcess.SetExited(0)
+		p.SetExited(0)
+	}
+
+	return s.service.Kill(ctx, r)
+}
+
 func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
 	snapshotDir := snapshotDir(container.Bundle)
 
@@ -201,7 +221,7 @@ func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p pr
 	workDir := path.Join(snapshotDir, "work")
 	log.G(ctx).Infof("checkpointing process %d of container to %s", p.Pid(), snapshotDir)
 
-	p.SetScaledDown(true)
+	s.scaledDown = true
 	// after checkpointing criu locks the network until the process is
 	// restored by inserting some iptables rules. We don't want that since our
 	// activator needs to be able to accept connections while the process is
@@ -217,7 +237,7 @@ func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p pr
 		FileLocks:                false,
 		EmptyNamespaces:          []string{},
 	}); err != nil {
-		p.SetScaledDown(false)
+		s.scaledDown = false
 
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
 		b, err := os.ReadFile(path.Join(workDir, "dump.log"))
@@ -318,19 +338,21 @@ func (s *wrapper) checkProcesses(e runcC.Exit) {
 				}
 			}
 
-			if p.IsScaledDown() {
+			if s.scaledDown {
 				log.G(s.context).Infof("not setting exited because process has scaled down: %v", p.Pid())
-			} else {
-				p.SetExited(e.Status)
-				s.originalProcess.SetExited(e.Status)
-				s.sendL(&eventstypes.TaskExit{
-					ContainerID: container.ID,
-					ID:          p.ID(),
-					Pid:         uint32(e.Pid),
-					ExitStatus:  uint32(e.Status),
-					ExitedAt:    p.ExitedAt(),
-				})
+				continue
 			}
+
+			// we also need to set the original process as being exited so we can exit cleanly
+			s.originalProcess.SetExited(0)
+			p.SetExited(e.Status)
+			s.sendL(&eventstypes.TaskExit{
+				ContainerID: container.ID,
+				ID:          p.ID(),
+				Pid:         uint32(e.Pid),
+				ExitStatus:  uint32(e.Status),
+				ExitedAt:    p.ExitedAt(),
+			})
 			return
 		}
 		return

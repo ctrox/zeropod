@@ -31,9 +31,9 @@ import (
 
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/fifo"
-	"github.com/ctrox/zeropod/process"
 )
 
 var bufPool = sync.Pool{

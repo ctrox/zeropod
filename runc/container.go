@@ -31,14 +31,13 @@ import (
 	cgroupsv2 "github.com/containerd/cgroups/v2"
 	"github.com/containerd/console"
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/mount"
 	"github.com/containerd/containerd/namespaces"
+	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/typeurl"
-	"github.com/ctrox/zeropod/process"
 	"github.com/sirupsen/logrus"
 )
 
@@ -444,19 +443,6 @@ func (c *Container) Kill(ctx context.Context, r *task.KillRequest) error {
 	p, err := c.Process(r.ExecID)
 	if err != nil {
 		return err
-	}
-
-	log.G(ctx).Infof("process kill called with exec id: %s", r.ExecID)
-	log.G(ctx).Infof("process is %s with pid %d", p.ID(), p.Pid())
-
-	for id, pc := range c.processes {
-		log.G(ctx).Infof("process %s with pid %d", id, pc.Pid())
-	}
-
-	if p.IsScaledDown() {
-		log.G(ctx).Infof("requested scaled down process %s with pid %d to be killed", p.ID(), p.Pid())
-		p.SetExited(0)
-		return p.Kill(ctx, r.Signal, r.All)
 	}
 
 	return p.Kill(ctx, r.Signal, r.All)
