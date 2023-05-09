@@ -7,10 +7,7 @@ import (
 	"github.com/containerd/containerd/runtime/v2/shim"
 )
 
-func shimConfig(config *shim.Config) {
-	// config.NoReaper = true
-	// config.NoSubreaper = true
-}
+func shimConfig(config *shim.Config) {}
 
 func main() {
 	shim.Run(runc.RuntimeName, v2.New, shimConfig)

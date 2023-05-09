@@ -343,8 +343,11 @@ func (s *wrapper) checkProcesses(e runcC.Exit) {
 				continue
 			}
 
-			// we also need to set the original process as being exited so we can exit cleanly
-			s.originalProcess.SetExited(0)
+			if p.ID() == s.originalProcess.ID() {
+				// we also need to set the original process as being exited so we can exit cleanly
+				s.originalProcess.SetExited(0)
+			}
+
 			p.SetExited(e.Status)
 			s.sendL(&eventstypes.TaskExit{
 				ContainerID: container.ID,
