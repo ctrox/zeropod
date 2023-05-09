@@ -3,7 +3,9 @@ package task
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"sync"
@@ -28,6 +30,7 @@ import (
 	taskAPI "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/containerd/sys/reaper"
 	runcC "github.com/containerd/go-runc"
+	"github.com/containernetworking/plugins/pkg/ns"
 )
 
 func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TaskService, error) {
@@ -79,6 +82,7 @@ type wrapper struct {
 	activator       sync.Mutex
 	originalProcess process.Process
 	scaledDown      bool
+	netNSPath       string
 }
 
 func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
@@ -127,10 +131,13 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 		return err
 	}
 
-	// switch to network ns of container and start our activator listener
-	netNSPath, err := runc.GetNetworkNS(spec)
-	if err != nil {
-		return err
+	if len(s.netNSPath) == 0 {
+		// get network ns of our container and store it for later use
+		netNSPath, err := runc.GetNetworkNS(spec)
+		if err != nil {
+			return err
+		}
+		s.netNSPath = netNSPath
 	}
 
 	// create a new context in order to not run into deadline of parent context
@@ -143,7 +150,7 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 
 	log.G(ctx).Infof("starting activator with config: %v", cfg)
 
-	srv, err := activator.NewServer(ctx, cfg.Port, netNSPath)
+	srv, err := activator.NewServer(ctx, cfg.Port, s.netNSPath)
 	if err != nil {
 		return err
 	}
@@ -261,7 +268,57 @@ func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p pr
 		return err
 	}
 
+	// remove iptables rules that criu creates. We need to run this in the
+	// network ns of the container.
+	targetNS, err := ns.GetNS(s.netNSPath)
+	if err != nil {
+		return err
+	}
+
+	if err := removeCriuIPTablesRules(targetNS); err != nil {
+		log.G(ctx).Errorf("unable to restore iptables: %s", err)
+		return err
+	}
+	log.G(ctx).Infof("restored iptables")
+
 	return nil
+}
+
+func removeCriuIPTablesRules(netNS ns.NetNS) error {
+	const restore = "*filter\n" +
+		":INPUT ACCEPT [0:0]\n" +
+		":FORWARD ACCEPT [0:0]\n" +
+		":OUTPUT ACCEPT [0:0]\n" +
+		"COMMIT"
+
+	cmd := exec.Command("iptables-restore")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	errors := make(chan error)
+	go func() {
+		defer stdin.Close()
+		_, err := io.WriteString(stdin, restore)
+		if err != nil {
+			errors <- err
+		}
+		close(errors)
+	}()
+
+	if err := netNS.Do(func(nn ns.NetNS) error {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("error runing iptables-restore: %s: %w", out, err)
+		}
+		return nil
+	}); err != nil {
+		close(errors)
+		return err
+	}
+
+	return <-errors
 }
 
 func (s *wrapper) restore(ctx context.Context, container *runc.Container) (process.Process, error) {
