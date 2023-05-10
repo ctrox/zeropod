@@ -230,7 +230,7 @@ func newBackOff() *backoff.ExponentialBackOff {
 		RandomizationFactor: backoff.DefaultRandomizationFactor,
 		Multiplier:          backoff.DefaultMultiplier,
 		MaxInterval:         100 * time.Millisecond,
-		MaxElapsedTime:      time.Second,
+		MaxElapsedTime:      300 * time.Millisecond,
 		Stop:                backoff.Stop,
 		Clock:               backoff.SystemClock,
 	}
