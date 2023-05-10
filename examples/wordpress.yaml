@@ -13,6 +13,7 @@ spec:
       annotations:
         zeropod.ctrox.dev/port: "80"
         zeropod.ctrox.dev/scaledownduration: 0m
+        zeropod.ctrox.dev/stateful: "false"
     spec:
       runtimeClassName: zeropod
       containers:
@@ -29,6 +30,20 @@ spec:
               value: password
             - name: WORDPRESS_DB_NAME
               value: wordpress
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: php
+  labels:
+    app: php
+spec:
+  ports:
+    - port: 80
+      name: http
+  clusterIP: None
+  selector:
+    app: php
 ---
 apiVersion: v1
 kind: Service

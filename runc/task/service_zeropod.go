@@ -21,6 +21,7 @@ import (
 	eventstypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/pkg/cri/util"
 	"github.com/containerd/containerd/pkg/oom"
 	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
 	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
@@ -364,6 +365,9 @@ func removeCriuIPTablesRules(netNS ns.NetNS) error {
 }
 
 func (s *wrapper) restore(ctx context.Context, container *runc.Container) (process.Process, error) {
+	// generate a new container ID as sometimes (probably some race condition)
+	// we get a "container with given ID already exists" from runc.
+	container.ID = util.GenerateID()
 	runtime := process.NewRunc("", container.Bundle, "k8s", "", "", false)
 
 	// TODO: we should somehow reuse the original stdio. For now we just
@@ -389,11 +393,12 @@ func (s *wrapper) restore(ctx context.Context, container *runc.Container) (proce
 	if s.cfg.Stateful {
 		log.G(ctx).Infof("container %s is stateful, restoring from checkpoint", container.ID)
 		createConfig.Checkpoint = containerDir(container.Bundle)
-		if err := p.Create(ctx, createConfig); err != nil {
-			return nil, fmt.Errorf("creation failed during restore: %w", err)
-		}
 	} else {
 		log.G(ctx).Infof("restoring %s by starting the process again", container.ID)
+	}
+
+	if err := p.Create(ctx, createConfig); err != nil {
+		return nil, fmt.Errorf("creation failed during restore: %w", err)
 	}
 
 	log.G(ctx).Info("restore: process created")

@@ -38,9 +38,12 @@ func NewConfig(spec *specs.Spec) (*ZeropodConfig, error) {
 		return nil, err
 	}
 
-	stateful, err := strconv.ParseBool(cfg.Stateful)
-	if err != nil {
-		return nil, err
+	stateful := false
+	if len(cfg.Stateful) != 0 {
+		stateful, err = strconv.ParseBool(cfg.Stateful)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return &ZeropodConfig{
