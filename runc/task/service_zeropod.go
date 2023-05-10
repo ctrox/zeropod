@@ -229,11 +229,7 @@ func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p pr
 	log.G(ctx).Infof("checkpointing process %d of container to %s", p.Pid(), snapshotDir)
 
 	s.scaledDown = true
-	// after checkpointing criu locks the network until the process is
-	// restored by inserting some iptables rules. We don't want that since our
-	// activator needs to be able to accept connections while the process is
-	// frozen. As a workaround for the time being we patched criu to just not
-	// insert these iptables rules.
+	beforeCheckpoint := time.Now()
 	if err := p.(*process.Init).Checkpoint(ctx, &process.CheckpointConfig{
 		Path:                     containerDir(container.Bundle),
 		WorkDir:                  workDir,
@@ -256,20 +252,23 @@ func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p pr
 
 		return err
 	}
+	log.G(ctx).Infof("checkpointing done in %s", time.Since(beforeCheckpoint))
 
 	s.send(&eventstypes.TaskCheckpointed{
 		ContainerID: container.ID,
 	})
 
-	log.G(ctx).Info("starting zeropod")
-
+	beforeActivator := time.Now()
 	if err := s.StartZeropod(ctx, container); err != nil {
 		log.G(ctx).Errorf("unable to start zeropod: %s", err)
 		return err
 	}
 
-	// remove iptables rules that criu creates. We need to run this in the
-	// network ns of the container.
+	// after checkpointing criu locks the network until the process is
+	// restored by inserting some iptables rules. As we start our activator
+	// instead of restoring the process right away, we remove these iptables
+	// rules by switching into the netns of the container and running
+	// iptables-restore. https://criu.org/CLI/opt/--network-lock
 	targetNS, err := ns.GetNS(s.netNSPath)
 	if err != nil {
 		return err
@@ -279,7 +278,8 @@ func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p pr
 		log.G(ctx).Errorf("unable to restore iptables: %s", err)
 		return err
 	}
-	log.G(ctx).Infof("restored iptables")
+
+	log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
 
 	return nil
 }

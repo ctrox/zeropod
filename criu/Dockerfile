@@ -9,10 +9,6 @@ RUN git clone https://github.com/checkpoint-restore/criu.git
 WORKDIR /workspace/criu
 
 RUN git checkout v3.18
-# apply our patch to disable net-locking
-ADD criu/disable-net-lock.patch .
-RUN git apply disable-net-lock.patch
-RUN git diff
 RUN make -j $(nproc)
 
 FROM scratch AS export-stage
