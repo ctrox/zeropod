@@ -22,14 +22,14 @@ type Server struct {
 	port           uint16
 	quit           chan interface{}
 	wg             sync.WaitGroup
-	onAccept       onAcceptFunc
-	onClosed       onClosedFunc
+	onAccept       AcceptFunc
+	onClosed       ClosedFunc
 	connectTimeout time.Duration
 	ns             ns.NetNS
 }
 
-type onAcceptFunc func() (*runc.Container, process.Process, error)
-type onClosedFunc func(*runc.Container, process.Process) error
+type AcceptFunc func() (*runc.Container, process.Process, error)
+type ClosedFunc func(*runc.Container, process.Process) error
 
 func NewServer(ctx context.Context, port uint16, nsPath string) (*Server, error) {
 	targetNS, err := ns.GetNS(nsPath)
@@ -47,7 +47,7 @@ func NewServer(ctx context.Context, port uint16, nsPath string) (*Server, error)
 	return s, nil
 }
 
-func (s *Server) Start(ctx context.Context, onAccept onAcceptFunc, onClosed onClosedFunc) error {
+func (s *Server) Start(ctx context.Context, onAccept AcceptFunc, onClosed ClosedFunc) error {
 	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
 	cfg := net.ListenConfig{}
 

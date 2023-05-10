@@ -14,6 +14,7 @@ import (
 	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/runc"
 	ptypes "github.com/gogo/protobuf/types"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/cgroups"
@@ -83,6 +84,9 @@ type wrapper struct {
 	originalProcess process.Process
 	scaledDown      bool
 	netNSPath       string
+
+	spec *specs.Spec
+	cfg  *ZeropodConfig
 }
 
 func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
@@ -112,6 +116,19 @@ func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		// before we scale down, we store the original process so we can reuse
 		// some things and also cleanly shutdown when the time comes.
 		s.originalProcess = p
+
+		spec, err := runc.GetSpec(container.Bundle)
+		if err != nil {
+			return nil, err
+		}
+		s.spec = spec
+
+		cfg, err := NewConfig(spec)
+		if err != nil {
+			return nil, err
+		}
+		s.cfg = cfg
+
 		// let the process start first before we checkpoint. TODO: this should be done async.
 		time.Sleep(time.Second * 2)
 		if err := s.scaleDown(ctx, container, p); err != nil {
@@ -126,14 +143,9 @@ func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 // StartZeropod starts a zeropod process
 func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) error {
-	spec, err := runc.GetSpec(container.Bundle)
-	if err != nil {
-		return err
-	}
-
 	if len(s.netNSPath) == 0 {
 		// get network ns of our container and store it for later use
-		netNSPath, err := runc.GetNetworkNS(spec)
+		netNSPath, err := runc.GetNetworkNS(s.spec)
 		if err != nil {
 			return err
 		}
@@ -143,14 +155,9 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 	// create a new context in order to not run into deadline of parent context
 	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", runc.RuntimeName))
 
-	cfg, err := NewConfig(spec)
-	if err != nil {
-		return err
-	}
+	log.G(ctx).Infof("starting activator with config: %v", s.cfg)
 
-	log.G(ctx).Infof("starting activator with config: %v", cfg)
-
-	srv, err := activator.NewServer(ctx, cfg.Port, s.netNSPath)
+	srv, err := activator.NewServer(ctx, s.cfg.Port, s.netNSPath)
 	if err != nil {
 		return err
 	}
@@ -161,10 +168,24 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 		return nil
 	})
 
-	var beforeRestore time.Time
-	if err := srv.Start(ctx, func() (*runc.Container, process.Process, error) {
+	if err := srv.Start(ctx, s.restoreHandler(ctx, container), s.checkpointHandler(ctx)); err != nil {
+		log.G(ctx).Errorf("failed to start server: %s", err)
+		return err
+	}
+
+	// if err := srv.Start(ctx, s.startHandler(ctx, container), s.checkpointHandler(ctx, cfg)); err != nil {
+	// 	log.G(ctx).Errorf("failed to start server: %s", err)
+	// 	return err
+	// }
+
+	log.G(ctx).Printf("activator started")
+	return nil
+}
+
+func (s *wrapper) restoreHandler(ctx context.Context, container *runc.Container) activator.AcceptFunc {
+	return func() (*runc.Container, process.Process, error) {
 		log.G(ctx).Printf("got a request")
-		beforeRestore = time.Now()
+		beforeRestore := time.Now()
 
 		// hold the send lock so that the start events are sent before any exit events in the error case
 		s.eventSendMu.Lock()
@@ -189,19 +210,15 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 		// before returning we set the net ns again as it might have changed
 		// in the meantime. (not sure why that happens though)
 		return container, p, nil
-	}, func(container *runc.Container, p process.Process) error {
-		log.G(ctx).Printf("total time for initial connection: %s", time.Since(beforeRestore))
+	}
+}
 
-		time.Sleep(cfg.ScaleDownDuration)
+func (s *wrapper) checkpointHandler(ctx context.Context) activator.ClosedFunc {
+	return func(container *runc.Container, p process.Process) error {
+		time.Sleep(s.cfg.ScaleDownDuration)
 		log.G(ctx).Info("scaling down after scale down duration is up")
 		return s.scaleDown(ctx, container, p)
-	}); err != nil {
-		log.G(ctx).Errorf("failed to start server: %s", err)
-		return err
 	}
-
-	log.G(ctx).Printf("activator started")
-	return nil
 }
 
 func (s *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
@@ -223,6 +240,51 @@ func (s *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 }
 
 func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
+	if s.cfg.Stateful {
+		if err := s.checkpoint(ctx, container, p); err != nil {
+			return err
+		}
+	} else {
+		log.G(ctx).Infof("container is not stateful, scaling down by killing")
+
+		s.scaledDown = true
+		if err := p.Kill(ctx, 9, false); err != nil {
+			return err
+		}
+	}
+
+	beforeActivator := time.Now()
+	if err := s.StartZeropod(ctx, container); err != nil {
+		log.G(ctx).Errorf("unable to start zeropod: %s", err)
+		return err
+	}
+
+	if !s.cfg.Stateful {
+		log.G(ctx).Infof("activator started in %s", time.Since(beforeActivator))
+		return nil
+	}
+
+	// after checkpointing criu locks the network until the process is
+	// restored by inserting some iptables rules. As we start our activator
+	// instead of restoring the process right away, we remove these iptables
+	// rules by switching into the netns of the container and running
+	// iptables-restore. https://criu.org/CLI/opt/--network-lock
+	targetNS, err := ns.GetNS(s.netNSPath)
+	if err != nil {
+		return err
+	}
+
+	if err := removeCriuIPTablesRules(targetNS); err != nil {
+		log.G(ctx).Errorf("unable to restore iptables: %s", err)
+		return err
+	}
+
+	log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
+
+	return nil
+}
+
+func (s *wrapper) checkpoint(ctx context.Context, container *runc.Container, p process.Process) error {
 	snapshotDir := snapshotDir(container.Bundle)
 
 	if err := os.RemoveAll(snapshotDir); err != nil {
@@ -261,30 +323,6 @@ func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p pr
 	s.send(&eventstypes.TaskCheckpointed{
 		ContainerID: container.ID,
 	})
-
-	beforeActivator := time.Now()
-	if err := s.StartZeropod(ctx, container); err != nil {
-		log.G(ctx).Errorf("unable to start zeropod: %s", err)
-		return err
-	}
-
-	// after checkpointing criu locks the network until the process is
-	// restored by inserting some iptables rules. As we start our activator
-	// instead of restoring the process right away, we remove these iptables
-	// rules by switching into the netns of the container and running
-	// iptables-restore. https://criu.org/CLI/opt/--network-lock
-	targetNS, err := ns.GetNS(s.netNSPath)
-	if err != nil {
-		return err
-	}
-
-	if err := removeCriuIPTablesRules(targetNS); err != nil {
-		log.G(ctx).Errorf("unable to restore iptables: %s", err)
-		return err
-	}
-
-	log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
-
 	return nil
 }
 
@@ -343,14 +381,19 @@ func (s *wrapper) restore(ctx context.Context, container *runc.Container) (proce
 		p.CriuWorkPath = p.WorkDir
 	}
 
-	log.G(ctx).Infof("restoring %s", container.ID)
+	createConfig := &process.CreateConfig{
+		ID:     container.ID,
+		Bundle: container.Bundle,
+	}
 
-	if err := p.Create(ctx, &process.CreateConfig{
-		ID:         container.ID,
-		Bundle:     container.Bundle,
-		Checkpoint: containerDir(container.Bundle),
-	}); err != nil {
-		return nil, fmt.Errorf("creation failed during restore: %w", err)
+	if s.cfg.Stateful {
+		log.G(ctx).Infof("container %s is stateful, restoring from checkpoint", container.ID)
+		createConfig.Checkpoint = containerDir(container.Bundle)
+		if err := p.Create(ctx, createConfig); err != nil {
+			return nil, fmt.Errorf("creation failed during restore: %w", err)
+		}
+	} else {
+		log.G(ctx).Infof("restoring %s by starting the process again", container.ID)
 	}
 
 	log.G(ctx).Info("restore: process created")

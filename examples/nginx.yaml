@@ -5,8 +5,8 @@ metadata:
   labels:
     app: echo
   annotations:
-    dev.ctrox.zeropod/port: "80"
-    dev.ctrox.zeropod/scaledownduration: 100m
+    zeropod.ctrox.dev/port: "80"
+    zeropod.ctrox.dev/scaledownduration: 0m
 spec:
   runtimeClassName: zeropod
   containers:

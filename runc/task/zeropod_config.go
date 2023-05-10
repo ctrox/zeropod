@@ -9,13 +9,15 @@ import (
 )
 
 type annotationConfig struct {
-	Port              string `mapstructure:"dev.ctrox.zeropod/port"`
-	ScaleDownDuration string `mapstructure:"dev.ctrox.zeropod/scaledownduration"`
+	Port              string `mapstructure:"zeropod.ctrox.dev/port"`
+	ScaleDownDuration string `mapstructure:"zeropod.ctrox.dev/scaledownduration"`
+	Stateful          string `mapstructure:"zeropod.ctrox.dev/stateful"`
 }
 
 type ZeropodConfig struct {
 	Port              uint16
 	ScaleDownDuration time.Duration
+	Stateful          bool
 }
 
 // NewConfig uses the annotations from the container spec to create a new
@@ -36,8 +38,14 @@ func NewConfig(spec *specs.Spec) (*ZeropodConfig, error) {
 		return nil, err
 	}
 
+	stateful, err := strconv.ParseBool(cfg.Stateful)
+	if err != nil {
+		return nil, err
+	}
+
 	return &ZeropodConfig{
 		Port:              uint16(port),
 		ScaleDownDuration: dur,
+		Stateful:          stateful,
 	}, nil
 }
