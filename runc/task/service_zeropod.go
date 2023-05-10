@@ -161,8 +161,10 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 		return nil
 	})
 
+	var beforeRestore time.Time
 	if err := srv.Start(ctx, func() (*runc.Container, process.Process, error) {
 		log.G(ctx).Printf("got a request")
+		beforeRestore = time.Now()
 
 		// hold the send lock so that the start events are sent before any exit events in the error case
 		s.eventSendMu.Lock()
@@ -175,7 +177,7 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 			os.Exit(1)
 		}
 		s.scaledDown = false
-		log.G(ctx).Printf("restored process: %d", p.Pid())
+		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
 		s.send(&eventstypes.TaskStart{
 			ContainerID: container.ID,
@@ -188,6 +190,8 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 		// in the meantime. (not sure why that happens though)
 		return container, p, nil
 	}, func(container *runc.Container, p process.Process) error {
+		log.G(ctx).Printf("total time for initial connection: %s", time.Since(beforeRestore))
+
 		time.Sleep(cfg.ScaleDownDuration)
 		log.G(ctx).Info("scaling down after scale down duration is up")
 		return s.scaleDown(ctx, container, p)
