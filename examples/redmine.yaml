@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redmine
+spec:
+  selector:
+    matchLabels:
+      app: redmine
+  template:
+    metadata:
+      labels:
+        app: redmine
+      annotations:
+        zeropod.ctrox.dev/port: "3000"
+        zeropod.ctrox.dev/scaledownduration: 0m
+        zeropod.ctrox.dev/stateful: "true"
+    spec:
+      runtimeClassName: zeropod
+      containers:
+        - image: redmine
+          name: redmine
+          ports:
+            - containerPort: 3000
+          env:
+            - name: REDMINE_DB_MYSQL
+              value: mysql
+            - name: REDMINE_DB_USER
+              value: root
+            - name: REDMINE_DB_PASSWORD
+              value: password
+            - name: REDMINE_SECRET_KEY_BASE
+              value: supersecretkey
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redmine
+  labels:
+    app: redmine
+spec:
+  ports:
+    - port: 80
+      name: http
+      targetPort: 3000
+  type: LoadBalancer
+  selector:
+    app: redmine

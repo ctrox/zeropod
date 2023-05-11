@@ -13,7 +13,7 @@ spec:
       annotations:
         zeropod.ctrox.dev/port: "80"
         zeropod.ctrox.dev/scaledownduration: 0m
-        zeropod.ctrox.dev/stateful: "false"
+        zeropod.ctrox.dev/stateful: "true"
     spec:
       runtimeClassName: zeropod
       containers:
@@ -39,9 +39,10 @@ metadata:
     app: php
 spec:
   ports:
-    - port: 80
+    - port: 8080
       name: http
-  clusterIP: None
+      targetPort: 80
+  type: LoadBalancer
   selector:
     app: php
 ---
@@ -82,3 +83,14 @@ spec:
           env:
             - name: MYSQL_ROOT_PASSWORD
               value: password
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/mysql
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
