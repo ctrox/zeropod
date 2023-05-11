@@ -174,11 +174,6 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 		return err
 	}
 
-	// if err := srv.Start(ctx, s.startHandler(ctx, container), s.checkpointHandler(ctx, cfg)); err != nil {
-	// 	log.G(ctx).Errorf("failed to start server: %s", err)
-	// 	return err
-	// }
-
 	log.G(ctx).Printf("activator started")
 	return nil
 }
@@ -327,43 +322,6 @@ func (s *wrapper) checkpoint(ctx context.Context, container *runc.Container, p p
 	return nil
 }
 
-func removeCriuIPTablesRules(netNS ns.NetNS) error {
-	const restore = "*filter\n" +
-		":INPUT ACCEPT [0:0]\n" +
-		":FORWARD ACCEPT [0:0]\n" +
-		":OUTPUT ACCEPT [0:0]\n" +
-		"COMMIT"
-
-	cmd := exec.Command("iptables-restore")
-	stdin, err := cmd.StdinPipe()
-	if err != nil {
-		return err
-	}
-
-	errors := make(chan error)
-	go func() {
-		defer stdin.Close()
-		_, err := io.WriteString(stdin, restore)
-		if err != nil {
-			errors <- err
-		}
-		close(errors)
-	}()
-
-	if err := netNS.Do(func(nn ns.NetNS) error {
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("error runing iptables-restore: %s: %w", out, err)
-		}
-		return nil
-	}); err != nil {
-		close(errors)
-		return err
-	}
-
-	return <-errors
-}
-
 func (s *wrapper) restore(ctx context.Context, container *runc.Container) (process.Process, error) {
 	// generate a new container ID as sometimes (probably some race condition)
 	// we get a "container with given ID already exists" from runc.
@@ -415,6 +373,43 @@ func (s *wrapper) restore(ctx context.Context, container *runc.Container) (proce
 	})
 
 	return p, nil
+}
+
+func removeCriuIPTablesRules(netNS ns.NetNS) error {
+	const restore = "*filter\n" +
+		":INPUT ACCEPT [0:0]\n" +
+		":FORWARD ACCEPT [0:0]\n" +
+		":OUTPUT ACCEPT [0:0]\n" +
+		"COMMIT"
+
+	cmd := exec.Command("iptables-restore")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+
+	errors := make(chan error)
+	go func() {
+		defer stdin.Close()
+		_, err := io.WriteString(stdin, restore)
+		if err != nil {
+			errors <- err
+		}
+		close(errors)
+	}()
+
+	if err := netNS.Do(func(nn ns.NetNS) error {
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("error runing iptables-restore: %s: %w", out, err)
+		}
+		return nil
+	}); err != nil {
+		close(errors)
+		return err
+	}
+
+	return <-errors
 }
 
 func (s *wrapper) processExits() {
