@@ -84,7 +84,7 @@ type wrapper struct {
 	activator       sync.Mutex
 	originalProcess process.Process
 	scaledDown      bool
-	netNSPath       string
+	netNS           ns.NetNS
 
 	spec *specs.Spec
 	cfg  *ZeropodConfig
@@ -130,6 +130,19 @@ func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		}
 		s.cfg = cfg
 
+		// get network ns of our container and store it for later use
+		netNSPath, err := runc.GetNetworkNS(s.spec)
+		if err != nil {
+			return nil, err
+		}
+
+		targetNS, err := ns.GetNS(netNSPath)
+		if err != nil {
+			return nil, err
+		}
+
+		s.netNS = targetNS
+
 		// let the process start first before we checkpoint. TODO: this should be done async.
 		time.Sleep(time.Second * 2)
 		if err := s.scaleDown(ctx, container, p); err != nil {
@@ -144,21 +157,12 @@ func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 // StartZeropod starts a zeropod process
 func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) error {
-	if len(s.netNSPath) == 0 {
-		// get network ns of our container and store it for later use
-		netNSPath, err := runc.GetNetworkNS(s.spec)
-		if err != nil {
-			return err
-		}
-		s.netNSPath = netNSPath
-	}
-
 	// create a new context in order to not run into deadline of parent context
 	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", runc.RuntimeName))
 
 	log.G(ctx).Infof("starting activator with config: %v", s.cfg)
 
-	srv, err := activator.NewServer(ctx, s.cfg.Port, s.netNSPath)
+	srv, err := activator.NewServer(ctx, s.cfg.Port, s.netNS)
 	if err != nil {
 		return err
 	}
@@ -237,6 +241,14 @@ func (s *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 
 func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
 	if s.cfg.Stateful {
+		// not sure what is causing this but without adding these iptables
+		// rules here already, connections during scaling down sometimes
+		// timeout, even though criu should add these rules before
+		// checkpointing.
+		if err := addCriuIPTablesRules(s.netNS); err != nil {
+			return err
+		}
+
 		if err := s.checkpoint(ctx, container, p); err != nil {
 			return err
 		}
@@ -265,12 +277,7 @@ func (s *wrapper) scaleDown(ctx context.Context, container *runc.Container, p pr
 	// instead of restoring the process right away, we remove these iptables
 	// rules by switching into the netns of the container and running
 	// iptables-restore. https://criu.org/CLI/opt/--network-lock
-	targetNS, err := ns.GetNS(s.netNSPath)
-	if err != nil {
-		return err
-	}
-
-	if err := removeCriuIPTablesRules(targetNS); err != nil {
+	if err := removeCriuIPTablesRules(s.netNS); err != nil {
 		log.G(ctx).Errorf("unable to restore iptables: %s", err)
 		return err
 	}
@@ -375,13 +382,30 @@ func (s *wrapper) restore(ctx context.Context, container *runc.Container) (proce
 	return p, nil
 }
 
+func addCriuIPTablesRules(netNS ns.NetNS) error {
+	const SOCCR_MARK = "0xC114"
+	const conf = "*filter\n" +
+		":CRIU - [0:0]\n" +
+		"-I INPUT -j CRIU\n" +
+		"-I OUTPUT -j CRIU\n" +
+		"-A CRIU -m mark --mark " + SOCCR_MARK + " -j ACCEPT\n" +
+		"-A CRIU -j DROP\n" +
+		"COMMIT\n"
+
+	return ipTablesRestore(conf, netNS)
+}
+
 func removeCriuIPTablesRules(netNS ns.NetNS) error {
-	const restore = "*filter\n" +
+	const conf = "*filter\n" +
 		":INPUT ACCEPT [0:0]\n" +
 		":FORWARD ACCEPT [0:0]\n" +
 		":OUTPUT ACCEPT [0:0]\n" +
-		"COMMIT"
+		"COMMIT\n"
 
+	return ipTablesRestore(conf, netNS)
+}
+
+func ipTablesRestore(conf string, netNS ns.NetNS) error {
 	cmd := exec.Command("iptables-restore")
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -391,7 +415,7 @@ func removeCriuIPTablesRules(netNS ns.NetNS) error {
 	errors := make(chan error)
 	go func() {
 		defer stdin.Close()
-		_, err := io.WriteString(stdin, restore)
+		_, err := io.WriteString(stdin, conf)
 		if err != nil {
 			errors <- err
 		}
@@ -401,11 +425,10 @@ func removeCriuIPTablesRules(netNS ns.NetNS) error {
 	if err := netNS.Do(func(nn ns.NetNS) error {
 		out, err := cmd.CombinedOutput()
 		if err != nil {
-			return fmt.Errorf("error runing iptables-restore: %s: %w", out, err)
+			return fmt.Errorf("error running iptables-restore: %s: %w", out, err)
 		}
 		return nil
 	}); err != nil {
-		close(errors)
 		return err
 	}
 

@@ -31,17 +31,12 @@ type Server struct {
 type AcceptFunc func() (*runc.Container, process.Process, error)
 type ClosedFunc func(*runc.Container, process.Process) error
 
-func NewServer(ctx context.Context, port uint16, nsPath string) (*Server, error) {
-	targetNS, err := ns.GetNS(nsPath)
-	if err != nil {
-		return nil, err
-	}
-
+func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
 	s := &Server{
 		quit:           make(chan interface{}),
 		port:           port,
 		connectTimeout: time.Second * 5,
-		ns:             targetNS,
+		ns:             ns,
 	}
 
 	return s, nil
