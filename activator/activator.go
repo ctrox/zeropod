@@ -78,7 +78,6 @@ func (s *Server) Start(ctx context.Context, onAccept AcceptFunc, onClosed Closed
 
 func (s *Server) Stop(ctx context.Context) {
 	log.G(ctx).Info("stopping activator")
-	close(s.quit)
 	if s.listener != nil {
 		s.listener.Close()
 	}

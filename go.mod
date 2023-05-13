@@ -12,9 +12,11 @@ require (
 	github.com/containerd/ttrpc v1.1.0
 	github.com/containerd/typeurl v1.0.2
 	github.com/containernetworking/plugins v1.1.1
+	github.com/coreos/go-systemd/v22 v22.3.2
 	github.com/gogo/protobuf v1.3.2
 	github.com/mitchellh/mapstructure v1.1.2
 	github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417
+	github.com/procyon-projects/chrono v1.1.2
 	github.com/sirupsen/logrus v1.8.1
 	k8s.io/api v0.22.5
 	k8s.io/apimachinery v0.22.5
@@ -26,7 +28,6 @@ require (
 	github.com/Microsoft/hcsshim v0.9.7 // indirect
 	github.com/cilium/ebpf v0.9.1 // indirect
 	github.com/containerd/continuity v0.3.0 // indirect
-	github.com/coreos/go-systemd/v22 v22.3.2 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/docker/go-events v0.0.0-20190806004212-e31b211e4f1c // indirect
 	github.com/docker/go-units v0.4.0 // indirect

@@ -8,13 +8,13 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
-	"sync"
 	"time"
 
 	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/runc"
 	ptypes "github.com/gogo/protobuf/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/procyon-projects/chrono"
 	"github.com/sirupsen/logrus"
 
 	"github.com/containerd/cgroups"
@@ -57,7 +57,10 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		shutdown:   sd,
 		containers: make(map[string]*runc.Container),
 	}
-	w := &wrapper{service: s}
+	w := &wrapper{
+		service:   s,
+		scheduler: chrono.NewDefaultTaskScheduler(),
+	}
 	go w.processExits()
 	runcC.Monitor = reaper.Default
 	if err := s.initPlatform(); err != nil {
@@ -81,10 +84,12 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 type wrapper struct {
 	*service
 
-	activator       sync.Mutex
 	originalProcess process.Process
 	scaledDown      bool
 	netNS           ns.NetNS
+	activator       *activator.Server
+	scheduler       chrono.TaskScheduler
+	scaleDownTask   chrono.ScheduledTask
 
 	spec *specs.Spec
 	cfg  *ZeropodConfig
@@ -143,16 +148,88 @@ func (s *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 		s.netNS = targetNS
 
-		// let the process start first before we checkpoint. TODO: this should be done async.
-		time.Sleep(time.Second * 2)
-		if err := s.scaleDown(ctx, container, p); err != nil {
-			return &taskAPI.StartResponse{
-				Pid: uint32(p.Pid()),
-			}, nil
+		srv, err := activator.NewServer(ctx, s.cfg.Port, s.netNS)
+		if err != nil {
+			return nil, err
+		}
+		s.activator = srv
+
+		if err := s.scheduleScaleDown(container); err != nil {
+			return nil, err
 		}
 	}
 
 	return resp, err
+}
+
+func (s *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
+	container, err := s.getContainer(r.ID)
+	if err != nil {
+		return nil, err
+	}
+
+	// restore it for exec in case we are scaled down
+	if s.scaledDown {
+		s.scaleDownTask.Cancel()
+
+		log.G(ctx).Printf("got exec for scaled down container, restoring")
+		beforeRestore := time.Now()
+
+		s.activator.Stop(ctx)
+
+		p, err := s.restore(ctx, container)
+		if err != nil {
+			// restore failed, this is currently unrecoverable, so we shutdown
+			// our shim and let containerd recreate it.
+			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
+			os.Exit(1)
+		}
+		s.scaledDown = false
+		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
+	}
+
+	return s.service.Exec(ctx, r)
+}
+
+func (s *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
+	if len(r.ExecID) != 0 {
+		container, err := s.getContainer(r.ID)
+		if err != nil {
+			return nil, err
+		}
+
+		// on delete of an exec container we want to schedule scaling down again.
+		if err := s.scheduleScaleDown(container); err != nil {
+			return nil, err
+		}
+	}
+	return s.service.Delete(ctx, r)
+}
+
+func (s *wrapper) scheduleScaleDown(container *runc.Container) error {
+	p, err := container.Process("")
+	if err != nil {
+		return err
+	}
+
+	if s.scaleDownTask != nil && !s.scaleDownTask.IsCancelled() {
+		// cancel any potential pending scaledonws
+		s.scaleDownTask.Cancel()
+	}
+
+	task, err := s.scheduler.Schedule(func(_ context.Context) {
+		log.G(s.context).Info("scaling down after scale down duration is up")
+
+		if err := s.scaleDown(s.context, container, p); err != nil {
+			log.G(s.context).Errorf("scale down failed: %s", err)
+		}
+	}, chrono.WithTime(time.Now().Add(s.cfg.ScaleDownDuration)))
+	if err != nil {
+		return err
+	}
+
+	s.scaleDownTask = task
+	return nil
 }
 
 // StartZeropod starts a zeropod process
@@ -162,18 +239,13 @@ func (s *wrapper) StartZeropod(ctx context.Context, container *runc.Container) e
 
 	log.G(ctx).Infof("starting activator with config: %v", s.cfg)
 
-	srv, err := activator.NewServer(ctx, s.cfg.Port, s.netNS)
-	if err != nil {
-		return err
-	}
-
 	s.shutdown.RegisterCallback(func(ctx context.Context) error {
 		// stop server on shutdown
-		srv.Stop(ctx)
+		s.activator.Stop(ctx)
 		return nil
 	})
 
-	if err := srv.Start(ctx, s.restoreHandler(ctx, container), s.checkpointHandler(ctx)); err != nil {
+	if err := s.activator.Start(ctx, s.restoreHandler(ctx, container), s.checkpointHandler(ctx)); err != nil {
 		log.G(ctx).Errorf("failed to start server: %s", err)
 		return err
 	}
@@ -215,9 +287,7 @@ func (s *wrapper) restoreHandler(ctx context.Context, container *runc.Container)
 
 func (s *wrapper) checkpointHandler(ctx context.Context) activator.ClosedFunc {
 	return func(container *runc.Container, p process.Process) error {
-		time.Sleep(s.cfg.ScaleDownDuration)
-		log.G(ctx).Info("scaling down after scale down duration is up")
-		return s.scaleDown(ctx, container, p)
+		return s.scheduleScaleDown(container)
 	}
 }
 
@@ -470,7 +540,12 @@ func (s *wrapper) checkProcesses(e runcC.Exit) {
 				continue
 			}
 
-			if p.ID() == s.originalProcess.ID() {
+			main, err := container.Process("")
+			if err != nil {
+				continue
+			}
+
+			if p.ID() == s.originalProcess.ID() || p.ID() == main.ID() {
 				// we also need to set the original process as being exited so we can exit cleanly
 				s.originalProcess.SetExited(0)
 			}
