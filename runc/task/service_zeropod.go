@@ -221,7 +221,10 @@ func (s *wrapper) scheduleScaleDown(container *runc.Container) error {
 		log.G(s.context).Info("scaling down after scale down duration is up")
 
 		if err := s.scaleDown(s.context, container, p); err != nil {
-			log.G(s.context).Errorf("scale down failed: %s", err)
+			// checkpointing failed, this is currently unrecoverable, so we
+			// shutdown our shim and let containerd recreate it.
+			log.G(s.context).Fatalf("scale down failed: %s", err)
+			os.Exit(1)
 		}
 	}, chrono.WithTime(time.Now().Add(s.cfg.ScaleDownDuration)))
 	if err != nil {
