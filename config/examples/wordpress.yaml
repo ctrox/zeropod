@@ -12,6 +12,7 @@ spec:
         app: php
       annotations:
         zeropod.ctrox.dev/port: "80"
+        zeropod.ctrox.dev/container-name: wordpress
         zeropod.ctrox.dev/scaledownduration: 0m
         zeropod.ctrox.dev/stateful: "true"
     spec:

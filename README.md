@@ -2,9 +2,9 @@
 
 ## TODO
 
-- [] Support more than 1 container in a zeropod
+- [x] Support more than 1 container in a zeropod
 	- [] Support scaling more than 1 container in a zeropod (use-cases might be limited here)
-- [] Fix logs after restore
+- [x] Fix logs after restore
 - [] Visibility into state (scaled down or up) from the outside
 	- [] k8s events?
 	- [] Metrics

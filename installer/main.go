@@ -48,6 +48,7 @@ network-lock iptables
   runtime_type = "io.containerd.zeropod.v2"
   pod_annotations = [
     "zeropod.ctrox.dev/port",
+    "zeropod.ctrox.dev/container-name",
     "zeropod.ctrox.dev/scaledownduration",
     "zeropod.ctrox.dev/stateful"
   ]
@@ -101,6 +102,7 @@ func installCriu() error {
 	}
 
 	ctx := context.Background()
+
 	image, err := client.Pull(ctx, criuImage)
 	if err != nil {
 		return err

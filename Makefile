@@ -11,7 +11,7 @@ install-kind: build-installer
 	kubectl apply -f config/installer.yaml
 
 build:
-	GOOS=linux go build -o containerd-shim-zeropod-v2 .
+	GOOS=linux go build -ldflags "-s -w" -o containerd-shim-zeropod-v2 .
 
 logs:
 	docker exec -ti kind-control-plane journalctl -fu containerd

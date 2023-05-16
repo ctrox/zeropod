@@ -12,6 +12,7 @@ spec:
         app: redmine
       annotations:
         zeropod.ctrox.dev/port: "3000"
+        zeropod.ctrox.dev/container-name: "redmine"
         zeropod.ctrox.dev/scaledownduration: 0m
         zeropod.ctrox.dev/stateful: "true"
     spec:

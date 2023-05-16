@@ -51,6 +51,7 @@ version = 2
   runtime_type = "io.containerd.zeropod.v2"
   pod_annotations = [
     "zeropod.ctrox.dev/port",
+    "zeropod.ctrox.dev/container-name",
     "zeropod.ctrox.dev/scaledownduration",
     "zeropod.ctrox.dev/stateful"
   ]
