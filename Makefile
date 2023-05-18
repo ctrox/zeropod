@@ -20,4 +20,4 @@ build-criu:
 	docker build --platform=linux/amd64 -t docker.io/ctrox/criu:v3.18 -f criu/Dockerfile .
 
 build-installer:
-	docker build --platform=linux/amd64 -t docker.io/ctrox/zeropod-installer:dev -f Dockerfile.installer .
+	docker build --platform=linux/amd64 -t docker.io/ctrox/zeropod-installer:dev -f installer/Dockerfile .

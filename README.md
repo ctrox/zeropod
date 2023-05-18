@@ -10,6 +10,6 @@
 	- [] Metrics
 	- [] Custom resource that syncs with a zeropod?
 - [x] Create installer DaemonSet (runtime shim, containerd config, criu binary)
-- [] e2e testing
+- [x] e2e testing
 - [] Scale down/up on demand instead of time based
 	- [x] technically scaling up on demand is now possible with exec. You can just exec a non-existing process.

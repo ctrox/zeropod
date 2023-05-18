@@ -8,6 +8,13 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
+const (
+	PortAnnotationKey              = "zeropod.ctrox.dev/port"
+	ScaleDownDurationAnnotationKey = "zeropod.ctrox.dev/scaledownduration"
+	ContainerNameAnnotationKey     = "zeropod.ctrox.dev/container-name"
+	StatefulAnnotationKey          = "zeropod.ctrox.dev/stateful"
+)
+
 type annotationConfig struct {
 	Port                 string `mapstructure:"zeropod.ctrox.dev/port"`
 	ScaleDownDuration    string `mapstructure:"zeropod.ctrox.dev/scaledownduration"`

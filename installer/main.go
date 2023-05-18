@@ -74,7 +74,7 @@ func main() {
 
 	log.Println("installed runtimeClass")
 
-	log.Println("installed completed")
+	log.Println("installer completed")
 
 	go func() {
 		for {
