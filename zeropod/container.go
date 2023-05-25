@@ -12,9 +12,9 @@ import (
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
+	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
-	"github.com/ctrox/zeropod/runc"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/procyon-projects/chrono"
 )
@@ -27,6 +27,7 @@ type Container struct {
 	id             string
 	initialID      string
 	initialProcess process.Process
+	process        process.Process
 	logPath        string
 	scaledDown     bool
 	netNS          ns.NetNS
@@ -42,7 +43,7 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 	}
 
 	// get network ns of our container and store it for later use
-	netNSPath, err := runc.GetNetworkNS(spec)
+	netNSPath, err := GetNetworkNS(spec)
 	if err != nil {
 		return nil, err
 	}
@@ -70,6 +71,7 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 		id:             container.ID,
 		initialID:      container.ID,
 		initialProcess: p,
+		process:        p,
 		logPath:        logPath,
 		netNS:          targetNS,
 		activator:      srv,
@@ -77,71 +79,72 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 	}, nil
 }
 
-func (s *Container) ScheduleScaleDown(container *runc.Container) error {
-	p, err := container.Process("")
-	if err != nil {
-		return err
-	}
+func (c *Container) ScheduleScaleDown(container *runc.Container) error {
+	p := c.process
 
-	if s.scaleDownTask != nil && !s.scaleDownTask.IsCancelled() {
+	if c.scaleDownTask != nil && !c.scaleDownTask.IsCancelled() {
 		// cancel any potential pending scaledonws
-		s.scaleDownTask.Cancel()
+		c.scaleDownTask.Cancel()
 	}
 
-	task, err := s.scheduler.Schedule(func(_ context.Context) {
-		log.G(s.context).Info("scaling down after scale down duration is up")
+	task, err := c.scheduler.Schedule(func(_ context.Context) {
+		log.G(c.context).Info("scaling down after scale down duration is up")
 
-		if err := s.scaleDown(s.context, container, p); err != nil {
+		if err := c.scaleDown(c.context, container, p); err != nil {
 			// checkpointing failed, this is currently unrecoverable, so we
 			// shutdown our shim and let containerd recreate it.
-			log.G(s.context).Fatalf("scale down failed: %s", err)
+			log.G(c.context).Fatalf("scale down failed: %s", err)
 			os.Exit(1)
 		}
-	}, chrono.WithTime(time.Now().Add(s.cfg.ScaleDownDuration)))
+	}, chrono.WithTime(time.Now().Add(c.cfg.ScaleDownDuration)))
 	if err != nil {
 		return err
 	}
 
-	s.scaleDownTask = task
+	c.scaleDownTask = task
 	return nil
 }
 
-func (s *Container) CancelScaleDown() {
-	s.scaleDownTask.Cancel()
+func (c *Container) CancelScaleDown() {
+	c.scaleDownTask.Cancel()
 }
 
-func (s *Container) SetScaledDown(scaledDown bool) {
-	s.scaledDown = scaledDown
+func (c *Container) SetScaledDown(scaledDown bool) {
+	c.scaledDown = scaledDown
 }
 
-func (s *Container) ScaledDown() bool {
-	return s.scaledDown
+func (c *Container) ScaledDown() bool {
+	return c.scaledDown
 }
 
-func (s *Container) ID() string {
-	return s.id
+func (c *Container) ID() string {
+	return c.id
 }
 
-func (s *Container) InitialID() string {
-	return s.initialID
+func (c *Container) InitialID() string {
+	return c.initialID
 }
 
-func (s *Container) InitialProcess() process.Process {
-	return s.initialProcess
+func (c *Container) InitialProcess() process.Process {
+	return c.initialProcess
 }
 
-func (s *Container) StopActivator(ctx context.Context) {
-	s.activator.Stop(ctx)
+func (c *Container) StopActivator(ctx context.Context) {
+	c.activator.Stop(ctx)
+}
+
+func (c *Container) Process() process.Process {
+	return c.process
 }
 
 // startActivator starts the activator
-func (s *Container) startActivator(ctx context.Context, container *runc.Container) error {
+func (c *Container) startActivator(ctx context.Context, container *runc.Container) error {
 	// create a new context in order to not run into deadline of parent context
-	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", runc.RuntimeName))
+	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", RuntimeName))
 
-	log.G(ctx).Infof("starting activator with config: %v", s.cfg)
+	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := s.activator.Start(ctx, s.restoreHandler(ctx, container), s.checkpointHandler(ctx)); err != nil {
+	if err := c.activator.Start(ctx, c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
 		log.G(ctx).Errorf("failed to start server: %s", err)
 		return err
 	}
@@ -150,30 +153,28 @@ func (s *Container) startActivator(ctx context.Context, container *runc.Containe
 	return nil
 }
 
-func (s *Container) restoreHandler(ctx context.Context, container *runc.Container) activator.AcceptFunc {
+func (c *Container) restoreHandler(ctx context.Context, container *runc.Container) activator.AcceptFunc {
 	return func() (*runc.Container, process.Process, error) {
 		log.G(ctx).Printf("got a request")
 		beforeRestore := time.Now()
 
-		p, err := s.Restore(ctx, container)
+		restoredContainer, p, err := c.Restore(ctx, container)
 		if err != nil {
 			// restore failed, this is currently unrecoverable, so we shutdown
 			// our shim and let containerd recreate it.
 			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
 			os.Exit(1)
 		}
-		s.scaledDown = false
+		c.scaledDown = false
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
-		// before returning we set the net ns again as it might have changed
-		// in the meantime. (not sure why that happens though)
-		return container, p, nil
+		return restoredContainer, p, nil
 	}
 }
 
-func (s *Container) checkpointHandler(ctx context.Context) activator.ClosedFunc {
+func (c *Container) checkpointHandler(ctx context.Context) activator.ClosedFunc {
 	return func(container *runc.Container, p process.Process) error {
-		return s.ScheduleScaleDown(container)
+		return c.ScheduleScaleDown(container)
 	}
 }
 

@@ -19,8 +19,8 @@ package plugin
 import (
 	"github.com/containerd/containerd/pkg/shutdown"
 	"github.com/containerd/containerd/plugin"
-	"github.com/containerd/containerd/runtime/v2/runc/task"
 	"github.com/containerd/containerd/runtime/v2/shim"
+	"github.com/ctrox/zeropod/runc/task"
 )
 
 func init() {
@@ -40,7 +40,7 @@ func init() {
 			if err != nil {
 				return nil, err
 			}
-			return task.NewTaskService(ic.Context, pp.(shim.Publisher), ss.(shutdown.Service))
+			return task.NewZeropodService(ic.Context, pp.(shim.Publisher), ss.(shutdown.Service))
 		},
 	})
 

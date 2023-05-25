@@ -1,4 +1,4 @@
-package runc
+package zeropod
 
 import (
 	"encoding/json"
@@ -6,25 +6,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/containerd/containerd/pkg/cri/annotations"
-	specs "github.com/opencontainers/runtime-spec/specs-go"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
-// IsSandboxContainer parses the bundle and checks for the
-// annotations.ContainerType to see if the container is an internal sandbox
-// container.
-func IsSandboxContainer(bundlePath string) (bool, error) {
-	spec, err := GetSpec(bundlePath)
-	if err != nil {
-		return false, err
-	}
-
-	if v, ok := spec.Annotations[annotations.ContainerType]; ok {
-		return v == annotations.ContainerTypeSandbox, nil
-	}
-
-	return false, nil
-}
+const RuntimeName = "io.containerd.zeropod.v2"
 
 func GetSpec(bundlePath string) (*specs.Spec, error) {
 	var bundleSpec specs.Spec

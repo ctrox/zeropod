@@ -11,39 +11,39 @@ import (
 
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
+	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/ctrox/zeropod/runc"
 )
 
-func (s *Container) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
-	if s.cfg.Stateful {
+func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
+	if c.cfg.Stateful {
 		// not sure what is causing this but without adding these iptables
 		// rules here already, connections during scaling down sometimes
 		// timeout, even though criu should add these rules before
 		// checkpointing.
-		if err := addCriuIPTablesRules(s.netNS); err != nil {
+		if err := addCriuIPTablesRules(c.netNS); err != nil {
 			return err
 		}
 
-		if err := s.checkpoint(ctx, container, p); err != nil {
+		if err := c.checkpoint(ctx, container, p); err != nil {
 			return err
 		}
 	} else {
 		log.G(ctx).Infof("container is not stateful, scaling down by killing")
 
-		s.scaledDown = true
+		c.scaledDown = true
 		if err := p.Kill(ctx, 9, false); err != nil {
 			return err
 		}
 	}
 
 	beforeActivator := time.Now()
-	if err := s.startActivator(ctx, container); err != nil {
+	if err := c.startActivator(ctx, container); err != nil {
 		log.G(ctx).Errorf("unable to start zeropod: %s", err)
 		return err
 	}
 
-	if !s.cfg.Stateful {
+	if !c.cfg.Stateful {
 		log.G(ctx).Infof("activator started in %s", time.Since(beforeActivator))
 		return nil
 	}
@@ -53,7 +53,7 @@ func (s *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 	// instead of restoring the process right away, we remove these iptables
 	// rules by switching into the netns of the container and running
 	// iptables-restore. https://criu.org/CLI/opt/--network-lock
-	if err := removeCriuIPTablesRules(s.netNS); err != nil {
+	if err := removeCriuIPTablesRules(c.netNS); err != nil {
 		log.G(ctx).Errorf("unable to restore iptables: %s", err)
 		return err
 	}
@@ -63,7 +63,7 @@ func (s *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 	return nil
 }
 
-func (s *Container) checkpoint(ctx context.Context, container *runc.Container, p process.Process) error {
+func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p process.Process) error {
 	snapshotDir := snapshotDir(container.Bundle)
 
 	if err := os.RemoveAll(snapshotDir); err != nil {
@@ -73,7 +73,7 @@ func (s *Container) checkpoint(ctx context.Context, container *runc.Container, p
 	workDir := path.Join(snapshotDir, "work")
 	log.G(ctx).Infof("checkpointing process %d of container to %s", p.Pid(), snapshotDir)
 
-	s.scaledDown = true
+	c.scaledDown = true
 	beforeCheckpoint := time.Now()
 	if err := p.(*process.Init).Checkpoint(ctx, &process.CheckpointConfig{
 		Path:                     containerDir(container.Bundle),
@@ -85,7 +85,7 @@ func (s *Container) checkpoint(ctx context.Context, container *runc.Container, p
 		FileLocks:                false,
 		EmptyNamespaces:          []string{},
 	}); err != nil {
-		s.scaledDown = false
+		c.scaledDown = false
 
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
 		b, err := os.ReadFile(path.Join(workDir, "dump.log"))

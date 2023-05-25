@@ -38,6 +38,7 @@ import (
 	"github.com/containerd/containerd/pkg/shutdown"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/pkg/userns"
+	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/containerd/runtime/v2/shim"
 	shimapi "github.com/containerd/containerd/runtime/v2/task"
@@ -46,7 +47,6 @@ import (
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl"
-	"github.com/ctrox/zeropod/runc"
 	ptypes "github.com/gogo/protobuf/types"
 	"github.com/sirupsen/logrus"
 )

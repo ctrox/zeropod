@@ -13,8 +13,8 @@ import (
 	"github.com/cenkalti/backoff/v4"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
+	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/ctrox/zeropod/runc"
 )
 
 type Server struct {

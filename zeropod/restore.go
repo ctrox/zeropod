@@ -5,80 +5,69 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/log"
+	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/pkg/cri/config"
 	crio "github.com/containerd/containerd/pkg/cri/io"
-	"github.com/containerd/containerd/pkg/cri/util"
 	cioutil "github.com/containerd/containerd/pkg/ioutil"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
-	"github.com/ctrox/zeropod/runc"
+	"github.com/containerd/containerd/runtime/v2/runc"
+	"github.com/containerd/containerd/runtime/v2/task"
 )
 
-func (s *Container) Restore(ctx context.Context, container *runc.Container) (process.Process, error) {
-	// generate a new container ID as sometimes (probably some race condition)
-	// we get a "container with given ID already exists" from runc.
-	container.ID = util.GenerateID()
-	runtime := process.NewRunc("", container.Bundle, "k8s", "", "", false)
-
+func (c *Container) Restore(ctx context.Context, container *runc.Container) (*runc.Container, process.Process, error) {
 	go func() {
 		// as soon as we checkpoint the container, the log pipe is closed. As
 		// we currently have no way to instruct containerd to restore the logs
 		// and pipe it again, we do it manually.
-		if err := s.restoreLoggers(container.ID, s.initialProcess.Stdio()); err != nil {
+		if err := c.restoreLoggers(container.ID, c.initialProcess.Stdio()); err != nil {
 			log.G(ctx).Errorf("error restoring loggers: %s", err)
 		}
 	}()
 
-	p := process.New(container.ID, runtime, stdio.Stdio{
-		Stdout: s.initialProcess.Stdio().Stdout,
-		Stderr: s.initialProcess.Stdio().Stderr,
-	})
-	p.Bundle = container.Bundle
-	p.Platform = s.platform
-	p.WorkDir = filepath.Join(container.Bundle, "work")
-
-	if p.CriuWorkPath == "" {
-		// if criu work path not set, use container WorkDir
-		p.CriuWorkPath = p.WorkDir
+	createReq := &task.CreateTaskRequest{
+		ID:               container.ID,
+		Bundle:           container.Bundle,
+		Terminal:         false,
+		Stdin:            c.initialProcess.Stdio().Stdin,
+		Stdout:           c.initialProcess.Stdio().Stdout,
+		Stderr:           c.initialProcess.Stdio().Stderr,
+		ParentCheckpoint: "",
 	}
 
-	createConfig := &process.CreateConfig{
-		ID:     container.ID,
-		Bundle: container.Bundle,
+	if c.cfg.Stateful {
+		createReq.Checkpoint = containerDir(container.Bundle)
 	}
 
-	if s.cfg.Stateful {
-		log.G(ctx).Infof("container %s is stateful, restoring from checkpoint", container.ID)
-		createConfig.Checkpoint = containerDir(container.Bundle)
-	} else {
-		log.G(ctx).Infof("restoring %s by starting the process again", container.ID)
+	container, err := runc.NewContainer(namespaces.WithNamespace(ctx, "k8s"), c.platform, createReq)
+	if err != nil {
+		return nil, nil, err
 	}
 
-	if err := p.Create(ctx, createConfig); err != nil {
-		return nil, fmt.Errorf("creation failed during restore: %w", err)
+	p, err := container.Process("")
+	if err != nil {
+		return nil, nil, err
 	}
-
 	log.G(ctx).Info("restore: process created")
 
 	if err := p.Start(ctx); err != nil {
-		return nil, fmt.Errorf("start failed during restore: %w", err)
+		return nil, nil, fmt.Errorf("start failed during restore: %w", err)
 	}
 
-	s.id = container.ID
-	container.SetMainProcess(p)
+	c.id = container.ID
+	c.process = p
 
-	return p, nil
+	return container, p, nil
 }
 
 // restoreLoggers creates the appropriate fifos and pipes the logs to the
 // container log at s.logPath. It blocks until the logs are closed. This has
 // been adapted from internal containerd code and the logging setup should be
 // pretty much the same.
-func (s *Container) restoreLoggers(id string, stdio stdio.Stdio) error {
+func (c *Container) restoreLoggers(id string, stdio stdio.Stdio) error {
 	fifos := cio.NewFIFOSet(cio.Config{
 		Stdin:    "",
 		Stdout:   stdio.Stdout,
@@ -86,7 +75,7 @@ func (s *Container) restoreLoggers(id string, stdio stdio.Stdio) error {
 		Terminal: false,
 	}, func() error { return nil })
 
-	stdoutWC, stderrWC, err := createContainerLoggers(s.context, s.logPath, false)
+	stdoutWC, stderrWC, err := createContainerLoggers(c.context, c.logPath, false)
 	if err != nil {
 		return err
 	}
