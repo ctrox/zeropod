@@ -16,8 +16,8 @@ COPY activator/ activator/
 COPY zeropod/ zeropod/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o zeropod-installer installer/main.go
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o containerd-shim-zeropod-v2 main.go
+RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o zeropod-installer installer/main.go
+RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o containerd-shim-zeropod-v2 main.go
 
 FROM centos/systemd
 WORKDIR /build

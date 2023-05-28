@@ -9,7 +9,7 @@ metadata:
     zeropod.ctrox.dev/scaledownduration: 0s
     zeropod.ctrox.dev/stateful: "true"
     zeropod.ctrox.dev/container-name: "nginx"
-    zeropod.ctrox.dev/pre-dump: "true"
+    zeropod.ctrox.dev/pre-dump: "false"
 spec:
   runtimeClassName: zeropod
   containers:

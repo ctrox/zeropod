@@ -13,6 +13,6 @@ RUN make -j $(nproc)
 
 FROM scratch AS export-stage
 COPY --from=build /workspace/criu/criu/criu /bin/
-COPY --from=build /usr/lib/x86_64-linux-gnu/libprotobuf-c.so.1 /lib/
-COPY --from=build /lib/x86_64-linux-gnu/libnl-3.so.200 /lib/
-COPY --from=build /usr/lib/x86_64-linux-gnu/libnet.so.1 /lib/
+COPY --from=build /usr/lib/*-linux-gnu/libprotobuf-c.so.1 /lib/
+COPY --from=build /lib/*-linux-gnu/libnl-3.so.200 /lib/
+COPY --from=build /usr/lib/*-linux-gnu/libnet.so.1 /lib/

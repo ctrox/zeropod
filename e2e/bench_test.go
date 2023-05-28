@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"runtime"
 	"testing"
 	"time"
 
@@ -41,6 +42,10 @@ func BenchmarkRestore(b *testing.B) {
 	for name, bc := range benches {
 		bc := bc
 		b.Run(name, func(b *testing.B) {
+			if bc.preDump && runtime.GOARCH == "arm64" {
+				b.Skip("skipping pre-dump test as it's not supported on arm64")
+			}
+
 			// bench does an initial run with 1 iteration which we don't want since
 			// the setup takes a long time.
 			if b.N == 1 {
