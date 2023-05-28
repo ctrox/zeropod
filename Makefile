@@ -45,4 +45,4 @@ docker-test-e2e: build-e2e
 	docker run -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(E2E_IMAGE) make test-e2e
 
 docker-bench: build-e2e
-	docker run -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(E2E_IMAGE) make bench-e2e
+	docker run -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(E2E_IMAGE) make bench
