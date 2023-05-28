@@ -101,6 +101,8 @@ func (s *Server) serve(ctx context.Context) {
 		go func() {
 			log.G(ctx).Info("accepting connection")
 
+			// TODO: if we error in here things just kind of hang. We
+			// need to propagate the error and handle it.
 			s.handleConection(ctx, conn)
 			s.wg.Done()
 		}()

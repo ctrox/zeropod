@@ -12,19 +12,12 @@ import (
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/runtime/v2/runc"
+	runcC "github.com/containerd/go-runc"
 	"github.com/containernetworking/plugins/pkg/ns"
 )
 
 func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
 	if c.cfg.Stateful {
-		// not sure what is causing this but without adding these iptables
-		// rules here already, connections during scaling down sometimes
-		// timeout, even though criu should add these rules before
-		// checkpointing.
-		if err := addCriuIPTablesRules(c.netNS); err != nil {
-			return err
-		}
-
 		if err := c.checkpoint(ctx, container, p); err != nil {
 			return err
 		}
@@ -48,16 +41,6 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 		return nil
 	}
 
-	// after checkpointing criu locks the network until the process is
-	// restored by inserting some iptables rules. As we start our activator
-	// instead of restoring the process right away, we remove these iptables
-	// rules by switching into the netns of the container and running
-	// iptables-restore. https://criu.org/CLI/opt/--network-lock
-	if err := removeCriuIPTablesRules(c.netNS); err != nil {
-		log.G(ctx).Errorf("unable to restore iptables: %s", err)
-		return err
-	}
-
 	log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
 
 	return nil
@@ -73,18 +56,71 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 	workDir := path.Join(snapshotDir, "work")
 	log.G(ctx).Infof("checkpointing process %d of container to %s", p.Pid(), snapshotDir)
 
-	c.scaledDown = true
-	beforeCheckpoint := time.Now()
-	if err := p.(*process.Init).Checkpoint(ctx, &process.CheckpointConfig{
-		Path:                     containerDir(container.Bundle),
+	initProcess, ok := p.(*process.Init)
+	if !ok {
+		return fmt.Errorf("process is not of type %T, got %T", process.Init{}, p)
+	}
+
+	opts := &runcC.CheckpointOpts{
 		WorkDir:                  workDir,
-		Exit:                     true,
 		AllowOpenTCP:             true,
 		AllowExternalUnixSockets: true,
 		AllowTerminal:            false,
 		FileLocks:                false,
 		EmptyNamespaces:          []string{},
-	}); err != nil {
+	}
+
+	if c.cfg.PreDump {
+		// for the pre-dump we set the ImagePath to be a sub-path of our container image path
+		opts.ImagePath = preDumpDir(container.Bundle)
+
+		beforePreDump := time.Now()
+		if err := initProcess.Runtime().Checkpoint(ctx, container.ID, opts, runcC.PreDump); err != nil {
+			c.scaledDown = false
+
+			log.G(ctx).Errorf("error pre-dumping container: %s", err)
+			b, err := os.ReadFile(path.Join(workDir, "dump.log"))
+			if err != nil {
+				log.G(ctx).Errorf("error reading dump.log: %s", err)
+			}
+			log.G(ctx).Errorf("dump.log: %s", b)
+			return err
+		}
+
+		log.G(ctx).Infof("pre-dumping done in %s", time.Since(beforePreDump))
+	}
+
+	// not sure what is causing this but without adding these iptables
+	// rules here already, connections during scaling down sometimes
+	// timeout, even though criu should add these rules before
+	// checkpointing.
+	if err := addCriuIPTablesRules(c.netNS); err != nil {
+		return err
+	}
+
+	// TODO: as a result of the IP tables rules we sometimes get > 1s delays
+	// when the client is connecting during checkpointing. This can be
+	// reproduced easily by running the benchmark without any sleeps. This is
+	// most probably caused by TCP SYN retransmissions:
+	// $ netstat -s | grep -i retrans
+	// 3 segments retransmitted
+	// TCPSynRetrans: 3
+	// Not sure if we can even do something about this as the issue is on the
+	// client side.
+	// https://arthurchiao.art/blog/customize-tcp-initial-rto-with-bpf/#tl-dr
+
+	c.scaledDown = true
+
+	if c.cfg.PreDump {
+		// ParentPath is the relative path from the ImagePath to the pre-dump dir.
+		opts.ParentPath = relativePreDumpDir()
+	}
+
+	// ImagePath is always the same, regardless of pre-dump
+	opts.ImagePath = containerDir(container.Bundle)
+
+	beforeCheckpoint := time.Now()
+	if err := initProcess.Runtime().Checkpoint(ctx, container.ID, opts); err != nil {
 		c.scaledDown = false
 
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
@@ -92,12 +128,21 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 		if err != nil {
 			log.G(ctx).Errorf("error reading dump.log: %s", err)
 		}
-
 		log.G(ctx).Errorf("dump.log: %s", b)
-
 		return err
 	}
+
 	log.G(ctx).Infof("checkpointing done in %s", time.Since(beforeCheckpoint))
+
+	// after checkpointing criu locks the network until the process is
+	// restored by inserting some iptables rules. As we start our activator
+	// instead of restoring the process right away, we remove these iptables
+	// rules by switching into the netns of the container and running
+	// iptables-restore. https://criu.org/CLI/opt/--network-lock
+	if err := removeCriuIPTablesRules(c.netNS); err != nil {
+		log.G(ctx).Errorf("unable to restore iptables: %s", err)
+		return err
+	}
 
 	return nil
 }
@@ -125,6 +170,9 @@ func removeCriuIPTablesRules(netNS ns.NetNS) error {
 	return ipTablesRestore(conf, netNS)
 }
 
+// TODO: investigate: this rarely fails with
+// error running iptables-restore: : wait: no child processes
+// the shim then dies as we assume checkpointing as a whole failed
 func ipTablesRestore(conf string, netNS ns.NetNS) error {
 	cmd := exec.Command("iptables-restore")
 	stdin, err := cmd.StdinPipe()

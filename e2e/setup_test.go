@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -233,7 +234,7 @@ func deployInstaller(t testing.TB, ctx context.Context, c client.Client) error {
 	return nil
 }
 
-func testPod() *corev1.Pod {
+func testPod(preDump bool, scaleDownDuration time.Duration) *corev1.Pod {
 	return &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "zeropod-e2e-",
@@ -241,7 +242,8 @@ func testPod() *corev1.Pod {
 			Annotations: map[string]string{
 				zeropod.PortAnnotationKey:              "80",
 				zeropod.ContainerNameAnnotationKey:     "nginx",
-				zeropod.ScaleDownDurationAnnotationKey: "0",
+				zeropod.ScaleDownDurationAnnotationKey: scaleDownDuration.String(),
+				zeropod.PreDumpAnnotationKey:           strconv.FormatBool(preDump),
 			},
 			Labels: map[string]string{"app": "zeropod-e2e"},
 		},
@@ -249,6 +251,15 @@ func testPod() *corev1.Pod {
 			RuntimeClassName: pointer.StringPtr(runtimeClassName),
 			Containers: []corev1.Container{
 				{
+					StartupProbe: &corev1.Probe{
+						ProbeHandler: corev1.ProbeHandler{
+							HTTPGet: &corev1.HTTPGetAction{
+								Path: "/",
+								Port: intstr.FromInt(80),
+							},
+						},
+						TimeoutSeconds: 2,
+					},
 					Name:  "nginx",
 					Image: "nginx",
 					Ports: []corev1.ContainerPort{{ContainerPort: 80}},
@@ -280,24 +291,38 @@ func objectName(obj client.Object) types.NamespacedName {
 	return types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
 }
 
-func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, pod *corev1.Pod) {
+func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, pod *corev1.Pod) (cleanup func()) {
 	err := client.Create(ctx, pod)
 	assert.NoError(t, err)
+	t.Logf("created pod %s", pod.Name)
 
-	assert.Eventually(t, func() bool {
+	require.Eventually(t, func() bool {
 		if err := client.Get(ctx, objectName(pod), pod); err != nil {
 			return false
 		}
 
 		return pod.Status.Phase == corev1.PodRunning
-	}, time.Second*30, time.Millisecond*500)
+	}, time.Minute, time.Second, "waiting for pod to be running")
+
+	return func() {
+		client.Delete(ctx, pod)
+		assert.NoError(t, err)
+		require.Eventually(t, func() bool {
+			if err := client.Get(ctx, objectName(pod), pod); err != nil {
+				return true
+			}
+
+			return false
+		}, time.Minute, time.Second, "waiting for pod to be deleted")
+	}
 }
 
-func createServiceAndWait(t testing.TB, ctx context.Context, client client.Client, svc *corev1.Service, replicas int) {
+func createServiceAndWait(t testing.TB, ctx context.Context, client client.Client, svc *corev1.Service, replicas int) (cleanup func()) {
 	err := client.Create(ctx, svc)
 	require.NoError(t, err)
+	t.Logf("created service %s", svc.Name)
 
-	assert.Eventually(t, func() bool {
+	if !assert.Eventually(t, func() bool {
 		endpoints := &corev1.Endpoints{}
 		if err := client.Get(ctx, objectName(svc), endpoints); err != nil {
 			return false
@@ -308,8 +333,22 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 		}
 
 		return len(endpoints.Subsets[0].Addresses) == replicas
-	}, time.Second*30, time.Millisecond*500)
+	}, time.Second*30, time.Second, "waiting for service endpoints to be ready") {
+		t.Log("service did not get ready")
+		time.Sleep(time.Hour)
+	}
 
+	return func() {
+		client.Delete(ctx, svc)
+		assert.NoError(t, err)
+		require.Eventually(t, func() bool {
+			if err := client.Get(ctx, objectName(svc), svc); err != nil {
+				return true
+			}
+
+			return false
+		}, time.Minute, time.Second, "waiting for service to be deleted")
+	}
 }
 
 func createPodAndPortForward(t testing.TB, ctx context.Context, cfg *rest.Config, client client.Client, pod *corev1.Pod) int {

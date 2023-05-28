@@ -50,7 +50,8 @@ network-lock iptables
     "zeropod.ctrox.dev/port",
     "zeropod.ctrox.dev/container-name",
     "zeropod.ctrox.dev/scaledownduration",
-    "zeropod.ctrox.dev/stateful"
+    "zeropod.ctrox.dev/stateful",
+    "zeropod.ctrox.dev/pre-dump"
   ]
 `
 )

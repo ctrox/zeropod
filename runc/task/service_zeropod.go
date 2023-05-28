@@ -105,7 +105,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil, err
 	}
 
-	cfg, err := zeropod.NewConfig(spec)
+	cfg, err := zeropod.NewConfig(ctx, spec)
 	if err != nil {
 		return nil, err
 	}

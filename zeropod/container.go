@@ -186,6 +186,16 @@ func containerDir(bundle string) string {
 	return path.Join(snapshotDir(bundle), "container")
 }
 
+const preDumpDirName = "pre-dump"
+
+func preDumpDir(bundle string) string {
+	return path.Join(snapshotDir(bundle), preDumpDirName)
+}
+
+func relativePreDumpDir() string {
+	return "../" + preDumpDirName
+}
+
 // getLogPath gets the log path of the container by connecting back to
 // containerd. There might be a less convoluted way to do this.
 func getLogPath(ctx context.Context, containerID string) (string, error) {

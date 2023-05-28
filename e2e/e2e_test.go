@@ -20,7 +20,7 @@ func TestE2E(t *testing.T) {
 	_, client, port := setup(t)
 	ctx := context.Background()
 
-	pod := testPod()
+	pod := testPod(false, 0)
 	svc := testService()
 	createPodAndWait(t, ctx, client, pod)
 	createServiceAndWait(t, ctx, client, svc, 1)
