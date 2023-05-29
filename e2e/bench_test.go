@@ -37,7 +37,7 @@ func BenchmarkRestore(b *testing.B) {
 		},
 	}
 
-	waitDuration := time.Millisecond * 600
+	waitDuration := time.Millisecond * 800
 
 	for name, bc := range benches {
 		bc := bc
@@ -85,7 +85,6 @@ func BenchmarkRestore(b *testing.B) {
 				b.Logf("get request took %s", time.Since(before))
 				assert.Equal(b, resp.StatusCode, http.StatusOK)
 			}
-
 		})
 	}
 }

@@ -2,7 +2,7 @@ REGISTRY := docker.io
 NAMESPACE := ctrox
 INSTALLER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-installer:dev
 E2E_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-e2e:dev
-CRIU_VERSION := 3.18
+CRIU_VERSION := v3.18
 CRIU_IMAGE := $(REGISTRY)/$(NAMESPACE)/criu:$(CRIU_VERSION)
 DOCKER_SOCK := /var/run/docker.sock
 

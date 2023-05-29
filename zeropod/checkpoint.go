@@ -3,10 +3,9 @@ package zeropod
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
-	"os/exec"
 	"path"
+	"strconv"
 	"time"
 
 	"github.com/containerd/containerd/log"
@@ -14,6 +13,8 @@ import (
 	"github.com/containerd/containerd/runtime/v2/runc"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containernetworking/plugins/pkg/ns"
+	"github.com/google/nftables"
+	"github.com/google/nftables/expr"
 )
 
 func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
@@ -39,9 +40,18 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 	if !c.cfg.Stateful {
 		log.G(ctx).Infof("activator started in %s", time.Since(beforeActivator))
 		return nil
-	}
+	} else {
+		// after checkpointing criu locks the network until the process is
+		// restored by inserting some nftables rules. As we start our activator
+		// instead of restoring the process right away, we remove these
+		// rules. https://criu.org/CLI/opt/--network-lock
+		if err := unlockNetwork(c.netNS, p.Pid()); err != nil {
+			log.G(ctx).Errorf("unable to remove nftable: %s", err)
+			return err
+		}
 
-	log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
+		log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
+	}
 
 	return nil
 }
@@ -90,11 +100,11 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 		log.G(ctx).Infof("pre-dumping done in %s", time.Since(beforePreDump))
 	}
 
-	// not sure what is causing this but without adding these iptables
+	// not sure what is causing this but without adding these nftables
 	// rules here already, connections during scaling down sometimes
 	// timeout, even though criu should add these rules before
 	// checkpointing.
-	if err := addCriuIPTablesRules(c.netNS); err != nil {
+	if err := lockNetwork(c.netNS); err != nil {
 		return err
 	}
 
@@ -134,71 +144,56 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 
 	log.G(ctx).Infof("checkpointing done in %s", time.Since(beforeCheckpoint))
 
-	// after checkpointing criu locks the network until the process is
-	// restored by inserting some iptables rules. As we start our activator
-	// instead of restoring the process right away, we remove these iptables
-	// rules by switching into the netns of the container and running
-	// iptables-restore. https://criu.org/CLI/opt/--network-lock
-	if err := removeCriuIPTablesRules(c.netNS); err != nil {
-		log.G(ctx).Errorf("unable to restore iptables: %s", err)
-		return err
-	}
-
 	return nil
 }
 
-func addCriuIPTablesRules(netNS ns.NetNS) error {
-	const SOCCR_MARK = "0xC114"
-	const conf = "*filter\n" +
-		":CRIU - [0:0]\n" +
-		"-I INPUT -j CRIU\n" +
-		"-I OUTPUT -j CRIU\n" +
-		"-A CRIU -m mark --mark " + SOCCR_MARK + " -j ACCEPT\n" +
-		"-A CRIU -j DROP\n" +
-		"COMMIT\n"
-
-	return ipTablesRestore(conf, netNS)
-}
-
-func removeCriuIPTablesRules(netNS ns.NetNS) error {
-	const conf = "*filter\n" +
-		":INPUT ACCEPT [0:0]\n" +
-		":FORWARD ACCEPT [0:0]\n" +
-		":OUTPUT ACCEPT [0:0]\n" +
-		"COMMIT\n"
-
-	return ipTablesRestore(conf, netNS)
-}
-
-// TODO: investigate: this rarely fails with
-// error running iptables-restore: : wait: no child processes
-// the shim then dies as we assume checkpointing as a whole failed
-func ipTablesRestore(conf string, netNS ns.NetNS) error {
-	cmd := exec.Command("iptables-restore")
-	stdin, err := cmd.StdinPipe()
+func lockNetwork(netNS ns.NetNS) error {
+	nft, err := nftables.New(nftables.WithNetNSFd(int(netNS.Fd())))
 	if err != nil {
 		return err
 	}
+	defer nft.CloseLasting()
 
-	errors := make(chan error)
-	go func() {
-		defer stdin.Close()
-		_, err := io.WriteString(stdin, conf)
-		if err != nil {
-			errors <- err
-		}
-		close(errors)
-	}()
+	table := &nftables.Table{Name: "zeropod", Family: nftables.TableFamilyINet}
 
-	if err := netNS.Do(func(nn ns.NetNS) error {
-		out, err := cmd.CombinedOutput()
-		if err != nil {
-			return fmt.Errorf("error running iptables-restore: %s: %w", out, err)
-		}
-		return nil
-	}); err != nil {
-		return err
+	nft.AddTable(table)
+	chain := &nftables.Chain{
+		Name:     "input",
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookInput,
+		Priority: nftables.ChainPriorityFilter,
 	}
 
-	return <-errors
+	nft.AddChain(chain)
+
+	rule := &nftables.Rule{
+		Table: table,
+		Chain: chain,
+		Exprs: []expr.Any{
+			&expr.Verdict{
+				Kind: expr.VerdictDrop,
+			},
+		},
+	}
+
+	nft.AddRule(rule)
+
+	return nft.Flush()
+}
+
+func unlockNetwork(netNS ns.NetNS, pid int) error {
+	nft, err := nftables.New(nftables.WithNetNSFd(int(netNS.Fd())))
+	if err != nil {
+		return err
+	}
+	defer nft.CloseLasting()
+
+	if pid != 0 {
+		nft.DelTable(&nftables.Table{Name: "CRIU-" + strconv.Itoa(pid), Family: nftables.TableFamilyINet})
+	}
+
+	nft.DelTable(&nftables.Table{Name: "zeropod", Family: nftables.TableFamilyINet})
+
+	return nft.Flush()
 }

@@ -154,10 +154,19 @@ func (c *Container) startActivator(ctx context.Context, container *runc.Containe
 }
 
 func (c *Container) restoreHandler(ctx context.Context, container *runc.Container) activator.AcceptFunc {
-	return func() (*runc.Container, process.Process, error) {
+	return func() (*runc.Container, error) {
 		log.G(ctx).Printf("got a request")
-		beforeRestore := time.Now()
 
+		// we "lock" the network to ensure no requests get a connection
+		// refused while nothing is listening on the zeropod port. As soon as
+		// the process is restored we remove the lock and let traffic flow.
+		beforeLock := time.Now()
+		if err := lockNetwork(c.netNS); err != nil {
+			return nil, err
+		}
+		log.G(ctx).Printf("took %s to lock network", time.Since(beforeLock))
+
+		beforeRestore := time.Now()
 		restoredContainer, p, err := c.Restore(ctx, container)
 		if err != nil {
 			// restore failed, this is currently unrecoverable, so we shutdown
@@ -168,12 +177,18 @@ func (c *Container) restoreHandler(ctx context.Context, container *runc.Containe
 		c.scaledDown = false
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
-		return restoredContainer, p, nil
+		beforeUnlock := time.Now()
+		if err := unlockNetwork(c.netNS, 0); err != nil {
+			return nil, err
+		}
+		log.G(ctx).Printf("took %s to unlock network", time.Since(beforeUnlock))
+
+		return restoredContainer, nil
 	}
 }
 
 func (c *Container) checkpointHandler(ctx context.Context) activator.ClosedFunc {
-	return func(container *runc.Container, p process.Process) error {
+	return func(container *runc.Container) error {
 		return c.ScheduleScaleDown(container)
 	}
 }

@@ -38,7 +38,7 @@ const (
 	runtimeHandler   = "zeropod"
 	criuConfig       = `tcp-close
 skip-in-flight
-network-lock iptables
+network-lock nftables
 `
 	runtimeConfig = `
 [plugins."io.containerd.internal.v1.opt"]

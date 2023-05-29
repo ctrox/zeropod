@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -32,4 +33,24 @@ func TestE2E(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.Equal(t, resp.StatusCode, http.StatusOK)
+}
+
+func TestConcurrentGet(t *testing.T) {
+	wg := sync.WaitGroup{}
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			before := time.Now()
+			resp, err := http.Get(fmt.Sprintf("http://localhost:%d", 8080))
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			t.Logf("request took %s", time.Since(before))
+			assert.Equal(t, resp.StatusCode, http.StatusOK)
+		}()
+	}
+	wg.Wait()
 }
