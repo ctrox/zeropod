@@ -144,7 +144,7 @@ func (c *Container) startActivator(ctx context.Context, container *runc.Containe
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := c.activator.Start(ctx, c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
+	if err := c.activator.Start(ctx, c.beforeClose(ctx), c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
 		log.G(ctx).Errorf("failed to start server: %s", err)
 		return err
 	}
@@ -153,18 +153,24 @@ func (c *Container) startActivator(ctx context.Context, container *runc.Containe
 	return nil
 }
 
-func (c *Container) restoreHandler(ctx context.Context, container *runc.Container) activator.AcceptFunc {
+func (c *Container) beforeClose(ctx context.Context) activator.BeforeClose {
+	return func() error {
+		beforeLock := time.Now()
+		if err := lockNetwork(c.netNS); err != nil {
+			return err
+		}
+		log.G(ctx).Printf("took %s to lock network", time.Since(beforeLock))
+		return nil
+	}
+}
+
+func (c *Container) restoreHandler(ctx context.Context, container *runc.Container) activator.OnAccept {
 	return func() (*runc.Container, error) {
 		log.G(ctx).Printf("got a request")
 
 		// we "lock" the network to ensure no requests get a connection
 		// refused while nothing is listening on the zeropod port. As soon as
 		// the process is restored we remove the lock and let traffic flow.
-		beforeLock := time.Now()
-		if err := lockNetwork(c.netNS); err != nil {
-			return nil, err
-		}
-		log.G(ctx).Printf("took %s to lock network", time.Since(beforeLock))
 
 		beforeRestore := time.Now()
 		restoredContainer, p, err := c.Restore(ctx, container)
@@ -187,7 +193,7 @@ func (c *Container) restoreHandler(ctx context.Context, container *runc.Containe
 	}
 }
 
-func (c *Container) checkpointHandler(ctx context.Context) activator.ClosedFunc {
+func (c *Container) checkpointHandler(ctx context.Context) activator.OnClosed {
 	return func(container *runc.Container) error {
 		return c.ScheduleScaleDown(container)
 	}

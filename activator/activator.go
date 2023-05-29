@@ -21,15 +21,17 @@ type Server struct {
 	port           uint16
 	quit           chan interface{}
 	wg             sync.WaitGroup
-	onAccept       AcceptFunc
-	onClosed       ClosedFunc
+	onAccept       OnAccept
+	onClosed       OnClosed
+	beforeClose    BeforeClose
 	connectTimeout time.Duration
 	ns             ns.NetNS
-	restore        sync.Once
+	once           sync.Once
 }
 
-type AcceptFunc func() (*runc.Container, error)
-type ClosedFunc func(*runc.Container) error
+type OnAccept func() (*runc.Container, error)
+type OnClosed func(*runc.Container) error
+type BeforeClose func() error
 
 func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
 	s := &Server{
@@ -42,7 +44,7 @@ func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) Start(ctx context.Context, onAccept AcceptFunc, onClosed ClosedFunc) error {
+func (s *Server) Start(ctx context.Context, beforeClose BeforeClose, onAccept OnAccept, onClosed OnClosed) error {
 	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
 	cfg := net.ListenConfig{}
 
@@ -68,9 +70,10 @@ func (s *Server) Start(ctx context.Context, onAccept AcceptFunc, onClosed Closed
 
 	log.G(ctx).Infof("listening on %s", addr)
 
-	s.restore = sync.Once{}
+	s.once = sync.Once{}
 	s.onAccept = onAccept
 	s.onClosed = onClosed
+	s.beforeClose = beforeClose
 
 	s.wg.Add(1)
 	go s.serve(ctx)
@@ -124,17 +127,23 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	var c *runc.Container
 	var err error
 
-	s.restore.Do(func() {
+	s.once.Do(func() {
+		if err := s.beforeClose(); err != nil {
+			log.G(ctx).Errorf("error before close: %s", err)
+		}
+
 		if err := s.listener.Close(); err != nil {
 			log.G(ctx).Errorf("error during listener close: %s", err)
+			return
 		}
 
 		c, err = s.onAccept()
-		if err != nil {
-			log.G(ctx).Error(err)
-			return
-		}
 	})
+
+	if err != nil {
+		log.G(ctx).Error(err)
+		return
+	}
 
 	log.G(ctx).Println("proxying initial connection to program")
 
