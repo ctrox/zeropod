@@ -12,7 +12,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containernetworking/plugins/pkg/ns"
 )
@@ -26,10 +25,11 @@ type Server struct {
 	onClosed       ClosedFunc
 	connectTimeout time.Duration
 	ns             ns.NetNS
+	restore        sync.Once
 }
 
-type AcceptFunc func() (*runc.Container, process.Process, error)
-type ClosedFunc func(*runc.Container, process.Process) error
+type AcceptFunc func() (*runc.Container, error)
+type ClosedFunc func(*runc.Container) error
 
 func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
 	s := &Server{
@@ -68,6 +68,7 @@ func (s *Server) Start(ctx context.Context, onAccept AcceptFunc, onClosed Closed
 
 	log.G(ctx).Infof("listening on %s", addr)
 
+	s.restore = sync.Once{}
 	s.onAccept = onAccept
 	s.onClosed = onClosed
 
@@ -86,28 +87,30 @@ func (s *Server) Stop(ctx context.Context) {
 func (s *Server) serve(ctx context.Context) {
 	defer s.wg.Done()
 
-	conn, err := s.listener.Accept()
-	if err != nil {
-		select {
-		case <-s.quit:
-			return
-		case <-ctx.Done():
-			return
-		default:
-			log.G(ctx).Errorf("error accepting: %s", err)
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			select {
+			case <-s.quit:
+				return
+			case <-ctx.Done():
+				return
+			default:
+				if !errors.Is(err, net.ErrClosed) {
+					log.G(ctx).Errorf("error accepting: %s", err)
+				}
+				return
+			}
+		} else {
+			s.wg.Add(1)
+			go func() {
+				log.G(ctx).Info("accepting connection")
+				s.handleConection(ctx, conn)
+				s.wg.Done()
+			}()
 		}
-	} else {
-		s.wg.Add(1)
-		go func() {
-			log.G(ctx).Info("accepting connection")
-
-			// TODO: if we error in here things just kind of hang. We
-			// need to propagate the error and handle it.
-			s.handleConection(ctx, conn)
-			s.wg.Done()
-		}()
+		log.G(ctx).Info("serve done")
 	}
-	log.G(ctx).Info("serve done")
 }
 
 func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
@@ -116,16 +119,22 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	// TODO: test what happens with concurrent connections, do we get a
 	// connection refused if a connection happens between this and starting
 	// the child process?
-	if err := s.listener.Close(); err != nil {
-		log.G(ctx).Errorf("error during listener close: %s", err)
-	}
 	defer conn.Close()
 
-	c, p, err := s.onAccept()
-	if err != nil {
-		log.G(ctx).Error(err)
-		return
-	}
+	var c *runc.Container
+	var err error
+
+	s.restore.Do(func() {
+		if err := s.listener.Close(); err != nil {
+			log.G(ctx).Errorf("error during listener close: %s", err)
+		}
+
+		c, err = s.onAccept()
+		if err != nil {
+			log.G(ctx).Error(err)
+			return
+		}
+	})
 
 	log.G(ctx).Println("proxying initial connection to program")
 
@@ -189,8 +198,10 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 
 	log.G(ctx).Println("initial connection closed")
 
-	if err := s.onClosed(c, p); err != nil {
-		log.G(ctx).Error(err)
+	if c != nil {
+		if err := s.onClosed(c); err != nil {
+			log.G(ctx).Error(err)
+		}
 	}
 }
 
