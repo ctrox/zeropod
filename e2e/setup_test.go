@@ -28,7 +28,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/pointer"
@@ -349,23 +348,4 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 			return false
 		}, time.Minute, time.Second, "waiting for service to be deleted")
 	}
-}
-
-func createPodAndPortForward(t testing.TB, ctx context.Context, cfg *rest.Config, client client.Client, pod *corev1.Pod) int {
-	createPodAndWait(t, ctx, client, pod)
-
-	pf := PortForward{
-		Config:          cfg,
-		Clientset:       kubernetes.NewForConfigOrDie(cfg),
-		Name:            pod.Name,
-		Namespace:       pod.Namespace,
-		DestinationPort: 80,
-	}
-
-	assert.NoError(t, pf.Start())
-	t.Cleanup(func() {
-		pf.Stop()
-	})
-
-	return pf.ListenPort
 }
