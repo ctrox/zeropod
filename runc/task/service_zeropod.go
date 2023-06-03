@@ -12,6 +12,7 @@ import (
 
 	"github.com/containerd/cgroups"
 	eventstypes "github.com/containerd/containerd/api/events"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/cri/annotations"
 	"github.com/containerd/containerd/pkg/oom"
@@ -189,6 +190,18 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	if len(r.ExecID) == 0 && w.isScaledDownContainer(r.ID) {
 		log.G(ctx).Infof("requested scaled down process %d to be killed", w.scaledContainer.Process().Pid())
 		w.scaledContainer.Process().SetExited(0)
+		w.scaledContainer.InitialProcess().SetExited(0)
+		return w.service.Kill(ctx, r)
+	}
+
+	if w.scaledContainer != nil && w.scaledContainer.InitialID() == r.ID {
+		log.G(ctx).Infof("requested initial container %s to be killed", w.scaledContainer.InitialID())
+		w.scaledContainer.StopActivator(ctx)
+
+		if err := w.scaledContainer.Process().Kill(ctx, r.Signal, r.All); err != nil {
+			return nil, errdefs.ToGRPC(err)
+		}
+
 		w.scaledContainer.InitialProcess().SetExited(0)
 	}
 

@@ -80,17 +80,20 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 }
 
 func (c *Container) ScheduleScaleDown(container *runc.Container) error {
-	p := c.process
-
 	if c.scaleDownTask != nil && !c.scaleDownTask.IsCancelled() {
 		// cancel any potential pending scaledonws
 		c.scaleDownTask.Cancel()
 	}
 
+	if c.activator.Stopping() {
+		// do not schedule a scale down when we are in process of stopping
+		return nil
+	}
+
 	task, err := c.scheduler.Schedule(func(_ context.Context) {
 		log.G(c.context).Info("scaling down after scale down duration is up")
 
-		if err := c.scaleDown(c.context, container, p); err != nil {
+		if err := c.scaleDown(c.context, container, c.process); err != nil {
 			// checkpointing failed, this is currently unrecoverable, so we
 			// shutdown our shim and let containerd recreate it.
 			log.G(c.context).Fatalf("scale down failed: %s", err)

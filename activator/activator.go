@@ -25,8 +25,11 @@ type Server struct {
 	onClosed       OnClosed
 	beforeClose    BeforeClose
 	connectTimeout time.Duration
+	proxyTimeout   time.Duration
+	proxyCancel    context.CancelFunc
 	ns             ns.NetNS
 	once           sync.Once
+	stopping       bool
 }
 
 type OnAccept func() (*runc.Container, error)
@@ -38,6 +41,7 @@ func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
 		quit:           make(chan interface{}),
 		port:           port,
 		connectTimeout: time.Second * 5,
+		proxyTimeout:   time.Second * 5,
 		ns:             ns,
 	}
 
@@ -82,9 +86,18 @@ func (s *Server) Start(ctx context.Context, beforeClose BeforeClose, onAccept On
 
 func (s *Server) Stop(ctx context.Context) {
 	log.G(ctx).Info("stopping activator")
+	s.stopping = true
+
+	if s.proxyCancel != nil {
+		s.proxyCancel()
+	}
 	if s.listener != nil {
 		s.listener.Close()
 	}
+}
+
+func (s *Server) Stopping() bool {
+	return s.stopping
 }
 
 func (s *Server) serve(ctx context.Context) {
@@ -203,7 +216,12 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 
 	defer initialConn.Close()
 
-	proxy(conn, initialConn)
+	requestContext, cancel := context.WithTimeout(ctx, s.proxyTimeout)
+	s.proxyCancel = cancel
+	defer cancel()
+	if err := proxy(requestContext, conn, initialConn); err != nil {
+		log.G(ctx).Errorf("error proxying request: %s", err)
+	}
 
 	log.G(ctx).Println("initial connection closed")
 
@@ -215,29 +233,32 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 }
 
 // proxy just proxies between conn1 and conn2.
-// TODO: add timeout
-func proxy(conn1, conn2 net.Conn) error {
+func proxy(ctx context.Context, conn1, conn2 net.Conn) error {
 	defer conn1.Close()
 	defer conn2.Close()
 
-	var wg sync.WaitGroup
-	wg.Add(2)
+	errors := make(chan error, 2)
+	done := make(chan struct{}, 2)
+	go copy(done, errors, conn2, conn1)
+	go copy(done, errors, conn1, conn2)
 
-	go func() {
-		defer wg.Done()
-		io.Copy(conn1, conn2)
-		// Signal peer that no more data is coming.
-		conn1.Close()
-	}()
-	go func() {
-		defer wg.Done()
-		io.Copy(conn2, conn1)
-		// Signal peer that no more data is coming.
-		conn2.Close()
-	}()
+	select {
+	case <-ctx.Done():
+		log.G(ctx).Printf("context done with: %s", ctx.Err())
+		return nil
+	case <-done:
+		return nil
+	case err := <-errors:
+		return err
+	}
+}
 
-	wg.Wait()
-	return nil
+func copy(done chan struct{}, errors chan error, dst io.Writer, src io.Reader) {
+	_, err := io.Copy(dst, src)
+	done <- struct{}{}
+	if err != nil {
+		errors <- err
+	}
 }
 
 func newBackOff() *backoff.ExponentialBackOff {

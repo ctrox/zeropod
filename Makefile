@@ -1,7 +1,7 @@
 REGISTRY := docker.io
 NAMESPACE := ctrox
 INSTALLER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-installer:dev
-E2E_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-e2e:dev
+TEST_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-test:dev
 CRIU_VERSION := v3.18
 CRIU_IMAGE := $(REGISTRY)/$(NAMESPACE)/criu:$(CRIU_VERSION)
 DOCKER_SOCK := /var/run/docker.sock
@@ -28,8 +28,8 @@ build-criu:
 build-installer:
 	docker build --load -t $(INSTALLER_IMAGE) -f installer/Dockerfile .
 
-build-e2e:
-	docker build --load -t $(E2E_IMAGE) -f e2e/Dockerfile .
+build-test:
+	docker build --load -t $(TEST_IMAGE) -f e2e/Dockerfile .
 
 test-e2e:
 	go test -v ./e2e/
@@ -37,12 +37,19 @@ test-e2e:
 bench:
 	go test -bench=. -benchtime=10x -v -run=Bench ./e2e/
 
+test:
+	go test -v -short ./...
+
 # docker-e2e runs the e2e test in a docker container. However, as running the
 # e2e test requires a docker socket, this mounts the docker socket of the host
 # into the container. For now this is the only way to run the e2e tests on Mac
 # OS with apple silicon as the shim requires GOOS=linux.
-docker-test-e2e: build-e2e
-	docker run -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(E2E_IMAGE) make test-e2e
+docker-test-e2e: build-test
+	docker run --rm -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make test-e2e
 
-docker-bench: build-e2e
-	docker run -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(E2E_IMAGE) make bench
+docker-bench: build-test
+	docker run --rm -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make bench
+
+# has to be privileged because the test tries to set netns
+docker-test:
+	docker run --rm -ti --privileged -v $(PWD):/app $(TEST_IMAGE) make test

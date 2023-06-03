@@ -22,9 +22,14 @@ func TestE2E(t *testing.T) {
 	_, client, port := setup(t)
 	ctx := context.Background()
 
+	c := &http.Client{
+		Timeout: time.Second * 10,
+	}
+
 	cases := map[string]struct {
 		pod              *corev1.Pod
 		parallelRequests int
+		keepAlive        bool
 	}{
 		"without pre-dump": {
 			pod:              testPod(false, 0),
@@ -33,6 +38,11 @@ func TestE2E(t *testing.T) {
 		"parallel requests": {
 			pod:              testPod(false, 0),
 			parallelRequests: 4,
+		},
+		"parallel requests with keepalive": {
+			pod:              testPod(false, 0),
+			parallelRequests: 4,
+			keepAlive:        true,
 		},
 	}
 
@@ -47,13 +57,15 @@ func TestE2E(t *testing.T) {
 			defer cleanupService()
 
 			wg := sync.WaitGroup{}
+			wg.Add(tc.parallelRequests)
 			for i := 0; i < tc.parallelRequests; i++ {
-				wg.Add(1)
 				go func() {
 					defer wg.Done()
 
+					c.Transport = &http.Transport{DisableKeepAlives: !tc.keepAlive}
+
 					before := time.Now()
-					resp, err := http.Get(fmt.Sprintf("http://localhost:%d", port))
+					resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
 					if err != nil {
 						t.Error(err)
 						return

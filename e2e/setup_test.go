@@ -227,7 +227,7 @@ func deployInstaller(t testing.TB, ctx context.Context, c client.Client) error {
 			},
 		}
 		return c.Get(ctx, objectName(runtimeClass), runtimeClass) == nil
-	}, time.Second*10, time.Millisecond*500); !ok {
+	}, time.Second*30, time.Millisecond*500); !ok {
 		return fmt.Errorf("runtimeClass not found")
 	}
 
