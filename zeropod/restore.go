@@ -60,6 +60,10 @@ func (c *Container) Restore(ctx context.Context, container *runc.Container) (*ru
 	c.id = container.ID
 	c.process = p
 
+	if err := c.tracker.TrackPid(uint32(p.Pid())); err != nil {
+		return nil, nil, fmt.Errorf("unable to track pid %d: %w", p.Pid(), err)
+	}
+
 	return container, p, nil
 }
 

@@ -4,6 +4,7 @@ go 1.19
 
 require (
 	github.com/cenkalti/backoff/v4 v4.1.3
+	github.com/cilium/ebpf v0.10.0
 	github.com/containerd/cgroups v1.0.4
 	github.com/containerd/containerd v1.6.19
 	github.com/containerd/go-runc v1.0.0
@@ -17,9 +18,9 @@ require (
 	github.com/opencontainers/runtime-spec v1.0.3-0.20210326190908-1c3f411f0417
 	github.com/phayes/freeport v0.0.0-20220201140144-74d24b5ae9f5
 	github.com/pkg/errors v0.9.1
-	github.com/procyon-projects/chrono v1.1.2
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.8.1
+	golang.org/x/sys v0.8.0
 	k8s.io/api v0.26.1
 	k8s.io/apimachinery v0.26.1
 	k8s.io/client-go v0.26.1
@@ -36,7 +37,6 @@ require (
 	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/cespare/xxhash/v2 v2.1.2 // indirect
-	github.com/cilium/ebpf v0.9.1 // indirect
 	github.com/containerd/console v1.0.3 // indirect
 	github.com/containerd/continuity v0.3.0 // indirect
 	github.com/containerd/fifo v1.0.0 // indirect
@@ -101,7 +101,6 @@ require (
 	golang.org/x/net v0.8.0 // indirect
 	golang.org/x/oauth2 v0.6.0 // indirect
 	golang.org/x/sync v0.1.0 // indirect
-	golang.org/x/sys v0.6.0 // indirect
 	golang.org/x/term v0.6.0 // indirect
 	golang.org/x/text v0.8.0 // indirect
 	golang.org/x/time v0.3.0 // indirect

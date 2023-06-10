@@ -14,6 +14,7 @@ COPY installer/ installer/
 COPY runc/ runc/
 COPY activator/ activator/
 COPY zeropod/ zeropod/
+COPY socket/ socket/
 
 # Build
 RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o zeropod-installer installer/main.go

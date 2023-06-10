@@ -15,8 +15,8 @@ import (
 	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
+	"github.com/ctrox/zeropod/socket"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/procyon-projects/chrono"
 )
 
 type Container struct {
@@ -31,9 +31,9 @@ type Container struct {
 	logPath        string
 	scaledDown     bool
 	netNS          ns.NetNS
-	scheduler      chrono.TaskScheduler
-	scaleDownTask  chrono.ScheduledTask
+	scaleDownTimer *time.Timer
 	platform       stdio.Platform
+	tracker        socket.Tracker
 }
 
 func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Container, pt stdio.Platform) (*Container, error) {
@@ -63,6 +63,16 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 		return nil, err
 	}
 
+	tracker, err := socket.NewEBPFTracker()
+	if err != nil {
+		log.G(ctx).Warnf("creating ebpf tracker failed, falling back to noop tracker: %s", err)
+		tracker = socket.NewNoopTracker(cfg.ScaleDownDuration)
+	}
+
+	if err := tracker.TrackPid(uint32(p.Pid())); err != nil {
+		return nil, err
+	}
+
 	return &Container{
 		context:        ctx,
 		platform:       pt,
@@ -75,22 +85,46 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 		logPath:        logPath,
 		netNS:          targetNS,
 		activator:      srv,
-		scheduler:      chrono.NewDefaultTaskScheduler(),
+		tracker:        tracker,
 	}, nil
 }
 
 func (c *Container) ScheduleScaleDown(container *runc.Container) error {
-	if c.scaleDownTask != nil && !c.scaleDownTask.IsCancelled() {
-		// cancel any potential pending scaledonws
-		c.scaleDownTask.Cancel()
-	}
+	return c.scheduleScaleDown(container, c.cfg.ScaleDownDuration)
+}
+
+func (c *Container) scheduleScaleDown(container *runc.Container, in time.Duration) error {
+	// cancel any potential pending scaledonws
+	c.CancelScaleDown()
 
 	if c.activator.Stopping() {
 		// do not schedule a scale down when we are in process of stopping
 		return nil
 	}
 
-	task, err := c.scheduler.Schedule(func(_ context.Context) {
+	log.G(c.context).Infof("scheduling scale down in %s", c.cfg.ScaleDownDuration)
+	timer := time.AfterFunc(c.cfg.ScaleDownDuration, func() {
+		last, err := c.tracker.LastActivity(uint32(c.process.Pid()))
+		if err != nil {
+			log.G(c.context).Errorf("unable to get last TCP activity from tracker: %s", err)
+		} else {
+			log.G(c.context).Infof("last activity was %s ago", time.Since(last))
+
+			if time.Since(last) < c.cfg.ScaleDownDuration {
+				// we want to delay the scaledown by c.cfg.ScaleDownDuration
+				// after the last activity
+				delay := c.cfg.ScaleDownDuration - time.Since(last)
+				// do not schedule into the past :)
+				if delay < 0 {
+					return
+				}
+
+				log.G(c.context).Infof("delaying scale down by %s", delay)
+				c.scaleDownTimer.Reset(delay)
+				return
+			}
+		}
+
 		log.G(c.context).Info("scaling down after scale down duration is up")
 
 		if err := c.scaleDown(c.context, container, c.process); err != nil {
@@ -99,17 +133,18 @@ func (c *Container) ScheduleScaleDown(container *runc.Container) error {
 			log.G(c.context).Fatalf("scale down failed: %s", err)
 			os.Exit(1)
 		}
-	}, chrono.WithTime(time.Now().Add(c.cfg.ScaleDownDuration)))
-	if err != nil {
-		return err
-	}
 
-	c.scaleDownTask = task
+	})
+	c.scaleDownTimer = timer
 	return nil
 }
 
 func (c *Container) CancelScaleDown() {
-	c.scaleDownTask.Cancel()
+	if c.scaleDownTimer == nil {
+		return
+	}
+
+	c.scaleDownTimer.Stop()
 }
 
 func (c *Container) SetScaledDown(scaledDown bool) {
@@ -132,7 +167,10 @@ func (c *Container) InitialProcess() process.Process {
 	return c.initialProcess
 }
 
-func (c *Container) StopActivator(ctx context.Context) {
+func (c *Container) Stop(ctx context.Context) {
+	if err := c.tracker.Close(); err != nil {
+		log.G(ctx).Errorf("unable to close tracker: %s", err)
+	}
 	c.activator.Stop(ctx)
 }
 

@@ -18,6 +18,11 @@ import (
 )
 
 func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
+	if err := c.tracker.RemovePid(uint32(p.Pid())); err != nil {
+		// key could not exist, just log the error for now
+		log.G(ctx).Errorf("unable to remove pid %d: %s", p.Pid(), err)
+	}
+
 	if c.cfg.Stateful {
 		if err := c.checkpoint(ctx, container, p); err != nil {
 			return err

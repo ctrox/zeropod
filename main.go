@@ -17,6 +17,5 @@ func init() {
 }
 
 func main() {
-	// shim.Run(runc.RuntimeName, v2.New, shimConfig)
 	shim.RunManager(context.Background(), manager.NewShimManager(zeropod.RuntimeName))
 }

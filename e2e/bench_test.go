@@ -25,19 +25,25 @@ func BenchmarkRestore(b *testing.B) {
 
 	benches := map[string]struct {
 		preDump           bool
+		waitDuration      time.Duration
 		scaleDownDuration time.Duration
 	}{
 		"without pre-dump": {
 			preDump:           false,
 			scaleDownDuration: 0,
+			waitDuration:      time.Millisecond * 800,
 		},
 		"with pre-dump": {
 			preDump:           true,
 			scaleDownDuration: 0,
+			waitDuration:      time.Millisecond * 800,
+		},
+		"one second scaledown duration": {
+			preDump:           false,
+			scaleDownDuration: time.Second,
+			waitDuration:      0,
 		},
 	}
-
-	waitDuration := time.Millisecond * 800
 
 	for name, bc := range benches {
 		bc := bc
@@ -59,7 +65,7 @@ func BenchmarkRestore(b *testing.B) {
 
 			defer func() {
 				b.StopTimer()
-				time.Sleep(waitDuration)
+				time.Sleep(bc.waitDuration)
 				cleanupPod()
 				cleanupService()
 				b.StartTimer()
@@ -72,7 +78,7 @@ func BenchmarkRestore(b *testing.B) {
 				// TODO: once we are able to tell if the container has
 				// checkpointed from the outside, we should just wait for that
 				// instead of the static sleep.
-				time.Sleep(waitDuration)
+				time.Sleep(bc.waitDuration)
 				b.StartTimer()
 
 				before := time.Now()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -27,28 +28,69 @@ func TestE2E(t *testing.T) {
 	}
 
 	cases := map[string]struct {
-		pod              *corev1.Pod
-		parallelRequests int
-		keepAlive        bool
+		pod            *corev1.Pod
+		parallelReqs   int
+		sequentialReqs int
+		sequentialWait time.Duration
+		maxReqDuration time.Duration
+		ignoreFirstReq bool
+		keepAlive      bool
+		preDump        bool
 	}{
+		// note: some of these max request durations are really
+		// system-dependent. It has been tested on a few systems so far and
+		// they should leave enough headroom but the tests could be flaky
+		// because of that.
 		"without pre-dump": {
-			pod:              testPod(false, 0),
-			parallelRequests: 1,
+			pod:            testPod(false, 0),
+			parallelReqs:   1,
+			sequentialReqs: 1,
+			preDump:        false,
+			maxReqDuration: time.Second,
+		},
+		"with pre-dump": {
+			pod:            testPod(true, 0),
+			parallelReqs:   1,
+			sequentialReqs: 1,
+			preDump:        true,
+			maxReqDuration: time.Second,
 		},
 		"parallel requests": {
-			pod:              testPod(false, 0),
-			parallelRequests: 4,
+			pod:            testPod(false, 0),
+			parallelReqs:   4,
+			sequentialReqs: 1,
+			maxReqDuration: time.Second * 2,
 		},
 		"parallel requests with keepalive": {
-			pod:              testPod(false, 0),
-			parallelRequests: 4,
-			keepAlive:        true,
+			pod:            testPod(false, 0),
+			parallelReqs:   4,
+			sequentialReqs: 1,
+			keepAlive:      true,
+			maxReqDuration: time.Second * 2,
+		},
+		// this is a blackbox test for the socket tracking. We know that
+		// restoring a snapshot of the test pod takes at least 50ms, even on
+		// very fast systems. So if a request takes longer than that we know
+		// that the socket tracking does not work as it means the container
+		// has checkpointed.
+		"socket tracking": {
+			pod:            testPod(false, time.Second),
+			parallelReqs:   1,
+			sequentialReqs: 20,
+			keepAlive:      false,
+			sequentialWait: time.Millisecond * 200,
+			maxReqDuration: time.Millisecond * 50,
+			ignoreFirstReq: true,
 		},
 	}
 
 	for name, tc := range cases {
 		tc := tc
 		t.Run(name, func(t *testing.T) {
+			if tc.preDump && runtime.GOARCH == "arm64" {
+				t.Skip("skipping pre-dump test as it's not supported on arm64")
+			}
+
 			svc := testService()
 
 			cleanupPod := createPodAndWait(t, ctx, client, tc.pod)
@@ -57,21 +99,27 @@ func TestE2E(t *testing.T) {
 			defer cleanupService()
 
 			wg := sync.WaitGroup{}
-			wg.Add(tc.parallelRequests)
-			for i := 0; i < tc.parallelRequests; i++ {
+			wg.Add(tc.parallelReqs)
+			for i := 0; i < tc.parallelReqs; i++ {
 				go func() {
 					defer wg.Done()
+					for x := 0; x < tc.sequentialReqs; x++ {
+						defer time.Sleep(tc.sequentialWait)
+						c.Transport = &http.Transport{DisableKeepAlives: !tc.keepAlive}
 
-					c.Transport = &http.Transport{DisableKeepAlives: !tc.keepAlive}
-
-					before := time.Now()
-					resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
-					if err != nil {
-						t.Error(err)
-						return
+						before := time.Now()
+						resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
+						if err != nil {
+							t.Error(err)
+							return
+						}
+						t.Logf("request took %s", time.Since(before))
+						assert.Equal(t, resp.StatusCode, http.StatusOK)
+						if tc.ignoreFirstReq && x == 0 {
+							continue
+						}
+						assert.Less(t, time.Since(before), tc.maxReqDuration)
 					}
-					t.Logf("request took %s", time.Since(before))
-					assert.Equal(t, resp.StatusCode, http.StatusOK)
 				}()
 			}
 			wg.Wait()

@@ -129,7 +129,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 	w.shutdown.RegisterCallback(func(ctx context.Context) error {
 		// stop server on shutdown
-		scaledContainer.StopActivator(ctx)
+		scaledContainer.Stop(ctx)
 		return nil
 	})
 
@@ -154,7 +154,7 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		log.G(ctx).Printf("got exec for scaled down container, restoring")
 		beforeRestore := time.Now()
 
-		w.scaledContainer.StopActivator(ctx)
+		w.scaledContainer.Stop(ctx)
 
 		restoredContainer, p, err := w.scaledContainer.Restore(ctx, container)
 		if err != nil {
@@ -196,7 +196,7 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 
 	if w.scaledContainer != nil && w.scaledContainer.InitialID() == r.ID {
 		log.G(ctx).Infof("requested initial container %s to be killed", w.scaledContainer.InitialID())
-		w.scaledContainer.StopActivator(ctx)
+		w.scaledContainer.Stop(ctx)
 
 		if err := w.scaledContainer.Process().Kill(ctx, r.Signal, r.All); err != nil {
 			return nil, errdefs.ToGRPC(err)

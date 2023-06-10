@@ -6,7 +6,7 @@ metadata:
     app: echo
   annotations:
     zeropod.ctrox.dev/port: "80"
-    zeropod.ctrox.dev/scaledownduration: 0s
+    zeropod.ctrox.dev/scaledownduration: 10s
     zeropod.ctrox.dev/stateful: "true"
     zeropod.ctrox.dev/container-name: "nginx"
     zeropod.ctrox.dev/pre-dump: "false"

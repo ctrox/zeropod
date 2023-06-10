@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ctrox/zeropod/socket"
 	"github.com/ctrox/zeropod/zeropod"
 	"github.com/phayes/freeport"
 	"github.com/pkg/errors"
@@ -97,12 +98,24 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 		cluster.CreateWithV1Alpha4Config(&v1alpha4.Cluster{
 			Name: name,
 			Nodes: []v1alpha4.Node{{
+				// setup port map for our node port
 				ExtraPortMappings: []v1alpha4.PortMapping{{
 					ContainerPort: 30000,
 					HostPort:      int32(port),
 					ListenAddress: "0.0.0.0",
 					Protocol:      v1alpha4.PortMappingProtocolTCP,
 				}},
+				// setup mounts for ebpf tcp tracking (it needs to map host pids to container pids)
+				ExtraMounts: []v1alpha4.Mount{
+					{
+						HostPath:      "/proc",
+						ContainerPath: "/host/proc",
+					},
+					{
+						HostPath:      socket.BPFFSPath,
+						ContainerPath: socket.BPFFSPath,
+					},
+				},
 			}},
 		}),
 		cluster.CreateWithNodeImage("kindest/node:v1.26.3"),
@@ -334,8 +347,11 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 		return len(endpoints.Subsets[0].Addresses) == replicas
 	}, time.Second*30, time.Second, "waiting for service endpoints to be ready") {
 		t.Log("service did not get ready")
-		time.Sleep(time.Hour)
 	}
+
+	// we give it some more time before returning just to make sure it's
+	// really ready to receive requests.
+	time.Sleep(time.Millisecond * 100)
 
 	return func() {
 		client.Delete(ctx, svc)
