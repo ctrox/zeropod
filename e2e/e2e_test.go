@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -20,7 +21,7 @@ func TestE2E(t *testing.T) {
 		t.Skip("skipping e2e test")
 	}
 
-	_, client, port := setup(t)
+	cfg, client, port := setup(t)
 	ctx := context.Background()
 
 	c := &http.Client{
@@ -125,4 +126,20 @@ func TestE2E(t *testing.T) {
 			wg.Wait()
 		})
 	}
+
+	t.Run("exec", func(t *testing.T) {
+		pod := testPod(false, 0)
+		cleanupPod := createPodAndWait(t, ctx, client, pod)
+		defer cleanupPod()
+
+		stdout, stderr, err := podExec(cfg, pod, "date")
+		require.NoError(t, err)
+		t.Log(stdout, stderr)
+
+		time.Sleep(time.Second)
+
+		stdout, stderr, err = podExec(cfg, pod, "date")
+		require.NoError(t, err)
+		t.Log(stdout, stderr)
+	})
 }

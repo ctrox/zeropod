@@ -154,7 +154,7 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		log.G(ctx).Printf("got exec for scaled down container, restoring")
 		beforeRestore := time.Now()
 
-		w.scaledContainer.Stop(ctx)
+		w.scaledContainer.StopActivator(ctx)
 
 		restoredContainer, p, err := w.scaledContainer.Restore(ctx, container)
 		if err != nil {
@@ -194,7 +194,7 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 		return w.service.Kill(ctx, r)
 	}
 
-	if w.scaledContainer != nil && w.scaledContainer.InitialID() == r.ID {
+	if len(r.ExecID) == 0 && w.scaledContainer != nil && w.scaledContainer.InitialID() == r.ID {
 		log.G(ctx).Infof("requested initial container %s to be killed", w.scaledContainer.InitialID())
 		w.scaledContainer.Stop(ctx)
 

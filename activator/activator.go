@@ -86,7 +86,6 @@ func (s *Server) Start(ctx context.Context, beforeClose BeforeClose, onAccept On
 
 func (s *Server) Stop(ctx context.Context) {
 	log.G(ctx).Info("stopping activator")
-	s.stopping = true
 
 	if s.proxyCancel != nil {
 		s.proxyCancel()
@@ -94,10 +93,6 @@ func (s *Server) Stop(ctx context.Context) {
 	if s.listener != nil {
 		s.listener.Close()
 	}
-}
-
-func (s *Server) Stopping() bool {
-	return s.stopping
 }
 
 func (s *Server) serve(ctx context.Context) {

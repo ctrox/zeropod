@@ -2,6 +2,7 @@ package zeropod
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path"
 	"strings"
@@ -97,11 +98,6 @@ func (c *Container) scheduleScaleDown(container *runc.Container, in time.Duratio
 	// cancel any potential pending scaledonws
 	c.CancelScaleDown()
 
-	if c.activator.Stopping() {
-		// do not schedule a scale down when we are in process of stopping
-		return nil
-	}
-
 	log.G(c.context).Infof("scheduling scale down in %s", c.cfg.ScaleDownDuration)
 	timer := time.AfterFunc(c.cfg.ScaleDownDuration, func() {
 		last, err := c.tracker.LastActivity(uint32(c.process.Pid()))
@@ -167,11 +163,16 @@ func (c *Container) InitialProcess() process.Process {
 	return c.initialProcess
 }
 
+func (c *Container) StopActivator(ctx context.Context) {
+	c.activator.Stop(ctx)
+}
+
 func (c *Container) Stop(ctx context.Context) {
+	c.CancelScaleDown()
 	if err := c.tracker.Close(); err != nil {
 		log.G(ctx).Errorf("unable to close tracker: %s", err)
 	}
-	c.activator.Stop(ctx)
+	c.StopActivator(ctx)
 }
 
 func (c *Container) Process() process.Process {
@@ -221,6 +222,11 @@ func (c *Container) restoreHandler(ctx context.Context, container *runc.Containe
 			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
 			os.Exit(1)
 		}
+
+		if err := c.tracker.TrackPid(uint32(p.Pid())); err != nil {
+			return nil, fmt.Errorf("unable to track pid %d: %w", p.Pid(), err)
+		}
+
 		c.scaledDown = false
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
