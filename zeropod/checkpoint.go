@@ -81,7 +81,7 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 		AllowOpenTCP:             true,
 		AllowExternalUnixSockets: true,
 		AllowTerminal:            false,
-		FileLocks:                false,
+		FileLocks:                true,
 		EmptyNamespaces:          []string{},
 	}
 
