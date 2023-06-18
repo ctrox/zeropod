@@ -12,7 +12,7 @@ COPY . .
 
 # Build
 RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o zeropod-installer cmd/installer/main.go
-RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o containerd-shim-zeropod-v2 main.go
+RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o containerd-shim-zeropod-v2 cmd/shim/main.go
 
 FROM centos/systemd
 WORKDIR /build
