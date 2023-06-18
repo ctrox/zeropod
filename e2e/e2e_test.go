@@ -61,14 +61,14 @@ func TestE2E(t *testing.T) {
 		},
 		"parallel requests": {
 			pod:            testPod(false, 0),
-			parallelReqs:   4,
-			sequentialReqs: 1,
+			parallelReqs:   2,
+			sequentialReqs: 5,
 			maxReqDuration: time.Second * 2,
 		},
 		"parallel requests with keepalive": {
 			pod:            testPod(false, 0),
-			parallelReqs:   4,
-			sequentialReqs: 1,
+			parallelReqs:   2,
+			sequentialReqs: 5,
 			keepAlive:      true,
 			maxReqDuration: time.Second * 2,
 		},
