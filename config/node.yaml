@@ -6,28 +6,33 @@ metadata:
 apiVersion: apps/v1
 kind: DaemonSet
 metadata:
-  name: zeropod-installer
+  name: zeropod-node
   namespace: zeropod-system
   labels:
-    app.kubernetes.io/name: zeropod-installer
+    app.kubernetes.io/name: zeropod-node
 spec:
   selector:
     matchLabels:
-      app.kubernetes.io/name: zeropod-installer
+      app.kubernetes.io/name: zeropod-node
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: zeropod-installer
+        app.kubernetes.io/name: zeropod-node
     spec:
-      serviceAccountName: zeropod-installer
-      # nodeSelector:
-      # zeropod.ctrox.dev/runtime: "true"
+      serviceAccountName: zeropod-node
       containers:
+        - name: manager
+          image: ctrox/zeropod-manager:dev
+          imagePullPolicy: Never
+          ports:
+            - name: metrics
+              containerPort: 8080
+          volumeMounts:
+            - mountPath: /run/zeropod
+              name: zeropod-run
         - name: installer
           image: ctrox/zeropod-installer:dev
           imagePullPolicy: Never
-          # securityContext:
-          #   privileged: true
           volumeMounts:
             - mountPath: /etc/containerd
               name: containerd
@@ -46,6 +51,9 @@ spec:
         - name: containerd-run
           hostPath:
             path: /run/containerd
+        - name: zeropod-run
+          hostPath:
+            path: /run/zeropod
         - name: zeropod-opt
           hostPath:
             path: /opt/zeropod
@@ -59,7 +67,7 @@ spec:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: zeropod-installer
+  name: zeropod-node
   namespace: zeropod-system
 ---
 # the installer needs to be able to install the zeropod runtimeclass
@@ -86,5 +94,5 @@ roleRef:
   name: runtimeclass-installer
 subjects:
   - kind: ServiceAccount
-    name: zeropod-installer
+    name: zeropod-node
     namespace: zeropod-system

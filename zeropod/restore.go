@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"time"
 
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/log"
@@ -19,6 +20,7 @@ import (
 )
 
 func (c *Container) Restore(ctx context.Context, container *runc.Container) (*runc.Container, process.Process, error) {
+	beforeRestore := time.Now()
 	go func() {
 		// as soon as we checkpoint the container, the log pipe is closed. As
 		// we currently have no way to instruct containerd to restore the logs
@@ -56,6 +58,7 @@ func (c *Container) Restore(ctx context.Context, container *runc.Container) (*ru
 	if err := p.Start(ctx); err != nil {
 		return nil, nil, fmt.Errorf("start failed during restore: %w", err)
 	}
+	restoreDuration.With(c.labels()).Observe(time.Since(beforeRestore).Seconds())
 
 	c.id = container.ID
 	c.process = p

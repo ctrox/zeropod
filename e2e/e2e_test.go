@@ -9,9 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ctrox/zeropod/zeropod"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/utils/pointer"
 )
 
 const runtimeClassName = "zeropod"
@@ -136,10 +139,99 @@ func TestE2E(t *testing.T) {
 		require.NoError(t, err)
 		t.Log(stdout, stderr)
 
+		// as we can't yet reliably check if the pod is fully checkpointed and
+		// ready for another exec, we simply wait a second
 		time.Sleep(time.Second)
 
 		stdout, stderr, err = podExec(cfg, pod, "date")
 		require.NoError(t, err)
 		t.Log(stdout, stderr)
+
+		assert.Equal(t, 2, restoreCount(t, client, cfg, pod), "pod should have been restored 2 times")
+	})
+
+	t.Run("metrics", func(t *testing.T) {
+		// create two pods to test metric merging
+		runningPod := testPod(false, time.Hour)
+		cleanupRunningPod := createPodAndWait(t, ctx, client, runningPod)
+		defer cleanupRunningPod()
+
+		checkpointedPod := testPod(false, 0)
+		cleanupCheckpointedPod := createPodAndWait(t, ctx, client, checkpointedPod)
+		defer cleanupCheckpointedPod()
+
+		restoredPod := testPod(false, 0)
+		cleanupRestoredPod := createPodAndWait(t, ctx, client, restoredPod)
+		defer cleanupRestoredPod()
+
+		// exec into pod to ensure it has been restored at least once
+		_, _, err := podExec(cfg, restoredPod, "date")
+		require.NoError(t, err)
+
+		mfs := getNodeMetrics(t, client, cfg)
+
+		tests := map[string]struct {
+			metric               string
+			pod                  *corev1.Pod
+			gaugeValue           *float64
+			histogramSampleCount *uint64
+		}{
+			"running": {
+				metric:     prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning),
+				gaugeValue: pointer.Float64(1),
+				pod:        runningPod,
+			},
+			"not running": {
+				metric:     prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning),
+				gaugeValue: pointer.Float64(0),
+				pod:        checkpointedPod,
+			},
+			"last checkpoint time": {
+				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricLastCheckpointTime),
+				pod:    checkpointedPod,
+			},
+			"checkpoint duration": {
+				metric:               prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricCheckPointDuration),
+				pod:                  checkpointedPod,
+				histogramSampleCount: pointer.Uint64(1),
+			},
+			"last restore time": {
+				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricLastRestoreTime),
+				pod:    restoredPod,
+			},
+			"restore duration": {
+				metric:               prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration),
+				pod:                  restoredPod,
+				histogramSampleCount: pointer.Uint64(1),
+			},
+		}
+
+		for name, tc := range tests {
+			tc := tc
+			t.Run(name, func(t *testing.T) {
+				val, ok := mfs[tc.metric]
+				if !ok {
+					t.Fatalf("could not find expected metric: %s", tc.metric)
+				}
+
+				metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
+					zeropod.LabelPodName:      tc.pod.Name,
+					zeropod.LabelPodNamespace: tc.pod.Namespace,
+				})
+				if !ok {
+					t.Fatalf("could not find expected metric for pod: %s/%s", tc.pod.Name, tc.pod.Namespace)
+				}
+
+				if tc.gaugeValue != nil {
+					assert.Equal(t, *tc.gaugeValue, *metric.Gauge.Value,
+						"gauge value does not match expectation")
+				}
+
+				if tc.histogramSampleCount != nil {
+					assert.Equal(t, *tc.histogramSampleCount, *metric.Histogram.SampleCount,
+						"histogram sample count does not match expectation")
+				}
+			})
+		}
 	})
 }

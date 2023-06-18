@@ -27,6 +27,8 @@ type annotationConfig struct {
 	PreDump              string `mapstructure:"zeropod.ctrox.dev/pre-dump"`
 	ContainerName        string `mapstructure:"io.kubernetes.cri.container-name"`
 	ContainerType        string `mapstructure:"io.kubernetes.cri.container-type"`
+	PodName              string `mapstructure:"io.kubernetes.cri.sandbox-name"`
+	PodNamespace         string `mapstructure:"io.kubernetes.cri.sandbox-namespace"`
 }
 
 type Config struct {
@@ -37,6 +39,8 @@ type Config struct {
 	ZeropodContainerName string
 	ContainerName        string
 	ContainerType        string
+	PodName              string
+	PodNamespace         string
 }
 
 // NewConfig uses the annotations from the container spec to create a new
@@ -88,5 +92,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ZeropodContainerName: cfg.ZeropodContainerName,
 		ContainerName:        cfg.ContainerName,
 		ContainerType:        cfg.ContainerType,
+		PodName:              cfg.PodName,
+		PodNamespace:         cfg.PodNamespace,
 	}, nil
 }

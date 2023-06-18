@@ -1,6 +1,7 @@
 REGISTRY := docker.io
 NAMESPACE := ctrox
 INSTALLER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-installer:dev
+MANAGER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-manager:dev
 TEST_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-test:dev
 CRIU_VERSION := v3.18
 CRIU_IMAGE := $(REGISTRY)/$(NAMESPACE)/criu:$(CRIU_VERSION)
@@ -28,7 +29,10 @@ build-criu:
 	docker buildx build --push --platform linux/arm64,linux/amd64 -t $(CRIU_IMAGE) -f criu/Dockerfile .
 
 build-installer:
-	docker build --load -t $(INSTALLER_IMAGE) -f installer/Dockerfile .
+	docker build --load -t $(INSTALLER_IMAGE) -f cmd/installer/Dockerfile .
+
+build-manager:
+	docker build --load -t $(MANAGER_IMAGE) -f cmd/manager/Dockerfile .
 
 build-test:
 	docker build --load -t $(TEST_IMAGE) -f e2e/Dockerfile .

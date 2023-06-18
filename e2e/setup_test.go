@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +20,9 @@ import (
 	"github.com/ctrox/zeropod/zeropod"
 	"github.com/phayes/freeport"
 	"github.com/pkg/errors"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
+	"github.com/prometheus/common/expfmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -45,14 +49,16 @@ import (
 
 const (
 	installerImage      = "docker.io/ctrox/zeropod-installer:dev"
-	installerDockerfile = "../installer/Dockerfile"
-	installerYaml       = "../config/installer.yaml"
+	managerImage        = "docker.io/ctrox/zeropod-manager:dev"
+	installerDockerfile = "../cmd/installer/Dockerfile"
+	managerDockerfile   = "../cmd/manager/Dockerfile"
+	nodeYaml            = "../config/node.yaml"
 )
 
-var images = []string{installerImage}
+var images = []string{installerImage, managerImage}
 
 func setup(t testing.TB) (*rest.Config, client.Client, int) {
-	t.Log("building installer and shim")
+	t.Log("building node and shim")
 	if err := build(); err != nil {
 		t.Fatal(err)
 	}
@@ -70,8 +76,8 @@ func setup(t testing.TB) (*rest.Config, client.Client, int) {
 	client, err := client.New(cfg, client.Options{})
 	require.NoError(t, err)
 
-	t.Log("deploying installer")
-	if err := deployInstaller(t, context.Background(), client); err != nil {
+	t.Log("deploying zeropod-node")
+	if err := deployNode(t, context.Background(), client); err != nil {
 		t.Fatal(err)
 	}
 
@@ -200,11 +206,17 @@ func build() error {
 	if err != nil {
 		return fmt.Errorf("error during docker build: %s: %s", err, out)
 	}
+
+	out, err = exec.Command("docker", "build", "-t", managerImage, "-f", managerDockerfile, "../").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("error during docker build: %s: %s", err, out)
+	}
+
 	return nil
 }
 
-func deployInstaller(t testing.TB, ctx context.Context, c client.Client) error {
-	yamlFile, err := ioutil.ReadFile(installerYaml)
+func deployNode(t testing.TB, ctx context.Context, c client.Client) error {
+	yamlFile, err := ioutil.ReadFile(nodeYaml)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -404,4 +416,126 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 	}
 
 	return buf.String(), errBuf.String(), nil
+}
+
+func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) int {
+	mfs := getNodeMetrics(t, client, cfg)
+
+	running := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration)
+	val, ok := mfs[running]
+	if !ok {
+		t.Fatalf("could not find expected metric: %s", running)
+	}
+
+	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
+		zeropod.LabelPodName:      pod.Name,
+		zeropod.LabelPodNamespace: pod.Namespace,
+	})
+	if !ok {
+		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
+	}
+
+	if metric.Histogram == nil {
+		t.Fatalf("found metric that is not a histogram")
+	}
+
+	if metric.Histogram.SampleCount == nil {
+		t.Fatalf("histogram sample count is nil")
+	}
+
+	return int(*metric.Histogram.SampleCount)
+
+}
+
+func waitForZeropodScaledown(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) {
+	assert.Eventually(
+		t, func() bool { return !zeropodRunning(t, client, cfg, pod) },
+		time.Second*30, time.Millisecond*100, "zeropod is not scaled down",
+	)
+}
+
+func zeropodRunning(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) bool {
+	mfs := getNodeMetrics(t, client, cfg)
+
+	running := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning)
+	val, ok := mfs[running]
+	if !ok {
+		t.Fatalf("could not find expected metric: %s", running)
+	}
+
+	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
+		zeropod.LabelPodName:      pod.Name,
+		zeropod.LabelPodNamespace: pod.Namespace,
+	})
+	if !ok {
+		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
+	}
+
+	if metric.Gauge == nil {
+		t.Fatalf("found metric that is not a gauge")
+	}
+
+	if metric.Gauge.Value == nil {
+		t.Fatalf("metric value is nil")
+	}
+
+	return *metric.Gauge.Value == 1
+}
+
+func findMetricByLabelMatch(metrics []*dto.Metric, labels map[string]string) (*dto.Metric, bool) {
+	for _, metric := range metrics {
+		if metricMatchesLabels(metric, labels) {
+			return metric, true
+		}
+	}
+	return nil, false
+}
+
+func metricMatchesLabels(metric *dto.Metric, labels map[string]string) bool {
+	for k, v := range labels {
+		if !metricMatchesLabel(metric, k, v) {
+			return false
+		}
+	}
+	return true
+}
+
+func metricMatchesLabel(metric *dto.Metric, key, value string) bool {
+	for _, label := range metric.Label {
+		if label.Name == nil || label.Value == nil {
+			return false
+		}
+		if *label.Name == key && *label.Value == value {
+			return true
+		}
+	}
+	return false
+}
+
+func getNodeMetrics(t testing.TB, c client.Client, cfg *rest.Config) map[string]*dto.MetricFamily {
+	cs, err := kubernetes.NewForConfig(cfg)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	nodePods := &corev1.PodList{}
+	require.NoError(t, c.List(ctx, nodePods, client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}))
+	require.Equal(t, 1, len(nodePods.Items))
+
+	pf := PortForward{
+		Config: cfg, Clientset: cs,
+		Name:            nodePods.Items[0].Name,
+		Namespace:       nodePods.Items[0].Namespace,
+		DestinationPort: 8080,
+	}
+	require.NoError(t, pf.Start())
+	defer pf.Stop()
+
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%v/metrics", pf.ListenPort))
+	require.NoError(t, err)
+
+	var parser expfmt.TextParser
+	mfs, err := parser.TextToMetricFamilies(resp.Body)
+	require.NoError(t, err)
+
+	return mfs
 }

@@ -30,7 +30,7 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 	} else {
 		log.G(ctx).Infof("container is not stateful, scaling down by killing")
 
-		c.scaledDown = true
+		c.SetScaledDown(true)
 		if err := p.Kill(ctx, 9, false); err != nil {
 			return err
 		}
@@ -91,7 +91,7 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 
 		beforePreDump := time.Now()
 		if err := initProcess.Runtime().Checkpoint(ctx, container.ID, opts, runcC.PreDump); err != nil {
-			c.scaledDown = false
+			c.SetScaledDown(false)
 
 			log.G(ctx).Errorf("error pre-dumping container: %s", err)
 			b, err := os.ReadFile(path.Join(workDir, "dump.log"))
@@ -124,7 +124,7 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 	// client side.
 	// https://arthurchiao.art/blog/customize-tcp-initial-rto-with-bpf/#tl-dr
 
-	c.scaledDown = true
+	c.SetScaledDown(true)
 
 	if c.cfg.PreDump {
 		// ParentPath is the relative path from the ImagePath to the pre-dump dir.
@@ -136,7 +136,7 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 
 	beforeCheckpoint := time.Now()
 	if err := initProcess.Runtime().Checkpoint(ctx, container.ID, opts); err != nil {
-		c.scaledDown = false
+		c.SetScaledDown(false)
 
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
 		b, err := os.ReadFile(path.Join(workDir, "dump.log"))
@@ -147,6 +147,7 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 		return err
 	}
 
+	checkpointDuration.With(c.labels()).Observe(time.Since(beforeCheckpoint).Seconds())
 	log.G(ctx).Infof("checkpointing done in %s", time.Since(beforeCheckpoint))
 
 	return nil

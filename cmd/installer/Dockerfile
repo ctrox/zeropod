@@ -8,16 +8,10 @@ COPY go.sum go.sum
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
 
-# Copy the go source
-COPY main.go main.go
-COPY installer/ installer/
-COPY runc/ runc/
-COPY activator/ activator/
-COPY zeropod/ zeropod/
-COPY socket/ socket/
+COPY . .
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o zeropod-installer installer/main.go
+RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o zeropod-installer cmd/installer/main.go
 RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o containerd-shim-zeropod-v2 main.go
 
 FROM centos/systemd

@@ -35,6 +35,7 @@ type Container struct {
 	scaleDownTimer *time.Timer
 	platform       stdio.Platform
 	tracker        socket.Tracker
+	stopMetrics    context.CancelFunc
 }
 
 func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Container, pt stdio.Platform) (*Container, error) {
@@ -74,7 +75,10 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 		return nil, err
 	}
 
-	return &Container{
+	metricsCtx, stopMetrics := context.WithCancel(ctx)
+	go startMetricsServer(metricsCtx, container.ID)
+
+	c := &Container{
 		context:        ctx,
 		platform:       pt,
 		cfg:            cfg,
@@ -87,7 +91,12 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 		netNS:          targetNS,
 		activator:      srv,
 		tracker:        tracker,
-	}, nil
+		stopMetrics:    stopMetrics,
+	}
+
+	running.With(c.labels()).Set(1)
+
+	return c, nil
 }
 
 func (c *Container) ScheduleScaleDown(container *runc.Container) error {
@@ -145,6 +154,13 @@ func (c *Container) CancelScaleDown() {
 
 func (c *Container) SetScaledDown(scaledDown bool) {
 	c.scaledDown = scaledDown
+	if scaledDown {
+		running.With(c.labels()).Set(0)
+		lastCheckpointTime.With(c.labels()).Set(float64(time.Now().UnixNano()))
+	} else {
+		running.With(c.labels()).Set(1)
+		lastRestoreTime.With(c.labels()).Set(float64(time.Now().UnixNano()))
+	}
 }
 
 func (c *Container) ScaledDown() bool {
@@ -173,6 +189,7 @@ func (c *Container) Stop(ctx context.Context) {
 		log.G(ctx).Errorf("unable to close tracker: %s", err)
 	}
 	c.StopActivator(ctx)
+	c.stopMetrics()
 }
 
 func (c *Container) Process() process.Process {
@@ -227,7 +244,9 @@ func (c *Container) restoreHandler(ctx context.Context, container *runc.Containe
 			return nil, fmt.Errorf("unable to track pid %d: %w", p.Pid(), err)
 		}
 
-		c.scaledDown = false
+		c.SetScaledDown(false)
+		restoreDuration.With(c.labels()).Observe(time.Since(beforeRestore).Seconds())
+
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
 		beforeUnlock := time.Now()
