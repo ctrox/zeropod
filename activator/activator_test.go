@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,11 +19,13 @@ import (
 )
 
 func TestActivator(t *testing.T) {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
 	netNS, err := ns.GetCurrentNS()
 	require.NoError(t, err)
 
-	port := 8080
+	port, err := getFreePort()
+	require.NoError(t, err)
+
 	s, err := NewServer(ctx, uint16(port), netNS)
 	require.NoError(t, err)
 
@@ -32,10 +35,6 @@ func TestActivator(t *testing.T) {
 	}))
 
 	if err := s.Start(ctx,
-		func() error {
-			return nil
-
-		},
 		func() (*runc.Container, error) {
 			l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 			if err != nil {
@@ -60,14 +59,41 @@ func TestActivator(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
+
 	defer s.Stop(ctx)
+	defer cancel()
 
-	c := &http.Client{Timeout: time.Second * 10}
+	c := &http.Client{Timeout: time.Second}
 
-	resp, err := c.Get("http://localhost:8080")
-	require.NoError(t, err)
-	b, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
+	parallelReqs := 6
+	wg := sync.WaitGroup{}
+	for i := 0; i < parallelReqs; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
+			require.NoError(t, err)
+			b, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
 
-	assert.Equal(t, response, string(b))
+			assert.Equal(t, response, string(b))
+			t.Log(string(b))
+		}()
+	}
+	wg.Wait()
+}
+
+func getFreePort() (int, error) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	err = listener.Close()
+	if err != nil {
+		return 0, err
+	}
+
+	return port, nil
 }

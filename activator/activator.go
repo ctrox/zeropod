@@ -23,7 +23,6 @@ type Server struct {
 	wg             sync.WaitGroup
 	onAccept       OnAccept
 	onClosed       OnClosed
-	beforeClose    BeforeClose
 	connectTimeout time.Duration
 	proxyTimeout   time.Duration
 	proxyCancel    context.CancelFunc
@@ -34,7 +33,6 @@ type Server struct {
 
 type OnAccept func() (*runc.Container, error)
 type OnClosed func(*runc.Container) error
-type BeforeClose func() error
 
 func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
 	s := &Server{
@@ -48,7 +46,7 @@ func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
 	return s, nil
 }
 
-func (s *Server) Start(ctx context.Context, beforeClose BeforeClose, onAccept OnAccept, onClosed OnClosed) error {
+func (s *Server) Start(ctx context.Context, onAccept OnAccept, onClosed OnClosed) error {
 	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
 	cfg := net.ListenConfig{}
 
@@ -72,12 +70,11 @@ func (s *Server) Start(ctx context.Context, beforeClose BeforeClose, onAccept On
 		return err
 	}
 
-	log.G(ctx).Infof("listening on %s", addr)
+	log.G(ctx).Infof("listening on %s in ns %s", addr, s.ns.Path())
 
 	s.once = sync.Once{}
 	s.onAccept = onAccept
 	s.onClosed = onClosed
-	s.beforeClose = beforeClose
 
 	s.wg.Add(1)
 	go s.serve(ctx)
@@ -90,21 +87,28 @@ func (s *Server) Stop(ctx context.Context) {
 	if s.proxyCancel != nil {
 		s.proxyCancel()
 	}
+
 	if s.listener != nil {
 		s.listener.Close()
 	}
+
+	s.wg.Wait()
+	log.G(ctx).Info("activator stopped")
 }
 
 func (s *Server) serve(ctx context.Context) {
 	defer s.wg.Done()
+	wg := sync.WaitGroup{}
 
 	for {
 		conn, err := s.listener.Accept()
 		if err != nil {
 			select {
 			case <-s.quit:
+				wg.Wait()
 				return
 			case <-ctx.Done():
+				wg.Wait()
 				return
 			default:
 				if !errors.Is(err, net.ErrClosed) {
@@ -113,103 +117,71 @@ func (s *Server) serve(ctx context.Context) {
 				return
 			}
 		} else {
-			s.wg.Add(1)
+			wg.Add(1)
 			go func() {
 				log.G(ctx).Info("accepting connection")
 				s.handleConection(ctx, conn)
-				s.wg.Done()
+				wg.Done()
 			}()
 		}
-		log.G(ctx).Info("serve done")
 	}
 }
 
 func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	// we close our listener after accepting the first connection so it's free
 	// to use for the to-be-activated program.
-	// TODO: test what happens with concurrent connections, do we get a
-	// connection refused if a connection happens between this and starting
-	// the child process?
+
+	// TODO: there is still a small chance a TCP connection ends up timing out
+	// as there might be a backlog of already established connections that are
+	// killed when we close the listener. Not sure if it's even possible to
+	// fix that. It's reproducible by running TestActivator a bunch of times
+	// (something like -count=50).
 	defer conn.Close()
 
-	var c *runc.Container
+	var container *runc.Container
 	var err error
 
 	s.once.Do(func() {
-		if err := s.beforeClose(); err != nil {
-			log.G(ctx).Errorf("error before close: %s", err)
+		// we lock the network, close the listener, call onAccept and unlock only for
+		// the first connection we get.
+		beforeLock := time.Now()
+		if err := LockNetwork(s.ns); err != nil {
+			log.G(ctx).Errorf("error locking network: %s", err)
+			return
 		}
+		log.G(ctx).Printf("took %s to lock network", time.Since(beforeLock))
 
 		if err := s.listener.Close(); err != nil {
 			log.G(ctx).Errorf("error during listener close: %s", err)
 			return
 		}
 
-		c, err = s.onAccept()
+		container, err = s.onAccept()
+		if err != nil {
+			log.G(ctx).Errorf("error during onAccept: %s", err)
+			return
+		}
+
+		beforeUnlock := time.Now()
+		if err := UnlockNetwork(s.ns, 0); err != nil {
+			log.G(ctx).Errorf("error unlocking network: %s", err)
+			return
+		}
+		log.G(ctx).Printf("took %s to unlock network", time.Since(beforeUnlock))
 	})
 
-	if err != nil {
-		log.G(ctx).Error(err)
-		return
-	}
-
-	log.G(ctx).Println("proxying initial connection to program")
+	log.G(ctx).Println("proxying initial connection to program", conn.RemoteAddr().String())
 
 	// fork is done but we need to finish up the initial connection. We do
 	// this by connecting to our forked process and piping the tcpConn that we
 	// initially accpted.
-	var initialConn net.Conn
-
-	ticker := time.NewTicker(time.Millisecond)
-	start := time.Now()
-	done := make(chan bool)
-
-	go func() {
-		for {
-			select {
-			case <-ctx.Done():
-				log.G(ctx).Println("context cancelled")
-				done <- true
-				return
-			case <-done:
-				log.G(ctx).Println("done")
-				return
-			case <-ticker.C:
-				if time.Since(start) > s.connectTimeout {
-					log.G(ctx).Error("timeout dialing process")
-
-					done <- true
-					return
-				}
-
-				if err := s.ns.Do(func(_ ns.NetNS) error {
-					initialConn, err = net.DialTimeout("tcp4", fmt.Sprintf("localhost:%d", s.port), s.connectTimeout)
-					return err
-				}); err != nil {
-					var serr syscall.Errno
-					if errors.As(err, &serr) && serr == syscall.ECONNREFUSED {
-						// executed program might not be ready yet, so retry in a bit.
-						// TODO: do this with an exponential backoff and timeout.
-						continue
-					}
-					log.G(ctx).Errorf("unable to connect to process: %s", err)
-					return
-				}
-
-				log.G(ctx).Println("dial succeeded")
-				done <- true
-				return
-			}
-		}
-	}()
-
-	<-done
-
-	if initialConn == nil {
+	initialConn, err := s.connect(ctx)
+	if err != nil {
+		log.G(ctx).Errorf("error establishing initial connection: %s", err)
 		return
 	}
-
 	defer initialConn.Close()
+	log.G(ctx).Println("dial succeeded", initialConn.RemoteAddr().String())
 
 	requestContext, cancel := context.WithTimeout(ctx, s.proxyTimeout)
 	s.proxyCancel = cancel
@@ -218,11 +190,44 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 		log.G(ctx).Errorf("error proxying request: %s", err)
 	}
 
-	log.G(ctx).Println("initial connection closed")
+	log.G(ctx).Println("initial connection closed", conn.RemoteAddr().String())
 
-	if c != nil {
-		if err := s.onClosed(c); err != nil {
+	if container != nil {
+		if err := s.onClosed(container); err != nil {
 			log.G(ctx).Error(err)
+		}
+	}
+}
+
+func (s *Server) connect(ctx context.Context) (net.Conn, error) {
+	var initialConn net.Conn
+	var err error
+
+	ticker := time.NewTicker(time.Millisecond)
+	start := time.Now()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+			if time.Since(start) > s.connectTimeout {
+				return nil, fmt.Errorf("timeout dialing process")
+			}
+
+			if err := s.ns.Do(func(_ ns.NetNS) error {
+				initialConn, err = net.DialTimeout("tcp4", fmt.Sprintf("localhost:%d", s.port), s.connectTimeout)
+				return err
+			}); err != nil {
+				var serr syscall.Errno
+				if errors.As(err, &serr) && serr == syscall.ECONNREFUSED {
+					// executed program might not be ready yet, so retry in a bit.
+					continue
+				}
+				return nil, fmt.Errorf("unable to connect to process: %s", err)
+			}
+
+			return initialConn, nil
 		}
 	}
 }

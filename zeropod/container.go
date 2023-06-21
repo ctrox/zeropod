@@ -203,24 +203,13 @@ func (c *Container) startActivator(ctx context.Context, container *runc.Containe
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := c.activator.Start(ctx, c.beforeClose(ctx), c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
+	if err := c.activator.Start(ctx, c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
 		log.G(ctx).Errorf("failed to start server: %s", err)
 		return err
 	}
 
 	log.G(ctx).Printf("activator started")
 	return nil
-}
-
-func (c *Container) beforeClose(ctx context.Context) activator.BeforeClose {
-	return func() error {
-		beforeLock := time.Now()
-		if err := lockNetwork(c.netNS); err != nil {
-			return err
-		}
-		log.G(ctx).Printf("took %s to lock network", time.Since(beforeLock))
-		return nil
-	}
 }
 
 func (c *Container) restoreHandler(ctx context.Context, container *runc.Container) activator.OnAccept {
@@ -248,12 +237,6 @@ func (c *Container) restoreHandler(ctx context.Context, container *runc.Containe
 		restoreDuration.With(c.labels()).Observe(time.Since(beforeRestore).Seconds())
 
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
-
-		beforeUnlock := time.Now()
-		if err := unlockNetwork(c.netNS, 0); err != nil {
-			return nil, err
-		}
-		log.G(ctx).Printf("took %s to unlock network", time.Since(beforeUnlock))
 
 		return restoredContainer, nil
 	}

@@ -5,16 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"strconv"
 	"time"
 
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/runtime/v2/runc"
 	runcC "github.com/containerd/go-runc"
-	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/google/nftables"
-	"github.com/google/nftables/expr"
+	"github.com/ctrox/zeropod/activator"
 )
 
 func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
@@ -50,7 +47,7 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 		// restored by inserting some nftables rules. As we start our activator
 		// instead of restoring the process right away, we remove these
 		// rules. https://criu.org/CLI/opt/--network-lock
-		if err := unlockNetwork(c.netNS, p.Pid()); err != nil {
+		if err := activator.UnlockNetwork(c.netNS, p.Pid()); err != nil {
 			log.G(ctx).Errorf("unable to remove nftable: %s", err)
 			return err
 		}
@@ -109,7 +106,7 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 	// rules here already, connections during scaling down sometimes
 	// timeout, even though criu should add these rules before
 	// checkpointing.
-	if err := lockNetwork(c.netNS); err != nil {
+	if err := activator.LockNetwork(c.netNS); err != nil {
 		return err
 	}
 
@@ -151,55 +148,4 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 	log.G(ctx).Infof("checkpointing done in %s", time.Since(beforeCheckpoint))
 
 	return nil
-}
-
-func lockNetwork(netNS ns.NetNS) error {
-	nft, err := nftables.New(nftables.WithNetNSFd(int(netNS.Fd())))
-	if err != nil {
-		return err
-	}
-	defer nft.CloseLasting()
-
-	table := &nftables.Table{Name: "zeropod", Family: nftables.TableFamilyINet}
-
-	nft.AddTable(table)
-	chain := &nftables.Chain{
-		Name:     "input",
-		Table:    table,
-		Type:     nftables.ChainTypeFilter,
-		Hooknum:  nftables.ChainHookInput,
-		Priority: nftables.ChainPriorityFilter,
-	}
-
-	nft.AddChain(chain)
-
-	rule := &nftables.Rule{
-		Table: table,
-		Chain: chain,
-		Exprs: []expr.Any{
-			&expr.Verdict{
-				Kind: expr.VerdictDrop,
-			},
-		},
-	}
-
-	nft.AddRule(rule)
-
-	return nft.Flush()
-}
-
-func unlockNetwork(netNS ns.NetNS, pid int) error {
-	nft, err := nftables.New(nftables.WithNetNSFd(int(netNS.Fd())))
-	if err != nil {
-		return err
-	}
-	defer nft.CloseLasting()
-
-	if pid != 0 {
-		nft.DelTable(&nftables.Table{Name: "CRIU-" + strconv.Itoa(pid), Family: nftables.TableFamilyINet})
-	}
-
-	nft.DelTable(&nftables.Table{Name: "zeropod", Family: nftables.TableFamilyINet})
-
-	return nft.Flush()
 }
