@@ -14,10 +14,11 @@ EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:dev
 build-kind: build
 	docker cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin
 
-install-kind: build-installer
+install-kind: build-installer build-manager
 	docker exec kind-control-plane mount -t bpf bpf /sys/fs/bpf
-	kind load docker-image ctrox/zeropod-installer:dev
-	kubectl apply -f config/installer.yaml
+	kind load docker-image $(INSTALLER_IMAGE)
+	kind load docker-image $(MANAGER_IMAGE)
+	kubectl apply -f config/node.yaml
 
 build:
 	CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w" -o containerd-shim-zeropod-v2 cmd/shim/main.go

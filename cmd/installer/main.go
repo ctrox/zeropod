@@ -50,7 +50,7 @@ network-lock nftables
     "zeropod.ctrox.dev/port",
     "zeropod.ctrox.dev/container-name",
     "zeropod.ctrox.dev/scaledownduration",
-    "zeropod.ctrox.dev/stateful",
+    "zeropod.ctrox.dev/disable-checkpointing",
     "zeropod.ctrox.dev/pre-dump"
   ]
 `
