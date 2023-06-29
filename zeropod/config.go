@@ -12,17 +12,19 @@ import (
 )
 
 const (
-	PortAnnotationKey              = "zeropod.ctrox.dev/port"
-	ScaleDownDurationAnnotationKey = "zeropod.ctrox.dev/scaledownduration"
-	ContainerNameAnnotationKey     = "zeropod.ctrox.dev/container-name"
-	StatefulAnnotationKey          = "zeropod.ctrox.dev/stateful"
-	PreDumpAnnotationKey           = "zeropod.ctrox.dev/pre-dump"
+	PortAnnotationKey                = "zeropod.ctrox.dev/port"
+	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledownduration"
+	ContainerNameAnnotationKey       = "zeropod.ctrox.dev/container-name"
+	DisableCheckpoiningAnnotationKey = "zeropod.ctrox.dev/disable-checkpointing"
+	PreDumpAnnotationKey             = "zeropod.ctrox.dev/pre-dump"
+
+	defaultScaleDownDuration = time.Minute
 )
 
 type annotationConfig struct {
 	Port                 string `mapstructure:"zeropod.ctrox.dev/port"`
 	ScaleDownDuration    string `mapstructure:"zeropod.ctrox.dev/scaledownduration"`
-	Stateful             string `mapstructure:"zeropod.ctrox.dev/stateful"`
+	DisableCheckpointing string `mapstructure:"zeropod.ctrox.dev/disable-checkpointing"`
 	ZeropodContainerName string `mapstructure:"zeropod.ctrox.dev/container-name"`
 	PreDump              string `mapstructure:"zeropod.ctrox.dev/pre-dump"`
 	ContainerName        string `mapstructure:"io.kubernetes.cri.container-name"`
@@ -34,7 +36,7 @@ type annotationConfig struct {
 type Config struct {
 	Port                 uint16
 	ScaleDownDuration    time.Duration
-	Stateful             bool
+	DisableCheckpointing bool
 	PreDump              bool
 	ZeropodContainerName string
 	ContainerName        string
@@ -56,18 +58,21 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		return nil, err
 	}
 
-	dur, err := time.ParseDuration(cfg.ScaleDownDuration)
-	if err != nil {
-		return nil, err
-	}
-
-	// we default to stateful if it's not set
-	stateful := true
-	if len(cfg.Stateful) != 0 {
-		stateful, err = strconv.ParseBool(cfg.Stateful)
+	dur := defaultScaleDownDuration
+	if len(cfg.ScaleDownDuration) != 0 {
+		dur, err = time.ParseDuration(cfg.ScaleDownDuration)
 		if err != nil {
 			return nil, err
 		}
+	}
+
+	disableCheckpointing := false
+	if len(cfg.DisableCheckpointing) != 0 {
+		disableCheckpointing, err = strconv.ParseBool(cfg.DisableCheckpointing)
+		if err != nil {
+			return nil, err
+		}
+
 	}
 
 	preDump := false
@@ -87,7 +92,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 	return &Config{
 		Port:                 uint16(port),
 		ScaleDownDuration:    dur,
-		Stateful:             stateful,
+		DisableCheckpointing: disableCheckpointing,
 		PreDump:              preDump,
 		ZeropodContainerName: cfg.ZeropodContainerName,
 		ContainerName:        cfg.ContainerName,

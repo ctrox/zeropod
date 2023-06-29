@@ -1,20 +1,17 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  generateName: echo-
+  name: http-echo
   labels:
     app: echo
   annotations:
     zeropod.ctrox.dev/port: "5678"
     zeropod.ctrox.dev/container-name: "http-echo"
     zeropod.ctrox.dev/scaledownduration: 5s
-    zeropod.ctrox.dev/stateful: "true"
 spec:
   runtimeClassName: zeropod
   containers:
     - name: http-echo
-      # image: localhost/http-echo
-      # imagePullPolicy: Never
       image: hashicorp/http-echo
       command: ["/http-echo"]
       args:
@@ -22,8 +19,6 @@ spec:
       ports:
         - containerPort: 5678
     - name: nginx
-      # image: localhost/http-echo
-      # imagePullPolicy: Never
       image: nginx
       ports:
         - containerPort: 80

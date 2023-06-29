@@ -6,7 +6,6 @@ metadata:
     zeropod.ctrox.dev/port: "8080"
     zeropod.ctrox.dev/container-name: wildfly-pod
     zeropod.ctrox.dev/scaledownduration: 5m
-    zeropod.ctrox.dev/stateful: "true"
 spec:
   runtimeClassName: zeropod
   containers:

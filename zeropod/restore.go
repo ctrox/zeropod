@@ -38,10 +38,11 @@ func (c *Container) Restore(ctx context.Context, container *runc.Container) (*ru
 		Stdout:           c.initialProcess.Stdio().Stdout,
 		Stderr:           c.initialProcess.Stdio().Stderr,
 		ParentCheckpoint: "",
+		Checkpoint:       containerDir(container.Bundle),
 	}
 
-	if c.cfg.Stateful {
-		createReq.Checkpoint = containerDir(container.Bundle)
+	if c.cfg.DisableCheckpointing {
+		createReq.Checkpoint = ""
 	}
 
 	container, err := runc.NewContainer(namespaces.WithNamespace(ctx, "k8s"), c.platform, createReq)

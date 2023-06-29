@@ -20,17 +20,18 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 		log.G(ctx).Errorf("unable to remove pid %d: %s", p.Pid(), err)
 	}
 
-	if c.cfg.Stateful {
-		if err := c.checkpoint(ctx, container, p); err != nil {
-			return err
-		}
-	} else {
-		log.G(ctx).Infof("container is not stateful, scaling down by killing")
+	if c.cfg.DisableCheckpointing {
+		log.G(ctx).Infof("checkpointing is disabled, scaling down by killing")
 
 		c.SetScaledDown(true)
 		if err := p.Kill(ctx, 9, false); err != nil {
 			return err
 		}
+	} else {
+		if err := c.checkpoint(ctx, container, p); err != nil {
+			return err
+		}
+
 	}
 
 	beforeActivator := time.Now()
@@ -39,22 +40,21 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 		return err
 	}
 
-	if !c.cfg.Stateful {
+	if c.cfg.DisableCheckpointing {
 		log.G(ctx).Infof("activator started in %s", time.Since(beforeActivator))
 		return nil
-	} else {
-		// after checkpointing criu locks the network until the process is
-		// restored by inserting some nftables rules. As we start our activator
-		// instead of restoring the process right away, we remove these
-		// rules. https://criu.org/CLI/opt/--network-lock
-		if err := activator.UnlockNetwork(c.netNS, p.Pid()); err != nil {
-			log.G(ctx).Errorf("unable to remove nftable: %s", err)
-			return err
-		}
-
-		log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
 	}
 
+	// after checkpointing criu locks the network until the process is
+	// restored by inserting some nftables rules. As we start our activator
+	// instead of restoring the process right away, we remove these
+	// rules. https://criu.org/CLI/opt/--network-lock
+	if err := activator.UnlockNetwork(c.netNS, p.Pid()); err != nil {
+		log.G(ctx).Errorf("unable to remove nftable: %s", err)
+		return err
+	}
+
+	log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
 	return nil
 }
 
