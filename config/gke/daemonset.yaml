@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zeropod-node
+  namespace: zeropod-system
+spec:
+  template:
+    spec:
+      volumes:
+        - name: containerd-etc
+          hostPath:
+            path: /var/lib/rancher/rke2/agent/etc/containerd/
+        - name: containerd-run
+          hostPath:
+            path: /run/k3s/containerd/
+        - name: zeropod-opt
+          hostPath:
+            path: /var/lib/zeropod

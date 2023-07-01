@@ -1,4 +1,4 @@
-REGISTRY := docker.io
+REGISTRY := ghcr.io
 NAMESPACE := ctrox
 INSTALLER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-installer:dev
 MANAGER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-manager:dev
@@ -18,7 +18,7 @@ install-kind: build-installer build-manager
 	docker exec kind-control-plane mount -t bpf bpf /sys/fs/bpf
 	kind load docker-image $(INSTALLER_IMAGE)
 	kind load docker-image $(MANAGER_IMAGE)
-	kubectl apply -f config/node.yaml
+	kubectl apply -k config/kind
 
 build:
 	CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w" -o containerd-shim-zeropod-v2 cmd/shim/main.go

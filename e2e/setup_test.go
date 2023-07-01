@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -45,14 +44,16 @@ import (
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
 	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 	"sigs.k8s.io/kind/pkg/fs"
+	"sigs.k8s.io/kustomize/api/filesys"
+	"sigs.k8s.io/kustomize/api/krusty"
 )
 
 const (
-	installerImage      = "docker.io/ctrox/zeropod-installer:dev"
-	managerImage        = "docker.io/ctrox/zeropod-manager:dev"
+	installerImage      = "ghcr.io/ctrox/zeropod-installer:dev"
+	managerImage        = "ghcr.io/ctrox/zeropod-manager:dev"
 	installerDockerfile = "../cmd/installer/Dockerfile"
 	managerDockerfile   = "../cmd/manager/Dockerfile"
-	nodeYaml            = "../config/node.yaml"
+	kustomizeDir        = "../config/kind"
 )
 
 var images = []string{installerImage, managerImage}
@@ -216,12 +217,12 @@ func build() error {
 }
 
 func deployNode(t testing.TB, ctx context.Context, c client.Client) error {
-	yamlFile, err := ioutil.ReadFile(nodeYaml)
+	yml, err := loadManifests()
 	if err != nil {
-		log.Fatal(err)
+		return err
 	}
 
-	multidocReader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(yamlFile)))
+	multidocReader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(yml)))
 	for {
 		buf, err := multidocReader.Read()
 		if err != nil {
@@ -259,6 +260,22 @@ func deployNode(t testing.TB, ctx context.Context, c client.Client) error {
 	}
 
 	return nil
+}
+
+func loadManifests() ([]byte, error) {
+	fSys := filesys.MakeFsOnDisk()
+	k := krusty.MakeKustomizer(krusty.MakeDefaultOptions())
+	m, err := k.Run(fSys, kustomizeDir)
+	if err != nil {
+		return nil, err
+	}
+
+	yml, err := m.AsYaml()
+	if err != nil {
+		return nil, err
+	}
+
+	return yml, nil
 }
 
 func testPod(preDump bool, scaleDownDuration time.Duration) *corev1.Pod {

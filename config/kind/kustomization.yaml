@@ -1,0 +1,9 @@
+resources:
+  - ../base
+images:
+  - name: manager
+    newName: ghcr.io/ctrox/zeropod-manager
+    newTag: dev
+  - name: installer
+    newName: ghcr.io/ctrox/zeropod-installer
+    newTag: dev

@@ -4,16 +4,17 @@ import (
 	"context"
 	"flag"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"syscall"
 	"time"
 
 	"github.com/containerd/containerd"
+	"github.com/containerd/containerd/services/server/config"
 	"github.com/coreos/go-systemd/v22/dbus"
 	nodev1 "k8s.io/api/node/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -23,27 +24,38 @@ import (
 )
 
 var (
-	image = flag.String("image", "", "installer image with binaries and libs for containerd")
+	criuImage = flag.String("criu-image", "docker.io/ctrox/criu:v3.18", "criu image to use.")
+	runtime   = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
+	optPath   = flag.String("opt-path", "/opt/zeropod", "path where zeropod binaries are stored")
 )
 
+type containerRuntime string
+
 const (
-	optPath          = "/opt/zeropod"
-	binPath          = "/opt/zeropod/bin/"
-	criuImage        = "docker.io/ctrox/criu:v3.18"
+	runtimeContainerd containerRuntime = "containerd"
+	runtimeRKE2       containerRuntime = "rke2"
+	runtimeK3S        containerRuntime = "k3s"
+
+	binPath          = "bin/"
 	criuConfigFile   = "/etc/criu/default.conf"
 	shimBinaryName   = "containerd-shim-zeropod-v2"
 	runtimePath      = "/build/" + shimBinaryName
 	containerdConfig = "/etc/containerd/config.toml"
+	templateSuffix   = ".tmpl"
 	runtimeClassName = "zeropod"
 	runtimeHandler   = "zeropod"
 	criuConfig       = `tcp-close
 skip-in-flight
 network-lock nftables
 `
-	runtimeConfig = `
+	containerdOptKey  = "io.containerd.internal.v1.opt"
+	criPluginKey      = "io.containerd.grpc.v1.cri"
+	zeropodRuntimeKey = "containerd.runtimes.zeropod"
+	optPlugin         = `
 [plugins."io.containerd.internal.v1.opt"]
-  path = "/opt/zeropod"
-
+  path = "%s"
+`
+	runtimeConfig = `
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod]
   runtime_type = "io.containerd.zeropod.v2"
   pod_annotations = [
@@ -57,14 +69,16 @@ network-lock nftables
 )
 
 func main() {
+	flag.Parse()
+
 	if err := installCriu(); err != nil {
 		log.Fatalf("Error installing criu: %s", err)
 	}
 
 	log.Println("installed criu binaries")
 
-	if out, err := installRuntime(); err != nil {
-		log.Fatalf("Error installing runtime: %s: %s", out, err)
+	if err := installRuntime(containerRuntime(*runtime)); err != nil {
+		log.Fatalf("Error installing runtime: %s", err)
 	}
 
 	log.Println("installed runtime")
@@ -93,7 +107,7 @@ func installCriu() error {
 		return err
 	}
 
-	if err := ioutil.WriteFile(criuConfigFile, []byte(criuConfig), 0644); err != nil {
+	if err := os.WriteFile(criuConfigFile, []byte(criuConfig), 0644); err != nil {
 		return err
 	}
 
@@ -104,53 +118,147 @@ func installCriu() error {
 
 	ctx := context.Background()
 
-	image, err := client.Pull(ctx, criuImage)
+	image, err := client.Pull(ctx, *criuImage)
 	if err != nil {
 		return err
 	}
 
-	return client.Install(ctx, image, containerd.WithInstallLibs, containerd.WithInstallReplace, containerd.WithInstallPath(optPath))
+	return client.Install(
+		ctx, image, containerd.WithInstallLibs,
+		containerd.WithInstallReplace,
+		containerd.WithInstallPath(*optPath),
+	)
 }
 
-func installRuntime() ([]byte, error) {
+func installRuntime(runtime containerRuntime) error {
+	log.Printf("installing runtime for %s", runtime)
+
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 	defer cancel()
 	conn, err := dbus.NewSystemdConnectionContext(context.Background())
 	if err != nil {
-		return nil, fmt.Errorf("unable to connect to dbus: %w", err)
+		return fmt.Errorf("unable to connect to dbus: %w", err)
 	}
 
 	// note that if the shim binary already exists, we simply switch it out with
 	// the new one but existing zeropods will have to be deleted to use the
 	// updated shim.
-	if err := os.Remove(path.Join(binPath, shimBinaryName)); err != nil {
+	if err := os.Remove(filepath.Join(*optPath, binPath, shimBinaryName)); err != nil {
 		log.Printf("unable to remove shim binary, continuing with install: %s", err)
 	}
 
-	if out, err := exec.Command("cp", runtimePath, binPath).CombinedOutput(); err != nil {
-		return out, err
+	if out, err := exec.Command("cp", runtimePath, filepath.Join(*optPath, binPath)).CombinedOutput(); err != nil {
+		return fmt.Errorf("unable to copy runtime shim: %s: %w", out, err)
 	}
 
-	if err := exec.Command("grep", "-q", runtimeHandler, containerdConfig).Run(); err == nil {
-		// runtime already configured
-		log.Println("runtime already configured, no need to restart containerd")
-		return nil, nil
-	}
-
-	cfg, err := os.OpenFile(containerdConfig, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	restartRequired, err := configureContainerd(runtime)
 	if err != nil {
-		return nil, err
-	}
-	if _, err := cfg.WriteString(runtimeConfig); err != nil {
-		return nil, err
+		return fmt.Errorf("unable to configure containerd: %w", err)
 	}
 
+	if !restartRequired {
+		return nil
+	}
+
+	switch runtime {
+	case runtimeContainerd:
+		return restartUnit(ctx, conn, "containerd.service")
+	case runtimeRKE2:
+		// for rke2/k3s we try restarting both services agent/server since we
+		// don't know what our node is using. We return the error only if both
+		// restarts fail.
+		agentErr := restartUnit(ctx, conn, "rke2-agent.service")
+		serverErr := restartUnit(ctx, conn, "rke2-server.service")
+
+		if agentErr != nil && serverErr != nil {
+			return fmt.Errorf("unable to restart rke2 agent/server: %w, %w", agentErr, serverErr)
+		}
+
+		return nil
+	case runtimeK3S:
+		agentErr := restartUnit(ctx, conn, "k3s-agent.service")
+		serverErr := restartUnit(ctx, conn, "k3s.service")
+
+		if agentErr != nil && serverErr != nil {
+			return fmt.Errorf("unable to restart k3s agent/server: %w, %w", agentErr, serverErr)
+		}
+
+		return nil
+	}
+
+	return nil
+}
+
+func restartUnit(ctx context.Context, conn *dbus.Conn, service string) error {
 	ch := make(chan string)
-	if _, err := conn.RestartUnitContext(ctx, "containerd.service", "replace", ch); err != nil {
-		return nil, fmt.Errorf("unable to restart containerd")
+	if _, err := conn.TryRestartUnitContext(ctx, service, "replace", ch); err != nil {
+		return fmt.Errorf("unable to restart %s", service)
 	}
 	<-ch
-	return nil, nil
+
+	return nil
+}
+
+func configureContainerd(runtime containerRuntime) (restartRequired bool, err error) {
+	conf := &config.Config{}
+	if err := config.LoadConfig(containerdConfig, conf); err != nil {
+		return false, err
+	}
+
+	if criPlugins, ok := conf.Plugins[criPluginKey]; ok {
+		if criPlugins.Has(zeropodRuntimeKey) {
+			log.Println("runtime already configured, no need to restart containerd")
+			return false, nil
+		}
+	}
+
+	containerdCfg := containerdConfig
+
+	if runtime == runtimeRKE2 || runtime == runtimeK3S {
+		// for rke2/k3s the containerd config has to be customized via the
+		// config.toml.tmpl file. So we make a copy of the original config and
+		// insert our shim config into the template.
+		if out, err := exec.Command("cp", containerdCfg, containerdCfg+templateSuffix).CombinedOutput(); err != nil {
+			return false, fmt.Errorf("unable to copy config.toml to template: %s: %w", out, err)
+		}
+		containerdCfg = containerdConfig + templateSuffix
+	}
+
+	cfg, err := os.OpenFile(containerdCfg, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return false, err
+	}
+
+	if _, err := cfg.WriteString(runtimeConfig); err != nil {
+		return false, err
+	}
+
+	configured, err := optConfigured()
+	if err != nil {
+		return false, err
+	}
+
+	if !configured {
+		if _, err := cfg.WriteString(fmt.Sprintf(optPlugin, *optPath)); err != nil {
+			return false, err
+		}
+	}
+
+	return true, nil
+}
+
+func optConfigured() (bool, error) {
+	conf := &config.Config{}
+	if err := config.LoadConfig(containerdConfig, conf); err != nil {
+		return false, err
+	}
+	if opt, ok := conf.Plugins[containerdOptKey]; ok {
+		if opt.Has("path") {
+			return true, nil
+		}
+	}
+
+	return false, nil
 }
 
 func installRuntimeClass() error {

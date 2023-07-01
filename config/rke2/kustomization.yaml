@@ -1,0 +1,11 @@
+resources:
+  - ../production
+patchesStrategicMerge:
+  - rke2.yaml
+patches:
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/1/args/-
+        value: -runtime=rke2
+    target:
+      kind: DaemonSet

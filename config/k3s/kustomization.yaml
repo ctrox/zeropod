@@ -1,0 +1,11 @@
+resources:
+  - ../production
+patchesStrategicMerge:
+  - k3s.yaml
+patches:
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/1/args/-
+        value: -runtime=k3s
+    target:
+      kind: DaemonSet
