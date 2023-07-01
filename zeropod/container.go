@@ -2,6 +2,7 @@ package zeropod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -110,7 +111,9 @@ func (c *Container) scheduleScaleDown(container *runc.Container, in time.Duratio
 	log.G(c.context).Infof("scheduling scale down in %s", c.cfg.ScaleDownDuration)
 	timer := time.AfterFunc(c.cfg.ScaleDownDuration, func() {
 		last, err := c.tracker.LastActivity(uint32(c.process.Pid()))
-		if err != nil {
+		if errors.Is(err, socket.NoActivityRecordedErr{}) {
+			log.G(c.context).Info(err)
+		} else if err != nil {
 			log.G(c.context).Errorf("unable to get last TCP activity from tracker: %s", err)
 		} else {
 			log.G(c.context).Infof("last activity was %s ago", time.Since(last))
