@@ -10,8 +10,6 @@ import (
 	"github.com/ctrox/zeropod/zeropod"
 )
 
-func shimConfig(config *shim.Config) {}
-
 func init() {
 	seed.WithTimeAndRand()
 }
