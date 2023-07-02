@@ -42,7 +42,8 @@ WORKDIR /workspace
 RUN git clone https://github.com/checkpoint-restore/criu.git
 WORKDIR /workspace/criu
 
-RUN git checkout v3.18
+ARG CRIU_VERSION=v3.18
+RUN git checkout $CRIU_VERSION
 RUN make -j $(nproc)
 
 FROM scratch AS export-stage

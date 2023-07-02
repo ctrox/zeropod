@@ -1,4 +1,8 @@
-FROM golang:1.20 as builder
+# default to linux/amd64 if these are not set by docker for some reason
+ARG BUILDPLATFORM=linux/amd64
+ARG TARGETARCH=amd64
+
+FROM --platform=$BUILDPLATFORM golang:1.20 as builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -10,7 +14,7 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux GO111MODULE=on go build -a -o zeropod-manager cmd/manager/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o zeropod-manager cmd/manager/main.go
 
 FROM gcr.io/distroless/static-debian11
 

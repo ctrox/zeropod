@@ -24,7 +24,7 @@ import (
 )
 
 var (
-	criuImage = flag.String("criu-image", "docker.io/ctrox/criu:v3.18", "criu image to use.")
+	criuImage = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v3.18", "criu image to use.")
 	runtime   = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
 	optPath   = flag.String("opt-path", "/opt/zeropod", "path where zeropod binaries are stored")
 )

@@ -27,7 +27,7 @@ logs:
 	docker exec -ti kind-control-plane journalctl -fu containerd
 
 build-criu:
-	docker buildx build --push --platform linux/arm64,linux/amd64 -t $(CRIU_IMAGE) -f criu/Dockerfile .
+	docker buildx build --push --platform linux/arm64,linux/amd64 --build-arg CRIU_VERSION=$(CRIU_VERSION) -t $(CRIU_IMAGE) -f criu/Dockerfile .
 
 build-installer:
 	docker build --load -t $(INSTALLER_IMAGE) -f cmd/installer/Dockerfile .
