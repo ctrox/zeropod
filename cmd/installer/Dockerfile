@@ -1,7 +1,3 @@
-# default to linux/amd64 if these are not set by docker for some reason
-ARG BUILDPLATFORM=linux/amd64
-ARG TARGETARCH=amd64
-
 FROM --platform=$BUILDPLATFORM golang:1.20 as builder
 
 WORKDIR /workspace

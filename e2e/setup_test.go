@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"net/http"
 	"os"
 	"os/exec"
@@ -44,8 +43,8 @@ import (
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
 	"sigs.k8s.io/kind/pkg/cluster/nodeutils"
 	"sigs.k8s.io/kind/pkg/fs"
-	"sigs.k8s.io/kustomize/api/filesys"
 	"sigs.k8s.io/kustomize/api/krusty"
+	"sigs.k8s.io/kustomize/kyaml/filesys"
 )
 
 const (
@@ -56,20 +55,30 @@ const (
 	kustomizeDir        = "../config/kind"
 )
 
-var images = []string{installerImage, managerImage}
+type image struct {
+	tag        string
+	dockerfile string
+}
+
+var images = []image{
+	{
+		tag:        installerImage,
+		dockerfile: installerDockerfile,
+	},
+	{
+		tag:        managerImage,
+		dockerfile: managerDockerfile,
+	},
+}
 
 func setup(t testing.TB) (*rest.Config, client.Client, int) {
 	t.Log("building node and shim")
-	if err := build(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, build())
 
 	t.Log("starting kind cluster")
 
 	port, err := freeport.GetFreePort()
-	if err != nil {
-		log.Fatal(err)
-	}
+	require.NoError(t, err)
 
 	cfg, err := startKind(t, "zeropod-e2e", port)
 	require.NoError(t, err)
@@ -196,21 +205,22 @@ func getImages(t testing.TB) (string, error) {
 }
 
 // save saves images to dest, as in `docker save`
-func save(images []string, dest string) error {
-	commandArgs := append([]string{"save", "-o", dest}, images...)
+func save(images []image, dest string) error {
+	imageTags := []string{}
+	for _, img := range images {
+		imageTags = append(imageTags, img.tag)
+	}
+	commandArgs := append([]string{"save", "-o", dest}, imageTags...)
 	return exec.Command("docker", commandArgs...).Run()
 }
 
 func build() error {
-	commandArgs := []string{"build", "-t", installerImage, "-f", installerDockerfile, "../"}
-	out, err := exec.Command("docker", commandArgs...).CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error during docker build: %s: %s", err, out)
-	}
-
-	out, err = exec.Command("docker", "build", "-t", managerImage, "-f", managerDockerfile, "../").CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("error during docker build: %s: %s", err, out)
+	for _, image := range images {
+		commandArgs := []string{"build", "--load", "-t", image.tag, "-f", image.dockerfile, "../"}
+		out, err := exec.Command("docker", commandArgs...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("error during docker build: %s: %s", err, out)
+		}
 	}
 
 	return nil
@@ -292,7 +302,7 @@ func testPod(preDump bool, scaleDownDuration time.Duration) *corev1.Pod {
 			Labels: map[string]string{"app": "zeropod-e2e"},
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: pointer.StringPtr(runtimeClassName),
+			RuntimeClassName: pointer.String(runtimeClassName),
 			Containers: []corev1.Container{
 				{
 					StartupProbe: &corev1.Probe{
@@ -425,7 +435,7 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 		return "", "", err
 	}
 
-	if err := exec.Stream(remotecommand.StreamOptions{
+	if err := exec.StreamWithContext(context.Background(), remotecommand.StreamOptions{
 		Stdout: buf,
 		Stderr: errBuf,
 	}); err != nil {

@@ -1,6 +1,6 @@
-FROM golang:1.20
+FROM docker:24.0-cli
 
-RUN apt update && apt install -y docker.io
+RUN apk add --update go make
 WORKDIR /app
 ADD go.* /app
 RUN go mod download
