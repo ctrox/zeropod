@@ -24,9 +24,10 @@ import (
 )
 
 var (
-	criuImage = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v3.18", "criu image to use.")
-	runtime   = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
-	optPath   = flag.String("opt-path", "/opt/zeropod", "path where zeropod binaries are stored")
+	criuImage    = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v3.18", "criu image to use.")
+	criuNFTables = flag.Bool("criu-nftables", true, "use criu with nftables")
+	runtime      = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
+	hostOptPath  = flag.String("host-opt-path", "/opt/zeropod", "path where zeropod binaries are stored on the host")
 )
 
 type containerRuntime string
@@ -36,6 +37,7 @@ const (
 	runtimeRKE2       containerRuntime = "rke2"
 	runtimeK3S        containerRuntime = "k3s"
 
+	optPath          = "/opt/zeropod"
 	binPath          = "bin/"
 	criuConfigFile   = "/etc/criu/default.conf"
 	shimBinaryName   = "containerd-shim-zeropod-v2"
@@ -44,9 +46,11 @@ const (
 	templateSuffix   = ".tmpl"
 	runtimeClassName = "zeropod"
 	runtimeHandler   = "zeropod"
+	defaultCriuBin   = "criu"
+	criuIPTablesBin  = "criu-iptables"
 	criuConfig       = `tcp-close
 skip-in-flight
-network-lock nftables
+network-lock %s
 `
 	containerdOptKey  = "io.containerd.internal.v1.opt"
 	criPluginKey      = "io.containerd.grpc.v1.cri"
@@ -72,19 +76,19 @@ func main() {
 	flag.Parse()
 
 	if err := installCriu(); err != nil {
-		log.Fatalf("Error installing criu: %s", err)
+		log.Fatalf("error installing criu: %s", err)
 	}
 
 	log.Println("installed criu binaries")
 
 	if err := installRuntime(containerRuntime(*runtime)); err != nil {
-		log.Fatalf("Error installing runtime: %s", err)
+		log.Fatalf("error installing runtime: %s", err)
 	}
 
 	log.Println("installed runtime")
 
 	if err := installRuntimeClass(); err != nil {
-		log.Fatalf("Error installing zeropod runtimeClass: %s", err)
+		log.Fatalf("error installing zeropod runtimeClass: %s", err)
 	}
 
 	log.Println("installed runtimeClass")
@@ -103,14 +107,6 @@ func main() {
 }
 
 func installCriu() error {
-	if err := os.MkdirAll(path.Dir(criuConfigFile), os.ModePerm); err != nil {
-		return err
-	}
-
-	if err := os.WriteFile(criuConfigFile, []byte(criuConfig), 0644); err != nil {
-		return err
-	}
-
 	client, err := containerd.New("/run/containerd/containerd.sock", containerd.WithDefaultNamespace("k8s"))
 	if err != nil {
 		return err
@@ -123,11 +119,36 @@ func installCriu() error {
 		return err
 	}
 
-	return client.Install(
+	if err := client.Install(
 		ctx, image, containerd.WithInstallLibs,
 		containerd.WithInstallReplace,
-		containerd.WithInstallPath(*optPath),
-	)
+		containerd.WithInstallPath(optPath),
+	); err != nil {
+		return err
+	}
+
+	netLock := "nftables"
+	if !*criuNFTables {
+		log.Println("nftables disabled, installing criu with iptables")
+		netLock = "iptables"
+		// if we don't have nftables support, we need to use the criu binary
+		// without nftables support compiled in as the config alone does not seem
+		// to do the trick :/
+		if err := os.Rename(filepath.Join(optPath, "bin", criuIPTablesBin), filepath.Join(optPath, "bin", defaultCriuBin)); err != nil {
+			return err
+		}
+	}
+
+	// write the criu config
+	if err := os.MkdirAll(path.Dir(criuConfigFile), os.ModePerm); err != nil {
+		return err
+	}
+
+	if err := os.WriteFile(criuConfigFile, []byte(fmt.Sprintf(criuConfig, netLock)), 0644); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func installRuntime(runtime containerRuntime) error {
@@ -143,11 +164,11 @@ func installRuntime(runtime containerRuntime) error {
 	// note that if the shim binary already exists, we simply switch it out with
 	// the new one but existing zeropods will have to be deleted to use the
 	// updated shim.
-	if err := os.Remove(filepath.Join(*optPath, binPath, shimBinaryName)); err != nil {
+	if err := os.Remove(filepath.Join(optPath, binPath, shimBinaryName)); err != nil {
 		log.Printf("unable to remove shim binary, continuing with install: %s", err)
 	}
 
-	if out, err := exec.Command("cp", runtimePath, filepath.Join(*optPath, binPath)).CombinedOutput(); err != nil {
+	if out, err := exec.Command("cp", runtimePath, filepath.Join(optPath, binPath)).CombinedOutput(); err != nil {
 		return fmt.Errorf("unable to copy runtime shim: %s: %w", out, err)
 	}
 
@@ -239,7 +260,7 @@ func configureContainerd(runtime containerRuntime) (restartRequired bool, err er
 	}
 
 	if !configured {
-		if _, err := cfg.WriteString(fmt.Sprintf(optPlugin, *optPath)); err != nil {
+		if _, err := cfg.WriteString(fmt.Sprintf(optPlugin, *hostOptPath)); err != nil {
 			return false, err
 		}
 	}

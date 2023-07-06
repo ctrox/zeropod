@@ -29,6 +29,7 @@ type Server struct {
 	ns             ns.NetNS
 	once           sync.Once
 	stopping       bool
+	Network        NetworkLocker
 }
 
 type OnAccept func() (*runc.Container, error)
@@ -41,6 +42,7 @@ func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
 		connectTimeout: time.Second * 5,
 		proxyTimeout:   time.Second * 5,
 		ns:             ns,
+		Network:        NewNetworkLocker(ns),
 	}
 
 	return s, nil
@@ -145,7 +147,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 		// we lock the network, close the listener, call onAccept and unlock only for
 		// the first connection we get.
 		beforeLock := time.Now()
-		if err := LockNetwork(s.ns); err != nil {
+		if err := s.Network.Lock(); err != nil {
 			log.G(ctx).Errorf("error locking network: %s", err)
 			return
 		}
@@ -163,7 +165,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 		}
 
 		beforeUnlock := time.Now()
-		if err := UnlockNetwork(s.ns, 0); err != nil {
+		if err := s.Network.Unlock(UnlockOptions{}); err != nil {
 			log.G(ctx).Errorf("error unlocking network: %s", err)
 			return
 		}

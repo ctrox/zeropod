@@ -49,7 +49,7 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 	// restored by inserting some nftables rules. As we start our activator
 	// instead of restoring the process right away, we remove these
 	// rules. https://criu.org/CLI/opt/--network-lock
-	if err := activator.UnlockNetwork(c.netNS, p.Pid()); err != nil {
+	if err := c.activator.Network.Unlock(activator.UnlockOptions{CriuPid: p.Pid()}); err != nil {
 		log.G(ctx).Errorf("unable to remove nftable: %s", err)
 		return err
 	}
@@ -106,8 +106,8 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 	// rules here already, connections during scaling down sometimes
 	// timeout, even though criu should add these rules before
 	// checkpointing.
-	if err := activator.LockNetwork(c.netNS); err != nil {
-		return err
+	if err := c.activator.Network.Lock(); err != nil {
+		return fmt.Errorf("unable to lock network: %w", err)
 	}
 
 	// TODO: as a result of the IP tables rules we sometimes get > 1s delays
