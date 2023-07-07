@@ -209,6 +209,10 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 }
 
 func (w *wrapper) isScaledDownContainer(id string) bool {
+	if w.scaledContainer == nil {
+		return false
+	}
+
 	return id == w.scaledContainer.InitialID() && w.scaledContainer.ScaledDown()
 }
 
