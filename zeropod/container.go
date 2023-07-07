@@ -63,7 +63,7 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 
 	logPath, err := getLogPath(ctx, container.ID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("unable to get log path: %w", err)
 	}
 
 	tracker, err := socket.NewEBPFTracker()

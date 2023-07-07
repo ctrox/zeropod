@@ -124,7 +124,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 	scaledContainer, err := zeropod.New(w.context, spec, cfg, container, w.platform)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}
 
 	w.shutdown.RegisterCallback(func(ctx context.Context) error {
