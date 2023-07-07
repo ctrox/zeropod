@@ -246,16 +246,18 @@ func (w *wrapper) checkProcesses(e runcC.Exit) {
 				}
 			}
 
-			if w.scaledContainer.ScaledDown() && container.ID == w.scaledContainer.ID() {
-				log.G(w.context).Infof("not setting exited because process has scaled down: %v", p.Pid())
-				continue
-			}
+			if w.scaledContainer != nil {
+				if w.scaledContainer.ScaledDown() && container.ID == w.scaledContainer.ID() {
+					log.G(w.context).Infof("not setting exited because process has scaled down: %v", p.Pid())
+					continue
+				}
 
-			if w.scaledContainer.InitialProcess() != nil &&
-				p.ID() == w.scaledContainer.InitialProcess().ID() ||
-				p.ID() == w.scaledContainer.Process().ID() {
-				// we also need to set the original process as being exited so we can exit cleanly
-				w.scaledContainer.InitialProcess().SetExited(0)
+				if w.scaledContainer.InitialProcess() != nil &&
+					p.ID() == w.scaledContainer.InitialProcess().ID() ||
+					p.ID() == w.scaledContainer.Process().ID() {
+					// we also need to set the original process as being exited so we can exit cleanly
+					w.scaledContainer.InitialProcess().SetExited(0)
+				}
 			}
 
 			p.SetExited(e.Status)
