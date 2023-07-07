@@ -6,11 +6,9 @@ import (
 	"fmt"
 	"os"
 	"path"
-	"strings"
 	"time"
 
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/integration/remote"
 	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
@@ -267,25 +265,4 @@ func preDumpDir(bundle string) string {
 
 func relativePreDumpDir() string {
 	return "../" + preDumpDirName
-}
-
-// getLogPath gets the log path of the container by connecting back to
-// containerd. There might be a less convoluted way to do this.
-func getLogPath(ctx context.Context, containerID string) (string, error) {
-	endpoint := os.Getenv("GRPC_ADDRESS")
-	if len(endpoint) == 0 {
-		endpoint = strings.TrimSuffix(os.Getenv("TTRPC_ADDRESS"), ".ttrpc")
-	}
-
-	cri, err := remote.NewRuntimeService(endpoint, time.Second)
-	if err != nil {
-		return "", err
-	}
-
-	status, err := cri.ContainerStatus(containerID)
-	if err != nil {
-		return "", err
-	}
-
-	return status.LogPath, nil
 }
