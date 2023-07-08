@@ -1,11 +1,8 @@
 name: Build and Publish manager/installer
 
-# on:
-#   release:
-#     types: [published]
 on:
-  push:
-    branches: ["release"]
+  release:
+    types: [published]
 
 env:
   REGISTRY: ghcr.io
