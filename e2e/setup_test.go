@@ -117,6 +117,7 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 		cluster.CreateWithV1Alpha4Config(&v1alpha4.Cluster{
 			Name: name,
 			Nodes: []v1alpha4.Node{{
+				Labels: map[string]string{zeropod.NodeLabel: "true"},
 				// setup port map for our node port
 				ExtraPortMappings: []v1alpha4.PortMapping{{
 					ContainerPort: 30000,

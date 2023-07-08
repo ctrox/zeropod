@@ -12,6 +12,7 @@ import (
 )
 
 const (
+	NodeLabel                        = "zeropod.ctrox.dev/node"
 	PortAnnotationKey                = "zeropod.ctrox.dev/port"
 	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledownduration"
 	ContainerNameAnnotationKey       = "zeropod.ctrox.dev/container-name"

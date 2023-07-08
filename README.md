@@ -10,6 +10,16 @@ milliseconds, virtually unnoticable to the user. As all the memory contents
 are stored to disk during checkpointing, all state of the application is
 restored.
 
+## Use-cases
+
+Only time will tell how useful zeropod actually is. Some made up use-cases
+that could work are:
+
+* Low traffic sites
+* Dev/Staging environments
+* "Mostly static" sites that still need some server component
+* Hopefully more to be found
+
 ## How it works
 
 First off, what is this containerd shim? The shim sits between containerd and
@@ -22,10 +32,10 @@ There are several components that make zeropod work but here are the most
 important ones:
 
 * Checkpointing is done using [CRIU](https://github.com/checkpoint-restore/criu).
-* After checkpointing a TCP socket is created in place of the application, the
-  activator component is responsible for accepting a connection, closing the
-  socket, restoring the process and then proxying the initial request(s) to
-  the restored application.
+* After checkpointing, a TCP socket is created in place of the application.
+  The activator component is responsible for accepting a connection, closing
+  the socket, restoring the process and then proxying the initial request(s)
+  to the restored application.
 * All subsequent connections go directly to the application without any
   proxying and performance impact.
 * An eBPF trace is used to track the last TCP activity on the running
@@ -36,45 +46,88 @@ important ones:
   running even though the process is technically not. This is required to
   prevent the runtime from trying to restart the container.
 * Metrics are recorded continuously within each shim and the zeropod-manager
-  process that runs once per node (Daemonset) is responsible to collect and
+  process that runs once per node (DaemonSet) is responsible to collect and
   merge all metrics from the different shim processes. The shim exposes a unix
   socket for the manager to connect. The manager exposes the merged metrics on
   an HTTP endpoint.
-
-## Use-cases
-
-Only time will tell how useful zeropod actually is. Some made up use-cases
-that could work are:
-
-* Low traffic sites
-* Dev/Staging environments
-* "Mostly static" sites that still need some server component
-* Hopefully more to be found
 
 ## Getting started
 
 ### Requirements
 
 * Kubernetes v1.20+ (older versions with RuntimeClass enabled *might* work)
-* Containerd
+* Containerd (1.5+ has been tested)
 
-As zeropod is a runtime class, it needs to install binaries to `/opt/zeropod`
-of your cluster nodes and also configure Containerd to load the shim. If you
-first test this, it's probably best to use a [kind](https://kind.sigs.k8s.io)
-cluster or something similar that you can quickly setup and delete again.
+As zeropod is implemented using a [runtime
+class](https://kubernetes.io/docs/concepts/containers/runtime-class/), it
+needs to install binaries to your cluster nodes (by default in `/opt/zeropod`)
+and also configure Containerd to load the shim. If you first test this, it's
+probably best to use a [kind](https://kind.sigs.k8s.io) cluster or something
+similar that you can quickly setup and delete again. It uses a DaemonSet for
+installing components on the node itself and also runs a `manager` component
+as a second container for collecting metrics and probably other uses in the
+future.
 
-### Installing
+### Installation
 
-Depending on your cluster setup, the predefined paths might not match your
-containerd configuration. In this case you need to adjust the manifests in
-config/node.yaml.
+The config directory comes with a few predefined manifests for use with
+different Kubernetes distributions.
+
+> ⚠️ The installer will restart the Containerd systemd service on each
+> targeted node on the first install to load the config changes that are
+> required for the zeropod shim to load. This is usually non-disruptive as
+> Containerd is designed to be restarted without affecting any workloads.
 
 ```bash
 # install zeropod runtime and manager
-kubectl apply -f https://github.com/ctrox/zeropod/blob/main/config/node.yaml
-# create an example pod which makes use of zeropod
-kubectl apply -f https://github.com/ctrox/zeropod/blob/main/config/examples/nginx.yaml
+# "default" installation:
+kubectl apply -k https://github.com/ctrox/zeropod/config/production
+
+# GKE:
+kubectl apply -k https://github.com/ctrox/zeropod/config/gke
 ```
+
+> ⚠️⚠️⚠️ For k3s and rke2, the initial installation needs to restart the
+> k3s/k3s-agent or rke2-server/rke2-agent services, since it's not possible to
+> just restart Containerd. This will lead to restarts of other workloads on
+> each targeted node.
+
+```bash
+# k3s:
+kubectl apply -k https://github.com/ctrox/zeropod/config/k3s
+
+# rke2:
+kubectl apply -k https://github.com/ctrox/zeropod/config/rke2
+```
+
+By default, zeropod will only be installed on nodes with the label
+`zeropod.ctrox.dev/node=true`. So after applying the manifest, label your
+node(s) that should have it installed accordingly:
+
+```bash
+$ kubectl label node <node-name> zeropod.ctrox.dev/node=true
+```
+
+Once applied, check for `node` pod(s) in the `zeropod-system` namespace. If
+everything worked it should be in status `Running`:
+
+```bash
+$ kubectl get pods -n zeropod-system
+NAME                 READY   STATUS    RESTARTS   AGE
+zeropod-node-zr8k7   2/2     Running   0          35s
+```
+
+Now you can create workloads which make use of zeropod.
+
+```bash
+# create an example pod which makes use of zeropod
+kubectl apply -f https://github.com/ctrox/zeropod/config/examples/nginx.yaml
+```
+
+Depending on your cluster setup, none of the predefined configs might not
+match yours. In this case you need clone the repo and adjust the manifests in
+`config/` accordingly. If your setup is common, a PR to add your configuration
+adjustments would be most welcome.
 
 ## Configuration
 
@@ -103,7 +156,7 @@ spec:
         - containerPort: 80
 ```
 
-Then there are a few annotations to tweak the behaviour of zeropod:
+Then there are also a few optional annotations to tweak the behaviour of zeropod:
 
 ```yaml
 # Configures long to wait before scaling down again after the last
@@ -131,7 +184,7 @@ zeropod.ctrox.dev/disable-checkpointing: "true"
 ## Metrics
 
 The zeropod-node pod exposes metrics on `0.0.0.0:8080/metrics` in Prometheus
-format. The following metrics are currently available:
+format on each installed node. The following metrics are currently available:
 
 ```bash
 # HELP zeropod_checkpoint_duration_seconds The duration of the last checkpoint in seconds.
@@ -169,8 +222,9 @@ zeropod_running{container="nginx",namespace="default",pod="nginx"} 0
 - [x] Scale down/up on demand instead of time based
 	- [x] technically scaling up on demand is now possible with exec. You can just exec a non-existing process.
 - [ ] Less configuration - try to detect the port(s) a contanier is listening on
+- [x] Configurable installer (paths etc.)
 - [ ] Create uninstaller
-- [ ] Configurable installer (paths etc.)
+- [ ] Create issues instead of this list
 
 ## Development
 

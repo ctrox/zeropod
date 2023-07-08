@@ -1,7 +1,9 @@
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
-- role: control-plane
-  extraMounts:
-  - hostPath: /proc
-    containerPath: /host/proc
+  - role: control-plane
+    extraMounts:
+      - hostPath: /proc
+        containerPath: /host/proc
+    labels:
+      zeropod.ctrox.dev/node: "true"
