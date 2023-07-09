@@ -5,7 +5,7 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 
@@ -40,7 +40,6 @@ type PortForward struct {
 	// The namespace to look for the pod in.
 	Namespace string
 	stopChan  chan struct{}
-	readyChan chan struct{}
 }
 
 // Initialize a port forwarder, loads the Kubernetes configuration file and creates the client.
@@ -90,7 +89,7 @@ func (p *PortForward) Start() error {
 		fmt.Sprintf("%d:%d", listenPort, p.DestinationPort),
 	}
 
-	discard := ioutil.Discard
+	discard := io.Discard
 	pf, err := portforward.New(dialer, ports, p.stopChan, readyChan, discard, discard)
 	if err != nil {
 		return errors.Wrap(err, "Could not port forward into pod")

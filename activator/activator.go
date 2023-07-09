@@ -28,7 +28,6 @@ type Server struct {
 	proxyCancel    context.CancelFunc
 	ns             ns.NetNS
 	once           sync.Once
-	stopping       bool
 	Network        NetworkLocker
 }
 

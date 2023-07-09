@@ -475,41 +475,6 @@ func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *cor
 
 }
 
-func waitForZeropodScaledown(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) {
-	assert.Eventually(
-		t, func() bool { return !zeropodRunning(t, client, cfg, pod) },
-		time.Second*30, time.Millisecond*100, "zeropod is not scaled down",
-	)
-}
-
-func zeropodRunning(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) bool {
-	mfs := getNodeMetrics(t, client, cfg)
-
-	running := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning)
-	val, ok := mfs[running]
-	if !ok {
-		t.Fatalf("could not find expected metric: %s", running)
-	}
-
-	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
-		zeropod.LabelPodName:      pod.Name,
-		zeropod.LabelPodNamespace: pod.Namespace,
-	})
-	if !ok {
-		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
-	}
-
-	if metric.Gauge == nil {
-		t.Fatalf("found metric that is not a gauge")
-	}
-
-	if metric.Gauge.Value == nil {
-		t.Fatalf("metric value is nil")
-	}
-
-	return *metric.Gauge.Value == 1
-}
-
 func findMetricByLabelMatch(metrics []*dto.Metric, labels map[string]string) (*dto.Metric, bool) {
 	for _, metric := range metrics {
 		if metricMatchesLabels(metric, labels) {
