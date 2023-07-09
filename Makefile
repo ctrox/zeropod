@@ -39,7 +39,7 @@ build-test:
 	docker build --load -t $(TEST_IMAGE) -f e2e/Dockerfile .
 
 build-ebpf:
-	docker build --load -t $(EBPF_IMAGE) -f tcp/Dockerfile .
+	docker build --load -t $(EBPF_IMAGE) -f socket/Dockerfile .
 
 test-e2e:
 	go test -v ./e2e/

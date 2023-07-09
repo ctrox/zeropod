@@ -54,7 +54,7 @@ type bpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
-	InetSockSetState *ebpf.ProgramSpec `ebpf:"inet_sock_set_state"`
+	KretprobeInetCskAccept *ebpf.ProgramSpec `ebpf:"kretprobe__inet_csk_accept"`
 }
 
 // bpfMapSpecs contains maps before they are loaded into the kernel.
@@ -96,12 +96,12 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
-	InetSockSetState *ebpf.Program `ebpf:"inet_sock_set_state"`
+	KretprobeInetCskAccept *ebpf.Program `ebpf:"kretprobe__inet_csk_accept"`
 }
 
 func (p *bpfPrograms) Close() error {
 	return _BpfClose(
-		p.InetSockSetState,
+		p.KretprobeInetCskAccept,
 	)
 }
 

@@ -38,7 +38,7 @@ important ones:
   to the restored application.
 * All subsequent connections go directly to the application without any
   proxying and performance impact.
-* An eBPF trace is used to track the last TCP activity on the running
+* An eBPF probe is used to track the last TCP activity on the running
   application. This helps zeropod delay checkpointing if there is recent
   activity. This avoids too much flapping on a service that is frequently
   used.

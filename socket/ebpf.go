@@ -16,12 +16,12 @@ import (
 const BPFFSPath = "/sys/fs/bpf"
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf trace.c -- -I/headers
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf kprobe.c -- -I/headers
 
 // NewEBPFTracker returns a TCP connection tracker that will keep track of the
-// last TCP activity of specific processes. It writes the results to an ebpf
-// map keyed with the PID and the value contains the timestamp of the last
-// observed activity.
+// last TCP accept of specific processes. It writes the results to an ebpf map
+// keyed with the PID and the value contains the timestamp of the last
+// observed accept.
 func NewEBPFTracker() (Tracker, error) {
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
@@ -40,17 +40,27 @@ func NewEBPFTracker() (Tracker, error) {
 			// Pin the map to the BPF filesystem and configure the
 			// library to automatically re-write it in the BPF
 			// program so it can be re-used if it already exists or
-			// create it if not
+			// create it if not.
 			PinPath: pinPath,
 		},
 	}); err != nil {
 		return nil, fmt.Errorf("loading objects: %w", err)
 	}
 
-	kp, err := link.Tracepoint("sock", "inet_sock_set_state", objs.InetSockSetState, nil)
+	// in the past we used inet_sock_set_state here but we now we use a
+	// kretprobe with inet_csk_accept as inet_sock_set_state is not giving us
+	// reliable PIDs. https://github.com/iovisor/bcc/issues/2304
+	kp, err := link.Kretprobe("inet_csk_accept", objs.KretprobeInetCskAccept, &link.KprobeOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("opening tracepoint: %w", err)
+		return nil, fmt.Errorf("linking kprobe: %w", err)
 	}
+
+	// TODO: pinning a perf event does not seem possible? What are the
+	// implications here, will we run into issues if we have many probes
+	// at the same time?
+	// if err := kp.Pin(BPFFSPath); err != nil {
+	// 	return nil, err
+	// }
 
 	var resolver PIDResolver
 	resolver = noopResolver{}
@@ -59,13 +69,6 @@ func NewEBPFTracker() (Tracker, error) {
 	if _, err := os.Stat(hostProcPath); err == nil {
 		resolver = hostResolver{}
 	}
-
-	// TODO: pinning a trace does not seem possible? What are the implications
-	// here, will we run into issues if we have many tracepoints at the same
-	// time?
-	// if err := kp.Pin(bpfFSPath); err != nil {
-	// 	return nil, err
-	// }
 
 	return &EBPFTracker{
 		PIDResolver: resolver,
