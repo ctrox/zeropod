@@ -38,8 +38,8 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx)
 
 	__u64 time = bpf_ktime_get_ns();
 
-	const char fmt_str[] = "%d: accept found on pid %d\n";
-	bpf_trace_printk(fmt_str, sizeof(fmt_str), time, pid);
+	// const char fmt_str[] = "%d: accept found on pid %d\n";
+	// bpf_trace_printk(fmt_str, sizeof(fmt_str), time, pid);
 
 	return bpf_map_update_elem(tcp_event, &pid, &time, BPF_ANY);
 };
