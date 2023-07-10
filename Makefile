@@ -12,7 +12,7 @@ EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:dev
 # switches out the shim binary. Running pods have to be recreated to make use
 # of the new shim.
 build-kind: build
-	docker cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin
+	docker cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin/
 
 install-kind: build-installer build-manager
 	docker exec kind-control-plane mount -t bpf bpf /sys/fs/bpf

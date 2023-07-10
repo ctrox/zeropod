@@ -10,6 +10,7 @@ RUN go mod download
 
 COPY . .
 
+ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o zeropod-manager cmd/manager/main.go
 
 FROM gcr.io/distroless/static-debian11

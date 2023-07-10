@@ -11,6 +11,7 @@ RUN go mod download
 COPY . .
 
 # Build
+ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o zeropod-installer cmd/installer/main.go
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o containerd-shim-zeropod-v2 cmd/shim/main.go
 
