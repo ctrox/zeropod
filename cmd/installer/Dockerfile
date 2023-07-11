@@ -7,13 +7,13 @@ COPY go.sum go.sum
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
 RUN go mod download
+RUN apt-get update && apt-get install -y make
 
 COPY . .
 
-# Build
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o zeropod-installer cmd/installer/main.go
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o containerd-shim-zeropod-v2 cmd/shim/main.go
+RUN GOARCH=$TARGETARCH make build
 
 ARG TARGETPLATFORM
 FROM --platform=$TARGETPLATFORM centos/systemd

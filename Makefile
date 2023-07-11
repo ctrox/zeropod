@@ -7,6 +7,14 @@ CRIU_VERSION := v3.18
 CRIU_IMAGE := $(REGISTRY)/$(NAMESPACE)/criu:$(CRIU_VERSION)
 DOCKER_SOCK := /var/run/docker.sock
 EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:dev
+# versioning
+PKG=github.com/ctrox/zeropod
+CONTAINERD_PKG=github.com/containerd/containerd
+VERSION ?= $(shell git describe --match 'v[0-9]*' --dirty='.m' --always)
+REVISION=$(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
+LDFLAGS=-s -w
+SHIM_LDFLAGS=-X $(CONTAINERD_PKG)/version.Version=$(VERSION) -X $(CONTAINERD_PKG)/version.Revision=$(REVISION) -X $(CONTAINERD_PKG)/version.Package=$(PKG) $(LDFLAGS)
+GOARCH ?= amd64
 
 # build-kind can be used for fast local development. It just builds and
 # switches out the shim binary. Running pods have to be recreated to make use
@@ -21,7 +29,7 @@ install-kind: build-installer build-manager
 	kubectl apply -k config/kind
 
 build:
-	CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w" -o containerd-shim-zeropod-v2 cmd/shim/main.go
+	CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -ldflags '${SHIM_LDFLAGS}' -o containerd-shim-zeropod-v2 cmd/shim/main.go
 
 logs:
 	docker exec -ti kind-control-plane journalctl -fu containerd
