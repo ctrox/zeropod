@@ -45,11 +45,24 @@ important ones:
 * To the container runtime (e.g. Kubernetes), the container appears to be
   running even though the process is technically not. This is required to
   prevent the runtime from trying to restart the container.
+* When running `kubectl exec` on to the scaled down container, it will be
+  restored and the exec should work just as with any normal Kubernetes
+  container.
 * Metrics are recorded continuously within each shim and the zeropod-manager
   process that runs once per node (DaemonSet) is responsible to collect and
   merge all metrics from the different shim processes. The shim exposes a unix
   socket for the manager to connect. The manager exposes the merged metrics on
   an HTTP endpoint.
+
+## Compatibility
+
+Most programs should to just work with zeropod out of the box. The
+[examples](./examples) directory contains a variety of software that have been
+tested successfully. If something fails, the containerd logs can prove useful
+to figuring out what went wrong as it will output the CRIU log on
+checkpoint/restore failure. What has proven somewhat flaky sometimes are some
+arm64 workloads running in a linux VM on top of Mac OS. If you run into any
+issues with your software, please don't hesitate to create an issue.
 
 ## Getting started
 
