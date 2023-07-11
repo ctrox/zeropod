@@ -205,6 +205,7 @@ func (s *Server) connect(ctx context.Context) (net.Conn, error) {
 	var err error
 
 	ticker := time.NewTicker(time.Millisecond)
+	defer ticker.Stop()
 	start := time.Now()
 
 	for {
