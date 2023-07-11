@@ -164,12 +164,18 @@ func installRuntime(runtime containerRuntime) error {
 	// note that if the shim binary already exists, we simply switch it out with
 	// the new one but existing zeropods will have to be deleted to use the
 	// updated shim.
-	if err := os.Remove(filepath.Join(optPath, binPath, shimBinaryName)); err != nil {
+	shimDest := filepath.Join(optPath, binPath, shimBinaryName)
+	if err := os.Remove(shimDest); err != nil {
 		log.Printf("unable to remove shim binary, continuing with install: %s", err)
 	}
 
-	if out, err := exec.Command("cp", runtimePath, filepath.Join(optPath, binPath)).CombinedOutput(); err != nil {
-		return fmt.Errorf("unable to copy runtime shim: %s: %w", out, err)
+	shim, err := os.ReadFile(runtimePath)
+	if err != nil {
+		return fmt.Errorf("unable to read shim file: %w", err)
+	}
+
+	if err := os.WriteFile(shimDest, shim, 0755); err != nil {
+		return fmt.Errorf("unable to write shim file: %w", err)
 	}
 
 	restartRequired, err := configureContainerd(runtime)

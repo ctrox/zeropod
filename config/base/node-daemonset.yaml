@@ -42,6 +42,11 @@ spec:
               name: systemd-run
             - mountPath: /etc/criu
               name: criu-etc
+      tolerations:
+        - key: kubernetes.io/arch
+          operator: Equal
+          value: arm64
+          effect: NoSchedule
       volumes:
         - name: containerd-etc
           hostPath:

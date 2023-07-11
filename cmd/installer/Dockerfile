@@ -15,7 +15,8 @@ ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o zeropod-installer cmd/installer/main.go
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o containerd-shim-zeropod-v2 cmd/shim/main.go
 
-FROM centos/systemd
+ARG TARGETPLATFORM
+FROM --platform=$TARGETPLATFORM centos/systemd
 WORKDIR /build
 COPY --from=builder /workspace/zeropod-installer .
 COPY --from=builder /workspace/containerd-shim-zeropod-v2 .
