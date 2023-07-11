@@ -10,7 +10,7 @@ EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:dev
 # versioning
 PKG=github.com/ctrox/zeropod
 CONTAINERD_PKG=github.com/containerd/containerd
-VERSION ?= $(shell git describe --match 'v[0-9]*' --dirty='.m' --always)
+VERSION ?= $(shell git describe --match 'v[0-9]*' --dirty='.m' --always --tags)
 REVISION=$(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
 LDFLAGS=-s -w
 SHIM_LDFLAGS=-X $(CONTAINERD_PKG)/version.Version=$(VERSION) -X $(CONTAINERD_PKG)/version.Revision=$(REVISION) -X $(CONTAINERD_PKG)/version.Package=$(PKG) $(LDFLAGS)
