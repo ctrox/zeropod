@@ -21,7 +21,8 @@ import (
 
 type Container struct {
 	context        context.Context
-	activator      *activator.Server
+	netLocker      activator.NetworkLocker
+	activators     []*activator.Server
 	spec           *specs.Spec
 	cfg            *Config
 	id             string
@@ -50,11 +51,6 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 	}
 
 	targetNS, err := ns.GetNS(netNSPath)
-	if err != nil {
-		return nil, err
-	}
-
-	srv, err := activator.NewServer(ctx, cfg.Port, targetNS)
 	if err != nil {
 		return nil, err
 	}
@@ -88,7 +84,7 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 		process:        p,
 		logPath:        logPath,
 		netNS:          targetNS,
-		activator:      srv,
+		netLocker:      activator.NewNetworkLocker(targetNS),
 		tracker:        tracker,
 		stopMetrics:    stopMetrics,
 	}
@@ -181,7 +177,9 @@ func (c *Container) InitialProcess() process.Process {
 }
 
 func (c *Container) StopActivator(ctx context.Context) {
-	c.activator.Stop(ctx)
+	for _, act := range c.activators {
+		act.Stop(ctx)
+	}
 }
 
 func (c *Container) Stop(ctx context.Context) {
@@ -197,16 +195,51 @@ func (c *Container) Process() process.Process {
 	return c.process
 }
 
-// startActivator starts the activator
-func (c *Container) startActivator(ctx context.Context, container *runc.Container) error {
+func (c *Container) initActivators(ctx context.Context) error {
+	// we already have activators
+	if len(c.activators) != 0 {
+		return nil
+	}
+
+	var err error
+	if len(c.cfg.Ports) == 0 {
+		log.G(ctx).Info("no ports defined in config, detecting listening ports")
+		// if no ports are specified in the config, we try to find all listening ports
+		c.cfg.Ports, err = ListeningPorts(c.initialProcess.Pid())
+		if err != nil {
+			return err
+		}
+	}
+
+	log.G(ctx).Infof("creating activators for ports: %v", c.cfg.Ports)
+
+	for _, port := range c.cfg.Ports {
+		srv, err := activator.NewServer(ctx, port, c.netNS, c.netLocker)
+		if err != nil {
+			return err
+		}
+		c.activators = append(c.activators, srv)
+	}
+
+	if len(c.activators) == 0 {
+		return fmt.Errorf("no activators initialized, container might not be listening on any port")
+	}
+
+	return nil
+}
+
+// startActivators starts the activators
+func (c *Container) startActivators(ctx context.Context, container *runc.Container) error {
 	// create a new context in order to not run into deadline of parent context
 	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", RuntimeName))
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := c.activator.Start(ctx, c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
-		log.G(ctx).Errorf("failed to start server: %s", err)
-		return err
+	for _, act := range c.activators {
+		if err := act.Start(ctx, c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
+			log.G(ctx).Errorf("failed to start activator: %s", err)
+			return err
+		}
 	}
 
 	log.G(ctx).Printf("activator started")

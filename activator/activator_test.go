@@ -26,7 +26,7 @@ func TestActivator(t *testing.T) {
 	port, err := getFreePort()
 	require.NoError(t, err)
 
-	s, err := NewServer(ctx, uint16(port), netNS)
+	s, err := NewServer(ctx, uint16(port), netNS, NewNetworkLocker(netNS))
 	require.NoError(t, err)
 
 	response := "ok"

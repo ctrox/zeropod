@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/containerd/containerd/log"
@@ -13,7 +14,7 @@ import (
 
 const (
 	NodeLabel                        = "zeropod.ctrox.dev/node"
-	PortAnnotationKey                = "zeropod.ctrox.dev/port"
+	PortsAnnotationKey               = "zeropod.ctrox.dev/ports"
 	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledownduration"
 	ContainerNameAnnotationKey       = "zeropod.ctrox.dev/container-name"
 	DisableCheckpoiningAnnotationKey = "zeropod.ctrox.dev/disable-checkpointing"
@@ -23,7 +24,7 @@ const (
 )
 
 type annotationConfig struct {
-	Port                 string `mapstructure:"zeropod.ctrox.dev/port"`
+	Ports                string `mapstructure:"zeropod.ctrox.dev/ports"`
 	ScaleDownDuration    string `mapstructure:"zeropod.ctrox.dev/scaledownduration"`
 	DisableCheckpointing string `mapstructure:"zeropod.ctrox.dev/disable-checkpointing"`
 	ZeropodContainerName string `mapstructure:"zeropod.ctrox.dev/container-name"`
@@ -35,7 +36,7 @@ type annotationConfig struct {
 }
 
 type Config struct {
-	Port                 uint16
+	Ports                []uint16
 	ScaleDownDuration    time.Duration
 	DisableCheckpointing bool
 	PreDump              bool
@@ -54,9 +55,16 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		return nil, err
 	}
 
-	port, err := strconv.ParseUint(cfg.Port, 10, 16)
-	if err != nil {
-		return nil, err
+	var err error
+	var ports []uint16
+	if len(cfg.Ports) != 0 {
+		for _, p := range strings.Split(cfg.Ports, ",") {
+			port, err := strconv.ParseUint(p, 10, 16)
+			if err != nil {
+				return nil, err
+			}
+			ports = append(ports, uint16(port))
+		}
 	}
 
 	dur := defaultScaleDownDuration
@@ -91,7 +99,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 	}
 
 	return &Config{
-		Port:                 uint16(port),
+		Ports:                ports,
 		ScaleDownDuration:    dur,
 		DisableCheckpointing: disableCheckpointing,
 		PreDump:              preDump,

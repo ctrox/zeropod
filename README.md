@@ -157,7 +157,7 @@ metadata:
     app: nginx
   annotations:
     # required, this is the port our to be scaled down application is listening on
-    zeropod.ctrox.dev/port: "80"
+    zeropod.ctrox.dev/ports: "80"
     # required, this is the name of the container that will be scaled down
     zeropod.ctrox.dev/container-name: "nginx"
 spec:

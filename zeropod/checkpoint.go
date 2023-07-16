@@ -15,6 +15,10 @@ import (
 )
 
 func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
+	if err := c.initActivators(ctx); err != nil {
+		return err
+	}
+
 	if err := c.tracker.RemovePid(uint32(p.Pid())); err != nil {
 		// key could not exist, just log the error for now
 		log.G(ctx).Errorf("unable to remove pid %d: %s", p.Pid(), err)
@@ -35,7 +39,7 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 	}
 
 	beforeActivator := time.Now()
-	if err := c.startActivator(ctx, container); err != nil {
+	if err := c.startActivators(ctx, container); err != nil {
 		log.G(ctx).Errorf("unable to start zeropod: %s", err)
 		return err
 	}
@@ -49,7 +53,7 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 	// restored by inserting some nftables rules. As we start our activator
 	// instead of restoring the process right away, we remove these
 	// rules. https://criu.org/CLI/opt/--network-lock
-	if err := c.activator.Network.Unlock(activator.UnlockOptions{CriuPid: p.Pid()}); err != nil {
+	if err := c.netLocker.Unlock(activator.UnlockOptions{CriuPid: p.Pid()}); err != nil {
 		log.G(ctx).Errorf("unable to remove nftable: %s", err)
 		return err
 	}
@@ -106,7 +110,7 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 	// rules here already, connections during scaling down sometimes
 	// timeout, even though criu should add these rules before
 	// checkpointing.
-	if err := c.activator.Network.Lock(); err != nil {
+	if err := c.netLocker.Lock(); err != nil {
 		return fmt.Errorf("unable to lock network: %w", err)
 	}
 

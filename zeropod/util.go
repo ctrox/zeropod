@@ -36,3 +36,15 @@ func GetNetworkNS(spec *specs.Spec) (string, error) {
 
 	return "", fmt.Errorf("could not find network namespace in container spec")
 }
+
+// GetPIDNS reads the bundle's OCI spec and returns the PID NS path of the
+// container.
+func GetPIDNS(spec *specs.Spec) (string, error) {
+	for _, ns := range spec.Linux.Namespaces {
+		if ns.Type == specs.PIDNamespace {
+			return ns.Path, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not find pid namespace in container spec")
+}

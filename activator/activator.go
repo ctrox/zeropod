@@ -34,14 +34,14 @@ type Server struct {
 type OnAccept func() (*runc.Container, error)
 type OnClosed func(*runc.Container) error
 
-func NewServer(ctx context.Context, port uint16, ns ns.NetNS) (*Server, error) {
+func NewServer(ctx context.Context, port uint16, ns ns.NetNS, locker NetworkLocker) (*Server, error) {
 	s := &Server{
 		quit:           make(chan interface{}),
 		port:           port,
 		connectTimeout: time.Second * 5,
 		proxyTimeout:   time.Second * 5,
 		ns:             ns,
-		Network:        NewNetworkLocker(ns),
+		Network:        locker,
 	}
 
 	return s, nil

@@ -63,7 +63,7 @@ network-lock %s
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod]
   runtime_type = "io.containerd.zeropod.v2"
   pod_annotations = [
-    "zeropod.ctrox.dev/port",
+    "zeropod.ctrox.dev/ports",
     "zeropod.ctrox.dev/container-name",
     "zeropod.ctrox.dev/scaledownduration",
     "zeropod.ctrox.dev/disable-checkpointing",
