@@ -16,7 +16,7 @@ const (
 	NodeLabel                        = "zeropod.ctrox.dev/node"
 	PortsAnnotationKey               = "zeropod.ctrox.dev/ports"
 	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledownduration"
-	ContainerNameAnnotationKey       = "zeropod.ctrox.dev/container-name"
+	ContainerNamesAnnotationKey      = "zeropod.ctrox.dev/container-names"
 	DisableCheckpoiningAnnotationKey = "zeropod.ctrox.dev/disable-checkpointing"
 	PreDumpAnnotationKey             = "zeropod.ctrox.dev/pre-dump"
 
@@ -24,27 +24,27 @@ const (
 )
 
 type annotationConfig struct {
-	Ports                string `mapstructure:"zeropod.ctrox.dev/ports"`
-	ScaleDownDuration    string `mapstructure:"zeropod.ctrox.dev/scaledownduration"`
-	DisableCheckpointing string `mapstructure:"zeropod.ctrox.dev/disable-checkpointing"`
-	ZeropodContainerName string `mapstructure:"zeropod.ctrox.dev/container-name"`
-	PreDump              string `mapstructure:"zeropod.ctrox.dev/pre-dump"`
-	ContainerName        string `mapstructure:"io.kubernetes.cri.container-name"`
-	ContainerType        string `mapstructure:"io.kubernetes.cri.container-type"`
-	PodName              string `mapstructure:"io.kubernetes.cri.sandbox-name"`
-	PodNamespace         string `mapstructure:"io.kubernetes.cri.sandbox-namespace"`
+	Ports                 string `mapstructure:"zeropod.ctrox.dev/ports"`
+	ScaleDownDuration     string `mapstructure:"zeropod.ctrox.dev/scaledownduration"`
+	DisableCheckpointing  string `mapstructure:"zeropod.ctrox.dev/disable-checkpointing"`
+	ZeropodContainerNames string `mapstructure:"zeropod.ctrox.dev/container-names"`
+	PreDump               string `mapstructure:"zeropod.ctrox.dev/pre-dump"`
+	ContainerName         string `mapstructure:"io.kubernetes.cri.container-name"`
+	ContainerType         string `mapstructure:"io.kubernetes.cri.container-type"`
+	PodName               string `mapstructure:"io.kubernetes.cri.sandbox-name"`
+	PodNamespace          string `mapstructure:"io.kubernetes.cri.sandbox-namespace"`
 }
 
 type Config struct {
-	Ports                []uint16
-	ScaleDownDuration    time.Duration
-	DisableCheckpointing bool
-	PreDump              bool
-	ZeropodContainerName string
-	ContainerName        string
-	ContainerType        string
-	PodName              string
-	PodNamespace         string
+	Ports                 []uint16
+	ScaleDownDuration     time.Duration
+	DisableCheckpointing  bool
+	PreDump               bool
+	ZeropodContainerNames []string
+	ContainerName         string
+	ContainerType         string
+	PodName               string
+	PodNamespace          string
 }
 
 // NewConfig uses the annotations from the container spec to create a new
@@ -98,15 +98,31 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 
+	containerNames := []string{}
+	if len(cfg.ZeropodContainerNames) != 0 {
+		containerNames = strings.Split(cfg.ZeropodContainerNames, ",")
+	}
+
 	return &Config{
-		Ports:                ports,
-		ScaleDownDuration:    dur,
-		DisableCheckpointing: disableCheckpointing,
-		PreDump:              preDump,
-		ZeropodContainerName: cfg.ZeropodContainerName,
-		ContainerName:        cfg.ContainerName,
-		ContainerType:        cfg.ContainerType,
-		PodName:              cfg.PodName,
-		PodNamespace:         cfg.PodNamespace,
+		Ports:                 ports,
+		ScaleDownDuration:     dur,
+		DisableCheckpointing:  disableCheckpointing,
+		PreDump:               preDump,
+		ZeropodContainerNames: containerNames,
+		ContainerName:         cfg.ContainerName,
+		ContainerType:         cfg.ContainerType,
+		PodName:               cfg.PodName,
+		PodNamespace:          cfg.PodNamespace,
 	}, nil
+}
+
+func (cfg Config) IsZeropodContainer() bool {
+	for _, n := range cfg.ZeropodContainerNames {
+		if n == cfg.ContainerName {
+			return true
+		}
+	}
+
+	// if there is none specified, every one of them is considered.
+	return len(cfg.ZeropodContainerNames) == 0
 }

@@ -296,7 +296,7 @@ func testPod(preDump bool, scaleDownDuration time.Duration) *corev1.Pod {
 			Namespace:    "default",
 			Annotations: map[string]string{
 				zeropod.PortsAnnotationKey:             "80",
-				zeropod.ContainerNameAnnotationKey:     "nginx",
+				zeropod.ContainerNamesAnnotationKey:    "nginx",
 				zeropod.ScaleDownDurationAnnotationKey: scaleDownDuration.String(),
 				zeropod.PreDumpAnnotationKey:           strconv.FormatBool(preDump),
 			},

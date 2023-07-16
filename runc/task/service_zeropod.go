@@ -118,10 +118,12 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	defer w.mut.Unlock()
 
 	// if we have a sandbox container, an exec ID is set or the container does
-	// not match the configured one we should not do anything further with the
-	// container.
+	// not match the configured one(s) we should not do anything further with
+	// the container.
 	if cfg.ContainerType == annotations.ContainerTypeSandbox ||
-		len(r.ExecID) != 0 {
+		len(r.ExecID) != 0 ||
+		!cfg.IsZeropodContainer() {
+		log.G(ctx).Debugf("ignoring container: %q of type %q", cfg.ContainerName, cfg.ContainerType)
 		return resp, nil
 	}
 
