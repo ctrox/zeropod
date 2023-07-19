@@ -11,9 +11,9 @@ spec:
       labels:
         app: php
       annotations:
-        zeropod.ctrox.dev/ports: "80"
-        zeropod.ctrox.dev/container-name: wordpress
-        zeropod.ctrox.dev/scaledownduration: 0m
+        zeropod.ctrox.dev/ports-map: "wordpress=80"
+        zeropod.ctrox.dev/container-names: wordpress
+        zeropod.ctrox.dev/scaledown-duration: 0m
     spec:
       runtimeClassName: zeropod
       containers:

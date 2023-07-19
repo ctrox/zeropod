@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -289,39 +290,102 @@ func loadManifests() ([]byte, error) {
 	return yml, nil
 }
 
-func testPod(preDump bool, scaleDownDuration time.Duration) *corev1.Pod {
-	return &corev1.Pod{
+type pod struct {
+	*corev1.Pod
+}
+
+type podOption func(p *pod)
+
+func annotations(annotations map[string]string) podOption {
+	return func(p *pod) {
+		if p.Annotations == nil {
+			p.SetAnnotations(annotations)
+		}
+		for k, v := range annotations {
+			p.Annotations[k] = v
+		}
+	}
+}
+
+func preDump(preDump bool) podOption {
+	return annotations(map[string]string{
+		zeropod.PreDumpAnnotationKey: strconv.FormatBool(preDump),
+	})
+}
+
+func scaleDownAfter(dur time.Duration) podOption {
+	return annotations(map[string]string{
+		zeropod.ScaleDownDurationAnnotationKey: dur.String(),
+	})
+}
+
+func containerNamesAnnotation(names []string) podOption {
+	return annotations(map[string]string{
+		zeropod.ScaleDownDurationAnnotationKey: strings.Join(names, ","),
+	})
+}
+
+func portsAnnotation(ports []string) podOption {
+	return annotations(map[string]string{
+		zeropod.ScaleDownDurationAnnotationKey: strings.Join(ports, ","),
+	})
+}
+
+const agnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.39"
+
+func agnContainer(name string, port int) podOption {
+	return addContainer(
+		name, agnHostImage,
+		[]string{"netexec", fmt.Sprintf("--http-port=%d", port), "--udp-port=-1"},
+		port,
+	)
+}
+
+func addContainer(name, image string, args []string, ports ...int) podOption {
+	return func(p *pod) {
+		container := corev1.Container{
+			StartupProbe: &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{
+						Path: "/",
+						Port: intstr.FromInt(ports[0]),
+					},
+				},
+				TimeoutSeconds: 5,
+			},
+			Name:  name,
+			Image: image,
+			Args:  args,
+		}
+		for _, port := range ports {
+			container.Ports = append(container.Ports, corev1.ContainerPort{ContainerPort: int32(port)})
+		}
+
+		p.Spec.Containers = append(p.Spec.Containers, container)
+	}
+}
+
+func testPod(opts ...podOption) *corev1.Pod {
+	p := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "zeropod-e2e-",
 			Namespace:    "default",
-			Annotations: map[string]string{
-				zeropod.PortsAnnotationKey:             "80",
-				zeropod.ContainerNamesAnnotationKey:    "nginx",
-				zeropod.ScaleDownDurationAnnotationKey: scaleDownDuration.String(),
-				zeropod.PreDumpAnnotationKey:           strconv.FormatBool(preDump),
-			},
-			Labels: map[string]string{"app": "zeropod-e2e"},
+			Labels:       map[string]string{"app": "zeropod-e2e"},
 		},
 		Spec: corev1.PodSpec{
 			RuntimeClassName: pointer.String(runtimeClassName),
-			Containers: []corev1.Container{
-				{
-					StartupProbe: &corev1.Probe{
-						ProbeHandler: corev1.ProbeHandler{
-							HTTPGet: &corev1.HTTPGetAction{
-								Path: "/",
-								Port: intstr.FromInt(80),
-							},
-						},
-						TimeoutSeconds: 2,
-					},
-					Name:  "nginx",
-					Image: "nginx",
-					Ports: []corev1.ContainerPort{{ContainerPort: 80}},
-				},
-			},
 		},
 	}
+
+	for _, opt := range opts {
+		opt(&pod{p})
+	}
+
+	if len(p.Spec.Containers) == 0 {
+		addContainer("nginx", "nginx", nil, 80)(&pod{p})
+	}
+
+	return p
 }
 
 func testService() *corev1.Service {

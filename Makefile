@@ -14,7 +14,7 @@ VERSION ?= $(shell git describe --match 'v[0-9]*' --dirty='.m' --always --tags)
 REVISION=$(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
 LDFLAGS=-s -w
 SHIM_LDFLAGS=-X $(CONTAINERD_PKG)/version.Version=$(VERSION) -X $(CONTAINERD_PKG)/version.Revision=$(REVISION) -X $(CONTAINERD_PKG)/version.Package=$(PKG) $(LDFLAGS)
-GOARCH ?= amd64
+GOARCH ?= $(shell go env GOARCH)
 
 # build-kind can be used for fast local development. It just builds and
 # switches out the shim binary. Running pods have to be recreated to make use

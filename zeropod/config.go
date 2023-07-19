@@ -2,6 +2,7 @@ package zeropod
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"strconv"
 	"strings"
@@ -14,20 +15,26 @@ import (
 
 const (
 	NodeLabel                        = "zeropod.ctrox.dev/node"
-	PortsAnnotationKey               = "zeropod.ctrox.dev/ports"
-	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledownduration"
+	PortsAnnotationKey               = "zeropod.ctrox.dev/ports-map"
 	ContainerNamesAnnotationKey      = "zeropod.ctrox.dev/container-names"
+	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledown-duration"
 	DisableCheckpoiningAnnotationKey = "zeropod.ctrox.dev/disable-checkpointing"
 	PreDumpAnnotationKey             = "zeropod.ctrox.dev/pre-dump"
+	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
+	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
 
 	defaultScaleDownDuration = time.Minute
+	containersDelim          = ","
+	portsDelim               = containersDelim
+	mappingDelim             = ";"
+	mapDelim                 = "="
 )
 
 type annotationConfig struct {
-	Ports                 string `mapstructure:"zeropod.ctrox.dev/ports"`
-	ScaleDownDuration     string `mapstructure:"zeropod.ctrox.dev/scaledownduration"`
-	DisableCheckpointing  string `mapstructure:"zeropod.ctrox.dev/disable-checkpointing"`
+	PortMap               string `mapstructure:"zeropod.ctrox.dev/ports-map"`
 	ZeropodContainerNames string `mapstructure:"zeropod.ctrox.dev/container-names"`
+	ScaledownDuration     string `mapstructure:"zeropod.ctrox.dev/scaledown-duration"`
+	DisableCheckpointing  string `mapstructure:"zeropod.ctrox.dev/disable-checkpointing"`
 	PreDump               string `mapstructure:"zeropod.ctrox.dev/pre-dump"`
 	ContainerName         string `mapstructure:"io.kubernetes.cri.container-name"`
 	ContainerType         string `mapstructure:"io.kubernetes.cri.container-type"`
@@ -36,11 +43,11 @@ type annotationConfig struct {
 }
 
 type Config struct {
+	ZeropodContainerNames []string
 	Ports                 []uint16
 	ScaleDownDuration     time.Duration
 	DisableCheckpointing  bool
 	PreDump               bool
-	ZeropodContainerNames []string
 	ContainerName         string
 	ContainerType         string
 	PodName               string
@@ -56,20 +63,32 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 	}
 
 	var err error
-	var ports []uint16
-	if len(cfg.Ports) != 0 {
-		for _, p := range strings.Split(cfg.Ports, ",") {
-			port, err := strconv.ParseUint(p, 10, 16)
-			if err != nil {
-				return nil, err
+	var containerPorts []uint16
+	if len(cfg.PortMap) != 0 {
+		for _, mapping := range strings.Split(cfg.PortMap, mappingDelim) {
+			namePorts := strings.Split(mapping, mapDelim)
+			if len(namePorts) != 2 {
+				return nil, fmt.Errorf("invalid port map, the format needs to be name=port")
 			}
-			ports = append(ports, uint16(port))
+
+			name, ports := namePorts[0], namePorts[1]
+			if name != cfg.ContainerName {
+				continue
+			}
+
+			for _, port := range strings.Split(ports, portsDelim) {
+				p, err := strconv.ParseUint(port, 10, 16)
+				if err != nil {
+					return nil, err
+				}
+				containerPorts = append(containerPorts, uint16(p))
+			}
 		}
 	}
 
 	dur := defaultScaleDownDuration
-	if len(cfg.ScaleDownDuration) != 0 {
-		dur, err = time.ParseDuration(cfg.ScaleDownDuration)
+	if len(cfg.ScaledownDuration) != 0 {
+		dur, err = time.ParseDuration(cfg.ScaledownDuration)
 		if err != nil {
 			return nil, err
 		}
@@ -100,11 +119,11 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 
 	containerNames := []string{}
 	if len(cfg.ZeropodContainerNames) != 0 {
-		containerNames = strings.Split(cfg.ZeropodContainerNames, ",")
+		containerNames = strings.Split(cfg.ZeropodContainerNames, containersDelim)
 	}
 
 	return &Config{
-		Ports:                 ports,
+		Ports:                 containerPorts,
 		ScaleDownDuration:     dur,
 		DisableCheckpointing:  disableCheckpointing,
 		PreDump:               preDump,

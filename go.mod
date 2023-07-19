@@ -24,7 +24,7 @@ require (
 	github.com/prometheus/procfs v0.8.0
 	github.com/sirupsen/logrus v1.8.1
 	github.com/stretchr/testify v1.8.1
-	golang.org/x/sys v0.8.0
+	golang.org/x/sys v0.9.0
 	google.golang.org/grpc v1.52.0
 	k8s.io/api v0.26.1
 	k8s.io/apimachinery v0.26.1
@@ -110,7 +110,7 @@ require (
 	golang.org/x/mod v0.9.0 // indirect
 	golang.org/x/net v0.8.0 // indirect
 	golang.org/x/oauth2 v0.6.0 // indirect
-	golang.org/x/sync v0.1.0 // indirect
+	golang.org/x/sync v0.3.0 // indirect
 	golang.org/x/term v0.6.0 // indirect
 	golang.org/x/text v0.8.0 // indirect
 	golang.org/x/time v0.3.0 // indirect
@@ -132,6 +132,8 @@ require (
 )
 
 replace (
+	// fork of procfs with change https://github.com/prometheus/procfs/pull/552
+	github.com/prometheus/procfs => github.com/ctrox/procfs v0.0.0-20230719173910-a2be10bd98d2
 	// because https://github.com/kubernetes/client-go/issues/1084
 	// should be fixed with client-go v0.28
 	k8s.io/kube-openapi => k8s.io/kube-openapi v0.0.0-20220401212409-b28bf2818661

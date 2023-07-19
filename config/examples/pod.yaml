@@ -5,20 +5,21 @@ metadata:
   labels:
     app: echo
   annotations:
-    zeropod.ctrox.dev/ports: "5678"
-    zeropod.ctrox.dev/container-name: "http-echo"
-    zeropod.ctrox.dev/scaledownduration: 5s
+    zeropod.ctrox.dev/ports-map: "container1=8080;container2=8082"
+    zeropod.ctrox.dev/container-names: "container1"
+    zeropod.ctrox.dev/scaledown-duration: 10s
 spec:
   runtimeClassName: zeropod
   containers:
-    - name: http-echo
-      image: hashicorp/http-echo
-      command: ["/http-echo"]
+    - image: ealen/echo-server
+      name: container1
       args:
-        - -text="hello zeropod"
+        - --port=8080
       ports:
-        - containerPort: 5678
-    - name: nginx
-      image: nginx
+        - containerPort: 8080
+    - image: ealen/echo-server
+      name: container2
+      args:
+        - --port=8081
       ports:
-        - containerPort: 80
+        - containerPort: 8081

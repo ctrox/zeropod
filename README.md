@@ -155,11 +155,6 @@ metadata:
   name: nginx
   labels:
     app: nginx
-  annotations:
-    # required, this is the port our to be scaled down application is listening on
-    zeropod.ctrox.dev/ports: "80"
-    # required, this is the name of the container that will be scaled down
-    zeropod.ctrox.dev/container-name: "nginx"
 spec:
   runtimeClassName: zeropod
   containers:
@@ -169,16 +164,29 @@ spec:
         - containerPort: 80
 ```
 
-Then there are also a few optional annotations to tweak the behaviour of zeropod:
+Then there are also a few optional annotations that can be set on the pod to
+tweak the behaviour of zeropod:
 
 ```yaml
+# container-names of containers in the pod that should be considered for
+# scaling to zero. If empty all containers will be considered.
+zeropod.ctrox.dev/container-names: "nginx,sidecar"
+
+# ports-map configures the ports our to be scaled down application(s) are
+# listening on. As ports have to be matched with containers in a pod, the
+# key is the container name and the value a comma-delimited list of ports
+# any TCP connection on one of these ports will restore an application.
+# If omitted, the zeropod will try to find the listening ports automatically,
+# use this option in case this fails for your application.
+zeropod.ctrox.dev/ports-map: "nginx=80,81;sidecar=8080"
+
 # Configures long to wait before scaling down again after the last
 # connnection. The duration is reset whenever a connection happens.
 # Setting it to 0 means the application will be checkpointed as soon
 # as possible after restore. Use with caution as this will cause lots
 # of checkpoints/restores.
 # Default is 1 minute.
-zeropod.ctrox.dev/scaledownduration: 10s
+zeropod.ctrox.dev/scaledown-duration: 10s
 
 # Execute a pre-dump before the full checkpoint and process stop. This can
 # reduce the checkpoint time in some cases but testing has shown that it also

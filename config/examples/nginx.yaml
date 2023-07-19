@@ -5,7 +5,7 @@ metadata:
   labels:
     app: nginx
   annotations:
-    zeropod.ctrox.dev/scaledownduration: 10s
+    zeropod.ctrox.dev/scaledown-duration: 10s
 spec:
   runtimeClassName: zeropod
   containers:

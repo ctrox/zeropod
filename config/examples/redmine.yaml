@@ -11,9 +11,9 @@ spec:
       labels:
         app: redmine
       annotations:
-        zeropod.ctrox.dev/ports: "3000"
-        zeropod.ctrox.dev/container-name: "redmine"
-        zeropod.ctrox.dev/scaledownduration: 0m
+        zeropod.ctrox.dev/ports-map: "redmine=3000"
+        zeropod.ctrox.dev/container-names: "redmine"
+        zeropod.ctrox.dev/scaledown-duration: 0m
     spec:
       runtimeClassName: zeropod
       containers:

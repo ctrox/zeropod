@@ -3,9 +3,9 @@ kind: Pod
 metadata:
   name: wildfly-pod
   annotations:
-    zeropod.ctrox.dev/ports: "8080"
-    zeropod.ctrox.dev/container-name: wildfly-pod
-    zeropod.ctrox.dev/scaledownduration: 5m
+    zeropod.ctrox.dev/ports-map: "wildfly-pod=8080"
+    zeropod.ctrox.dev/container-names: wildfly-pod
+    zeropod.ctrox.dev/scaledown-duration: 5m
 spec:
   runtimeClassName: zeropod
   containers:

@@ -24,24 +24,24 @@ func BenchmarkRestore(b *testing.B) {
 	}
 
 	benches := map[string]struct {
-		preDump           bool
-		waitDuration      time.Duration
-		scaleDownDuration time.Duration
+		preDump        bool
+		waitDuration   time.Duration
+		scaleDownAfter time.Duration
 	}{
 		"without pre-dump": {
-			preDump:           false,
-			scaleDownDuration: 0,
-			waitDuration:      time.Millisecond * 800,
+			preDump:        false,
+			scaleDownAfter: 0,
+			waitDuration:   time.Millisecond * 800,
 		},
 		"with pre-dump": {
-			preDump:           true,
-			scaleDownDuration: 0,
-			waitDuration:      time.Millisecond * 800,
+			preDump:        true,
+			scaleDownAfter: 0,
+			waitDuration:   time.Millisecond * 800,
 		},
 		"one second scaledown duration": {
-			preDump:           false,
-			scaleDownDuration: time.Second,
-			waitDuration:      0,
+			preDump:        false,
+			scaleDownAfter: time.Second,
+			waitDuration:   0,
 		},
 	}
 
@@ -59,7 +59,7 @@ func BenchmarkRestore(b *testing.B) {
 				return
 			}
 
-			cleanupPod := createPodAndWait(b, ctx, client, testPod(bc.preDump, bc.scaleDownDuration))
+			cleanupPod := createPodAndWait(b, ctx, client, testPod(preDump(bc.preDump), scaleDownAfter(bc.scaleDownAfter)))
 			cleanupService := createServiceAndWait(b, ctx, client, testService(), 1)
 			b.ResetTimer()
 

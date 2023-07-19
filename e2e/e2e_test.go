@@ -46,14 +46,14 @@ func TestE2E(t *testing.T) {
 		// they should leave enough headroom but the tests could be flaky
 		// because of that.
 		"without pre-dump": {
-			pod:            testPod(false, 0),
+			pod:            testPod(scaleDownAfter(0)),
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			preDump:        false,
 			maxReqDuration: time.Second,
 		},
 		"with pre-dump": {
-			pod:            testPod(true, 0),
+			pod:            testPod(preDump(true), scaleDownAfter(0)),
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			preDump:        true,
@@ -65,7 +65,7 @@ func TestE2E(t *testing.T) {
 		// that the socket tracking does not work as it means the container
 		// has checkpointed.
 		"socket tracking": {
-			pod:            testPod(false, time.Second),
+			pod:            testPod(scaleDownAfter(time.Second)),
 			parallelReqs:   1,
 			sequentialReqs: 20,
 			keepAlive:      false,
@@ -73,6 +73,19 @@ func TestE2E(t *testing.T) {
 			maxReqDuration: time.Millisecond * 50,
 			ignoreFirstReq: true,
 		},
+		"pod without configuration": {
+			pod:            testPod(),
+			parallelReqs:   1,
+			sequentialReqs: 1,
+			maxReqDuration: time.Second,
+		},
+		"pod with multiple containers": {
+			pod:            testPod(agnContainer("c1", 8080), agnContainer("c2", 8081), scaleDownAfter(0)),
+			parallelReqs:   1,
+			sequentialReqs: 1,
+			maxReqDuration: time.Second,
+		},
+
 		// TODO: fix parallel tests. These are flaky at the moment, probably
 		// because the actual activator implementation is buggy.
 		// "parallel requests": {
@@ -116,6 +129,7 @@ func TestE2E(t *testing.T) {
 						before := time.Now()
 						resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
 						if err != nil {
+							time.Sleep(time.Hour)
 							t.Error(err)
 							return
 						}
@@ -133,7 +147,7 @@ func TestE2E(t *testing.T) {
 	}
 
 	t.Run("exec", func(t *testing.T) {
-		pod := testPod(false, 0)
+		pod := testPod(scaleDownAfter(0))
 		cleanupPod := createPodAndWait(t, ctx, client, pod)
 		defer cleanupPod()
 
@@ -154,15 +168,15 @@ func TestE2E(t *testing.T) {
 
 	t.Run("metrics", func(t *testing.T) {
 		// create two pods to test metric merging
-		runningPod := testPod(false, time.Hour)
+		runningPod := testPod(scaleDownAfter(time.Hour))
 		cleanupRunningPod := createPodAndWait(t, ctx, client, runningPod)
 		defer cleanupRunningPod()
 
-		checkpointedPod := testPod(false, 0)
+		checkpointedPod := testPod(scaleDownAfter(0))
 		cleanupCheckpointedPod := createPodAndWait(t, ctx, client, checkpointedPod)
 		defer cleanupCheckpointedPod()
 
-		restoredPod := testPod(false, 0)
+		restoredPod := testPod(scaleDownAfter(0))
 		cleanupRestoredPod := createPodAndWait(t, ctx, client, restoredPod)
 		defer cleanupRestoredPod()
 

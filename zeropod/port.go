@@ -1,6 +1,7 @@
 package zeropod
 
 import (
+	"fmt"
 	"path/filepath"
 	"strconv"
 
@@ -32,9 +33,13 @@ func ListeningPorts(pid int) ([]uint16, error) {
 
 	// use a map to eliminate duplicates
 	portMap := map[uint16]struct{}{}
+	inos, err := inodes(pid)
+	if err != nil {
+		return nil, err
+	}
 
 	for _, line := range append(tcp, tcp6...) {
-		if line.St == stateListen {
+		if _, ok := inos[line.Inode]; ok && line.St == stateListen {
 			portMap[uint16(line.LocalPort)] = struct{}{}
 		}
 	}
@@ -45,4 +50,32 @@ func ListeningPorts(pid int) ([]uint16, error) {
 	}
 
 	return ports, err
+}
+
+func inodes(pid int) (map[uint64]struct{}, error) {
+	fs, err := procfs.NewFS(procPath)
+	if err != nil {
+		return nil, err
+	}
+
+	proc, err := fs.Proc(pid)
+	if err != nil {
+		return nil, err
+	}
+
+	fdInfos, err := proc.FileDescriptorsInfo()
+	if err != nil {
+		return nil, err
+	}
+
+	inodes := map[uint64]struct{}{}
+	for _, fdInfo := range fdInfos {
+		inode, err := strconv.ParseUint(fdInfo.Ino, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("unable to parse inode to uint: %w", err)
+		}
+		inodes[inode] = struct{}{}
+	}
+
+	return inodes, nil
 }
