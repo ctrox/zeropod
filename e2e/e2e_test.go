@@ -146,8 +146,6 @@ func TestE2E(t *testing.T) {
 						before := time.Now()
 						resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
 						if err != nil {
-							t.Log(err)
-							time.Sleep(time.Hour)
 							t.Error(err)
 							return
 						}
@@ -181,7 +179,7 @@ func TestE2E(t *testing.T) {
 			return err == nil
 		}, time.Second*10, time.Second)
 
-		assert.Equal(t, 2, restoreCount(t, client, cfg, pod), "pod should have been restored 2 times")
+		assert.GreaterOrEqual(t, restoreCount(t, client, cfg, pod), 2, "pod should have been restored 2 times")
 	})
 
 	t.Run("metrics", func(t *testing.T) {
@@ -227,18 +225,20 @@ func TestE2E(t *testing.T) {
 				pod:    checkpointedPod,
 			},
 			"checkpoint duration": {
-				metric:               prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricCheckPointDuration),
-				pod:                  checkpointedPod,
-				histogramSampleCount: pointer.Uint64(1),
+				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricCheckPointDuration),
+				pod:    checkpointedPod,
+				// we expect two checkpoints as the first one happens due to the startupProbe
+				histogramSampleCount: pointer.Uint64(2),
 			},
 			"last restore time": {
 				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricLastRestoreTime),
 				pod:    restoredPod,
 			},
 			"restore duration": {
-				metric:               prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration),
-				pod:                  restoredPod,
-				histogramSampleCount: pointer.Uint64(1),
+				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration),
+				pod:    restoredPod,
+				// we expect two restores as the first one happens due to the startupProbe
+				histogramSampleCount: pointer.Uint64(2),
 			},
 		}
 

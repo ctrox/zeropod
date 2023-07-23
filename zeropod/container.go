@@ -275,8 +275,6 @@ func (c *Container) restoreHandler(ctx context.Context, container *runc.Containe
 		}
 
 		c.SetScaledDown(false)
-		restoreDuration.With(c.labels()).Observe(time.Since(beforeRestore).Seconds())
-
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
 		return restoredContainer, nil

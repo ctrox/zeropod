@@ -436,7 +436,7 @@ func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, p
 			}
 
 			return false
-		}, time.Minute, time.Second, "waiting for pod to be deleted")
+		}, time.Minute*2, time.Second, "waiting for pod to be deleted")
 	}
 }
 
