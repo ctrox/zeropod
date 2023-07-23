@@ -28,6 +28,7 @@ type Container struct {
 	initialID      string
 	initialProcess process.Process
 	process        process.Process
+	cgroup         any
 	logPath        string
 	scaledDown     bool
 	netNS          ns.NetNS
@@ -84,6 +85,7 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		id:                container.ID,
 		initialID:         container.ID,
 		initialProcess:    p,
+		cgroup:            container.Cgroup(),
 		process:           p,
 		logPath:           logPath,
 		netNS:             targetNS,

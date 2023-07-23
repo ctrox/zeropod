@@ -53,6 +53,9 @@ func (c *Container) Restore(ctx context.Context, container *runc.Container) (*ru
 	if err != nil {
 		return nil, nil, err
 	}
+	// it's important to restore the cgroup as NewContainer won't set it as
+	// the process is not yet restored.
+	container.CgroupSet(c.cgroup)
 
 	p, err := container.Process("")
 	if err != nil {
