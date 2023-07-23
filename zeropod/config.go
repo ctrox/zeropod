@@ -52,6 +52,7 @@ type Config struct {
 	ContainerType         string
 	PodName               string
 	PodNamespace          string
+	spec                  *specs.Spec
 }
 
 // NewConfig uses the annotations from the container spec to create a new
@@ -132,6 +133,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ContainerType:         cfg.ContainerType,
 		PodName:               cfg.PodName,
 		PodNamespace:          cfg.PodNamespace,
+		spec:                  spec,
 	}, nil
 }
 

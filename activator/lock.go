@@ -5,23 +5,22 @@ import (
 	"io"
 	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/containerd/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
+	"golang.org/x/sys/unix"
 )
-
-type UnlockOptions struct {
-	CriuPid int
-}
 
 type NetworkLockerBackend string
 
 type NetworkLocker interface {
 	Backend() NetworkLockerBackend
-	Lock() error
-	Unlock(UnlockOptions) error
+	Lock(ports []uint16) error
+	Unlock(ports []uint16) error
 }
 
 const (
@@ -50,14 +49,14 @@ func (n *nftablesLocker) Backend() NetworkLockerBackend {
 
 // LockNetwork "locks" the network by adding a nftables rule that drops all
 // incoming traffic in the specified network namespace.
-func (n *nftablesLocker) Lock() error {
+func (n *nftablesLocker) Lock(ports []uint16) error {
 	nft, err := nftables.New(nftables.WithNetNSFd(int(n.netNS.Fd())))
 	if err != nil {
 		return err
 	}
 	defer nft.CloseLasting()
 
-	table := &nftables.Table{Name: "zeropod", Family: nftables.TableFamilyINet}
+	table := &nftables.Table{Name: tableName(ports), Family: nftables.TableFamilyINet}
 
 	nft.AddTable(table)
 	chain := &nftables.Chain{
@@ -70,36 +69,64 @@ func (n *nftablesLocker) Lock() error {
 
 	nft.AddChain(chain)
 
-	rule := &nftables.Rule{
-		Table: table,
-		Chain: chain,
-		Exprs: []expr.Any{
-			&expr.Verdict{
-				Kind: expr.VerdictDrop,
+	// the nftables package is a *bit* low-level. This results in "tcp dport <port> drop".
+	for _, port := range ports {
+		rule := &nftables.Rule{
+			Table: table,
+			Chain: chain,
+			Exprs: []expr.Any{
+				// TCP
+				&expr.Meta{
+					Key:            expr.MetaKeyL4PROTO,
+					SourceRegister: false,
+					Register:       1,
+				},
+				&expr.Cmp{
+					Op:       expr.CmpOpEq,
+					Register: 1,
+					Data:     []byte{unix.IPPROTO_TCP},
+				},
+				// dport <port>
+				&expr.Payload{
+					OperationType:  expr.PayloadLoad,
+					DestRegister:   1,
+					SourceRegister: 0,
+					Base:           expr.PayloadBaseTransportHeader,
+					Offset:         2,
+					Len:            2,
+					CsumType:       0,
+					CsumOffset:     0,
+					CsumFlags:      0,
+				},
+				&expr.Cmp{
+					Op:       0,
+					Register: 1,
+					Data:     binaryutil.BigEndian.PutUint16(port),
+				},
+				// drop
+				&expr.Verdict{
+					Kind: expr.VerdictDrop,
+				},
 			},
-		},
+		}
+		nft.AddRule(rule)
 	}
-
-	nft.AddRule(rule)
 
 	return nft.Flush()
 }
 
-// Unlock removes the netfilter table created by LockNetwork. Additionally it
-// also removes any CRIU-created tables if the pid of the restored process is
-// given.
-func (n *nftablesLocker) Unlock(opts UnlockOptions) error {
+// Unlock removes the netfilter table created by Lock.
+func (n *nftablesLocker) Unlock(ports []uint16) error {
 	nft, err := nftables.New(nftables.WithNetNSFd(int(n.netNS.Fd())))
 	if err != nil {
 		return err
 	}
 	defer nft.CloseLasting()
 
-	if opts.CriuPid != 0 {
-		nft.DelTable(&nftables.Table{Name: "CRIU-" + strconv.Itoa(opts.CriuPid), Family: nftables.TableFamilyINet})
-	}
-
-	nft.DelTable(&nftables.Table{Name: "zeropod", Family: nftables.TableFamilyINet})
+	nft.DelTable(&nftables.Table{
+		Name:   tableName(ports),
+		Family: nftables.TableFamilyINet},
+	)
 
 	return nft.Flush()
 }
@@ -112,24 +139,42 @@ func (n *iptablesLocker) Backend() NetworkLockerBackend {
 	return NetworkLockerNFTables
 }
 
-// LockNetwork "locks" the network by adding iptables rules that drops all
-// incoming traffic in the specified network namespace. These are the same
-// rules that CRIU also creates during checkpoint.
-func (n *iptablesLocker) Lock() error {
-	const SOCCR_MARK = "0xC114"
-	const conf = "*filter\n" +
-		":CRIU - [0:0]\n" +
-		"-I INPUT -j CRIU\n" +
-		"-I OUTPUT -j CRIU\n" +
-		"-A CRIU -m mark --mark " + SOCCR_MARK + " -j ACCEPT\n" +
-		"-A CRIU -j DROP\n" +
-		"COMMIT\n"
+// Lock "locks" the network by adding iptables rules that drops all
+// incoming traffic in the specified network namespace.
+func (n *iptablesLocker) Lock(ports []uint16) error {
+	table := tableName(ports)
+	targets := ""
+	for _, port := range ports {
+		targets += fmt.Sprintf(`
+-A INPUT -j %[1]s -p tcp --dport %[2]d
+`, table, port)
+	}
+
+	conf := fmt.Sprintf(`*filter
+:%[1]s - [0:0]
+%[2]s
+-A %[1]s -j DROP
+COMMIT
+`, table, targets)
 
 	return ipTablesRestore(conf, n.netNS)
 }
 
+func portsToString(ports []uint16) []string {
+	portList := make([]string, 0, len(ports))
+	for _, port := range ports {
+		portList = append(portList, strconv.Itoa(int(port)))
+	}
+
+	return portList
+}
+
+func tableName(ports []uint16) string {
+	return fmt.Sprintf("ZEROPOD_%s", strings.Join(portsToString(ports), "_"))
+}
+
 // Unlock removes all iptables rules in the network namespace.
-func (n *iptablesLocker) Unlock(opts UnlockOptions) error {
+func (n *iptablesLocker) Unlock(ports []uint16) error {
 	const conf = "*filter\n" +
 		":INPUT ACCEPT [0:0]\n" +
 		":FORWARD ACCEPT [0:0]\n" +

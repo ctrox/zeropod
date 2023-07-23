@@ -2,6 +2,7 @@ package zeropod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -11,11 +12,16 @@ import (
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/runtime/v2/runc"
 	runcC "github.com/containerd/go-runc"
-	"github.com/ctrox/zeropod/activator"
 )
 
+const retryInterval = time.Second
+
 func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p process.Process) error {
-	if err := c.initActivators(ctx); err != nil {
+	if err := c.initActivator(ctx); err != nil {
+		if errors.Is(err, errNoPortsDetected) {
+			log.G(ctx).Infof("no ports detected, rescheduling scale down in %s", retryInterval)
+			return c.scheduleScaleDownIn(container, retryInterval)
+		}
 		return err
 	}
 
@@ -39,7 +45,7 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 	}
 
 	beforeActivator := time.Now()
-	if err := c.startActivators(ctx, container); err != nil {
+	if err := c.startActivator(ctx, container); err != nil {
 		log.G(ctx).Errorf("unable to start zeropod: %s", err)
 		return err
 	}
@@ -49,11 +55,9 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 		return nil
 	}
 
-	// after checkpointing criu locks the network until the process is
-	// restored by inserting some nftables rules. As we start our activator
-	// instead of restoring the process right away, we remove these
-	// rules. https://criu.org/CLI/opt/--network-lock
-	if err := c.netLocker.Unlock(activator.UnlockOptions{CriuPid: p.Pid()}); err != nil {
+	// after checkpointing is done and we have started our activator in place
+	// of the real process' socket, we can unlock the network again.
+	if err := c.netLocker.Unlock(c.cfg.Ports); err != nil {
 		log.G(ctx).Errorf("unable to remove nftable: %s", err)
 		return err
 	}
@@ -63,6 +67,9 @@ func (c *Container) scaleDown(ctx context.Context, container *runc.Container, p 
 }
 
 func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p process.Process) error {
+	c.checkpointRestore.Lock()
+	defer c.checkpointRestore.Unlock()
+
 	snapshotDir := snapshotDir(container.Bundle)
 
 	if err := os.RemoveAll(snapshotDir); err != nil {
@@ -106,16 +113,15 @@ func (c *Container) checkpoint(ctx context.Context, container *runc.Container, p
 		log.G(ctx).Infof("pre-dumping done in %s", time.Since(beforePreDump))
 	}
 
-	// not sure what is causing this but without adding these nftables
-	// rules here already, connections during scaling down sometimes
-	// timeout, even though criu should add these rules before
-	// checkpointing.
-	if err := c.netLocker.Lock(); err != nil {
+	// before executing the checkpoint we want to lock the network so that
+	// incoming connections during the checkpoint will be retried (on a TCP
+	// level since we drop the traffic).
+	if err := c.netLocker.Lock(c.cfg.Ports); err != nil {
 		return fmt.Errorf("unable to lock network: %w", err)
 	}
 
-	// TODO: as a result of the IP tables rules we sometimes get > 1s delays
-	// when the client is connecting during checkpointing. This can be
+	// TODO: as a result of the IP/NF tables rules we sometimes get > 1s
+	// delays when the client is connecting during checkpointing. This can be
 	// reproduced easily by running the benchmark without any sleeps. This is
 	// most probably caused by TCP SYN retransmissions:
 	// $ netstat -s | grep -i retrans

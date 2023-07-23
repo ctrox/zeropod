@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sync"
 	"time"
 
 	"github.com/containerd/containerd/errdefs"
@@ -16,14 +17,12 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/socket"
-	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 type Container struct {
 	context        context.Context
 	netLocker      activator.NetworkLocker
-	activators     []*activator.Server
-	spec           *specs.Spec
+	activator      *activator.Server
 	cfg            *Config
 	id             string
 	initialID      string
@@ -36,16 +35,21 @@ type Container struct {
 	platform       stdio.Platform
 	tracker        socket.Tracker
 	stopMetrics    context.CancelFunc
+
+	// mutex to lock during checkpoint/restore operations since concurrent
+	// restores can cause cgroup confusion. This mutex is shared between all
+	// containers.
+	checkpointRestore *sync.Mutex
 }
 
-func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Container, pt stdio.Platform) (*Container, error) {
+func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Container, pt stdio.Platform) (*Container, error) {
 	p, err := container.Process("")
 	if err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
 
 	// get network ns of our container and store it for later use
-	netNSPath, err := GetNetworkNS(spec)
+	netNSPath, err := GetNetworkNS(cfg.spec)
 	if err != nil {
 		return nil, err
 	}
@@ -74,19 +78,19 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 	go startMetricsServer(metricsCtx, container.ID)
 
 	c := &Container{
-		context:        ctx,
-		platform:       pt,
-		cfg:            cfg,
-		spec:           spec,
-		id:             container.ID,
-		initialID:      container.ID,
-		initialProcess: p,
-		process:        p,
-		logPath:        logPath,
-		netNS:          targetNS,
-		netLocker:      activator.NewNetworkLocker(targetNS),
-		tracker:        tracker,
-		stopMetrics:    stopMetrics,
+		context:           ctx,
+		platform:          pt,
+		cfg:               cfg,
+		id:                container.ID,
+		initialID:         container.ID,
+		initialProcess:    p,
+		process:           p,
+		logPath:           logPath,
+		netNS:             targetNS,
+		netLocker:         activator.NewNetworkLocker(targetNS),
+		tracker:           tracker,
+		stopMetrics:       stopMetrics,
+		checkpointRestore: cr,
 	}
 
 	running.With(c.labels()).Set(1)
@@ -95,15 +99,15 @@ func New(ctx context.Context, spec *specs.Spec, cfg *Config, container *runc.Con
 }
 
 func (c *Container) ScheduleScaleDown(container *runc.Container) error {
-	return c.scheduleScaleDown(container, c.cfg.ScaleDownDuration)
+	return c.scheduleScaleDownIn(container, c.cfg.ScaleDownDuration)
 }
 
-func (c *Container) scheduleScaleDown(container *runc.Container, in time.Duration) error {
+func (c *Container) scheduleScaleDownIn(container *runc.Container, in time.Duration) error {
 	// cancel any potential pending scaledonws
 	c.CancelScaleDown()
 
-	log.G(c.context).Infof("scheduling scale down in %s", c.cfg.ScaleDownDuration)
-	timer := time.AfterFunc(c.cfg.ScaleDownDuration, func() {
+	log.G(c.context).Infof("scheduling scale down in %s", in)
+	timer := time.AfterFunc(in, func() {
 		last, err := c.tracker.LastActivity(uint32(c.process.Pid()))
 		if errors.Is(err, socket.NoActivityRecordedErr{}) {
 			log.G(c.context).Info(err)
@@ -177,9 +181,7 @@ func (c *Container) InitialProcess() process.Process {
 }
 
 func (c *Container) StopActivator(ctx context.Context) {
-	for _, act := range c.activators {
-		act.Stop(ctx)
-	}
+	c.activator.Stop(ctx)
 }
 
 func (c *Container) Stop(ctx context.Context) {
@@ -195,51 +197,54 @@ func (c *Container) Process() process.Process {
 	return c.process
 }
 
-func (c *Container) initActivators(ctx context.Context) error {
-	// we already have activators
-	if len(c.activators) != 0 {
+var errNoPortsDetected = errors.New("no listening ports detected")
+
+func (c *Container) initActivator(ctx context.Context) error {
+	// we already have an activator
+	if c.activator != nil {
 		return nil
 	}
 
-	var err error
 	if len(c.cfg.Ports) == 0 {
 		log.G(ctx).Info("no ports defined in config, detecting listening ports")
 		// if no ports are specified in the config, we try to find all listening ports
-		c.cfg.Ports, err = ListeningPorts(c.initialProcess.Pid())
+		ports, err := ListeningPorts(c.initialProcess.Pid())
 		if err != nil {
 			return err
 		}
-	}
 
-	log.G(ctx).Infof("creating activators for ports: %v", c.cfg.Ports)
-
-	for _, port := range c.cfg.Ports {
-		srv, err := activator.NewServer(ctx, port, c.netNS, c.netLocker)
-		if err != nil {
-			return err
+		if len(ports) == 0 {
+			return errNoPortsDetected
 		}
-		c.activators = append(c.activators, srv)
+
+		c.cfg.Ports = ports
 	}
 
-	if len(c.activators) == 0 {
-		return fmt.Errorf("no activators initialized, container might not be listening on any port")
+	log.G(ctx).Infof("creating activator for ports: %v", c.cfg.Ports)
+
+	srv, err := activator.NewServer(ctx, c.cfg.Ports, c.netNS, c.netLocker)
+	if err != nil {
+		return err
+	}
+	c.activator = srv
+
+	if c.activator == nil {
+		return fmt.Errorf("no activator initialized, container might not be listening on any port")
 	}
 
 	return nil
 }
 
-// startActivators starts the activators
-func (c *Container) startActivators(ctx context.Context, container *runc.Container) error {
+// startActivator starts the activator
+func (c *Container) startActivator(ctx context.Context, container *runc.Container) error {
 	// create a new context in order to not run into deadline of parent context
 	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", RuntimeName))
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	for _, act := range c.activators {
-		if err := act.Start(ctx, c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
-			log.G(ctx).Errorf("failed to start activator: %s", err)
-			return err
-		}
+	if err := c.activator.Start(ctx, c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
+		log.G(ctx).Errorf("failed to start activator: %s", err)
+		return err
 	}
 
 	log.G(ctx).Printf("activator started")

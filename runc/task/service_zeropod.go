@@ -58,6 +58,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	w := &wrapper{
 		service:           s,
 		zeropodContainers: make(map[string]*zeropod.Container),
+		checkpointRestore: sync.Mutex{},
 	}
 	go w.processExits()
 	runcC.Monitor = reaper.Default
@@ -83,6 +84,7 @@ type wrapper struct {
 	*service
 
 	mut               sync.Mutex
+	checkpointRestore sync.Mutex
 	zeropodContainers map[string]*zeropod.Container
 }
 
@@ -129,7 +131,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 	log.G(ctx).Infof("creating zeropod container: %s", cfg.ContainerName)
 
-	zeropodContainer, err := zeropod.New(w.context, spec, cfg, container, w.platform)
+	zeropodContainer, err := zeropod.New(w.context, cfg, &w.checkpointRestore, container, w.platform)
 	if err != nil {
 		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}
@@ -142,6 +144,9 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil
 	})
 
+	// TODO: this is not a good idea (the 10s). A better idea is probably to
+	// wait whenever we try to first get the Port from the app (retry until
+	// the app is listening).
 	if err := zeropodContainer.ScheduleScaleDown(container); err != nil {
 		return nil, err
 	}
@@ -309,5 +314,7 @@ func (w *wrapper) checkProcesses(e runcC.Exit) {
 }
 
 func (s *service) AddContainer(container *runc.Container) {
+	s.mu.Lock()
 	s.containers[container.ID] = container
+	s.mu.Unlock()
 }

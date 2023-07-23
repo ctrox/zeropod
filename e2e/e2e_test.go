@@ -33,6 +33,7 @@ func TestE2E(t *testing.T) {
 
 	cases := map[string]struct {
 		pod            *corev1.Pod
+		svc            *corev1.Service
 		parallelReqs   int
 		sequentialReqs int
 		sequentialWait time.Duration
@@ -81,6 +82,20 @@ func TestE2E(t *testing.T) {
 		},
 		"pod with multiple containers": {
 			pod:            testPod(agnContainer("c1", 8080), agnContainer("c2", 8081), scaleDownAfter(0)),
+			svc:            testService(8081),
+			parallelReqs:   1,
+			sequentialReqs: 1,
+			maxReqDuration: time.Second,
+		},
+		"pod selecting specific containers": {
+			pod: testPod(
+				agnContainer("c1", 8080),
+				agnContainer("c2", 8081),
+				agnContainer("c3", 8082),
+				containerNamesAnnotation("c1,c3"),
+				portsAnnotation("c1=8080;c3=8082"),
+			),
+			svc:            testService(8082),
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			maxReqDuration: time.Second,
@@ -110,10 +125,12 @@ func TestE2E(t *testing.T) {
 				t.Skip("skipping pre-dump test as it's not supported on arm64")
 			}
 
-			svc := testService()
+			if tc.svc == nil {
+				tc.svc = testService(defaultTargetPort)
+			}
 
 			cleanupPod := createPodAndWait(t, ctx, client, tc.pod)
-			cleanupService := createServiceAndWait(t, ctx, client, svc, 1)
+			cleanupService := createServiceAndWait(t, ctx, client, tc.svc, 1)
 			defer cleanupPod()
 			defer cleanupService()
 
@@ -129,6 +146,7 @@ func TestE2E(t *testing.T) {
 						before := time.Now()
 						resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
 						if err != nil {
+							t.Log(err)
 							time.Sleep(time.Hour)
 							t.Error(err)
 							return

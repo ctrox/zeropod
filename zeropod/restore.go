@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/containerd/containerd/cio"
@@ -20,6 +21,9 @@ import (
 )
 
 func (c *Container) Restore(ctx context.Context, container *runc.Container) (*runc.Container, process.Process, error) {
+	c.checkpointRestore.Lock()
+	defer c.checkpointRestore.Unlock()
+
 	beforeRestore := time.Now()
 	go func() {
 		// as soon as we checkpoint the container, the log pipe is closed. As
@@ -57,6 +61,12 @@ func (c *Container) Restore(ctx context.Context, container *runc.Container) (*ru
 	log.G(ctx).Info("restore: process created")
 
 	if err := p.Start(ctx); err != nil {
+		b, err := os.ReadFile(filepath.Join(container.Bundle, "work", "restore.log"))
+		if err != nil {
+			log.G(ctx).Errorf("error reading restore.log: %s", err)
+		}
+		log.G(ctx).Errorf("restore.log: %s", b)
+
 		return nil, nil, fmt.Errorf("start failed during restore: %w", err)
 	}
 	restoreDuration.With(c.labels()).Observe(time.Since(beforeRestore).Seconds())

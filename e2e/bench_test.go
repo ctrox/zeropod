@@ -60,7 +60,7 @@ func BenchmarkRestore(b *testing.B) {
 			}
 
 			cleanupPod := createPodAndWait(b, ctx, client, testPod(preDump(bc.preDump), scaleDownAfter(bc.scaleDownAfter)))
-			cleanupService := createServiceAndWait(b, ctx, client, testService(), 1)
+			cleanupService := createServiceAndWait(b, ctx, client, testService(defaultTargetPort), 1)
 			b.ResetTimer()
 
 			defer func() {

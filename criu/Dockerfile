@@ -12,9 +12,9 @@ WORKDIR /workspace
 
 RUN git clone https://github.com/checkpoint-restore/criu.git
 WORKDIR /workspace/criu
-
 ARG CRIU_VERSION=v3.18
 RUN git checkout $CRIU_VERSION
+
 RUN make -j $(nproc)
 RUN mv ./criu/criu ./criu/criu-iptables
 

@@ -54,6 +54,8 @@ const (
 	installerDockerfile = "../cmd/installer/Dockerfile"
 	managerDockerfile   = "../cmd/manager/Dockerfile"
 	kustomizeDir        = "../config/kind"
+	nodePort            = 30000
+	defaultTargetPort   = 80
 )
 
 type image struct {
@@ -121,7 +123,7 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 				Labels: map[string]string{zeropod.NodeLabel: "true"},
 				// setup port map for our node port
 				ExtraPortMappings: []v1alpha4.PortMapping{{
-					ContainerPort: 30000,
+					ContainerPort: nodePort,
 					HostPort:      int32(port),
 					ListenAddress: "0.0.0.0",
 					Protocol:      v1alpha4.PortMappingProtocolTCP,
@@ -319,15 +321,15 @@ func scaleDownAfter(dur time.Duration) podOption {
 	})
 }
 
-func containerNamesAnnotation(names []string) podOption {
+func containerNamesAnnotation(names ...string) podOption {
 	return annotations(map[string]string{
-		zeropod.ScaleDownDurationAnnotationKey: strings.Join(names, ","),
+		zeropod.ContainerNamesAnnotationKey: strings.Join(names, ","),
 	})
 }
 
-func portsAnnotation(ports []string) podOption {
+func portsAnnotation(portsMap string) podOption {
 	return annotations(map[string]string{
-		zeropod.ScaleDownDurationAnnotationKey: strings.Join(ports, ","),
+		zeropod.PortsAnnotationKey: portsMap,
 	})
 }
 
@@ -351,7 +353,9 @@ func addContainer(name, image string, args []string, ports ...int) podOption {
 						Port: intstr.FromInt(ports[0]),
 					},
 				},
-				TimeoutSeconds: 5,
+				TimeoutSeconds:   2,
+				PeriodSeconds:    1,
+				FailureThreshold: 10,
 			},
 			Name:  name,
 			Image: image,
@@ -388,7 +392,7 @@ func testPod(opts ...podOption) *corev1.Pod {
 	return p
 }
 
-func testService() *corev1.Service {
+func testService(port int) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			GenerateName: "zeropod-e2e-",
@@ -398,9 +402,9 @@ func testService() *corev1.Service {
 			Selector: map[string]string{"app": "zeropod-e2e"},
 			Type:     corev1.ServiceTypeNodePort,
 			Ports: []corev1.ServicePort{{
-				Port:       80,
-				TargetPort: intstr.FromInt(80),
-				NodePort:   30000,
+				Port:       int32(port),
+				TargetPort: intstr.FromInt(port),
+				NodePort:   nodePort,
 			}},
 		},
 	}
@@ -458,7 +462,7 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 
 	// we give it some more time before returning just to make sure it's
 	// really ready to receive requests.
-	time.Sleep(time.Millisecond * 100)
+	time.Sleep(time.Millisecond * 500)
 
 	return func() {
 		client.Delete(ctx, svc)

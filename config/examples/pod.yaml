@@ -7,16 +7,23 @@ metadata:
   annotations:
     zeropod.ctrox.dev/ports-map: "container1=8080;container2=8082"
     zeropod.ctrox.dev/container-names: "container1"
-    zeropod.ctrox.dev/scaledown-duration: 10s
+    zeropod.ctrox.dev/scaledown-duration: 0s
 spec:
   runtimeClassName: zeropod
   containers:
-    - image: ealen/echo-server
+    - image: registry.k8s.io/e2e-test-images/agnhost:2.39
       name: container1
       args:
-        - --port=8080
+        - netexec
+        - --http-port=8080
+        - --udp-port=-1
       ports:
         - containerPort: 8080
+      startupProbe:
+        httpGet:
+          port: 8080
+          path: /
+        periodSeconds: 1
     - image: ealen/echo-server
       name: container2
       args:

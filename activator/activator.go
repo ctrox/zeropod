@@ -17,8 +17,8 @@ import (
 )
 
 type Server struct {
-	listener       net.Listener
-	port           uint16
+	listeners      []net.Listener
+	ports          []uint16
 	quit           chan interface{}
 	wg             sync.WaitGroup
 	onAccept       OnAccept
@@ -34,10 +34,10 @@ type Server struct {
 type OnAccept func() (*runc.Container, error)
 type OnClosed func(*runc.Container) error
 
-func NewServer(ctx context.Context, port uint16, ns ns.NetNS, locker NetworkLocker) (*Server, error) {
+func NewServer(ctx context.Context, ports []uint16, ns ns.NetNS, locker NetworkLocker) (*Server, error) {
 	s := &Server{
 		quit:           make(chan interface{}),
-		port:           port,
+		ports:          ports,
 		connectTimeout: time.Second * 5,
 		proxyTimeout:   time.Second * 5,
 		ns:             ns,
@@ -48,11 +48,22 @@ func NewServer(ctx context.Context, port uint16, ns ns.NetNS, locker NetworkLock
 }
 
 func (s *Server) Start(ctx context.Context, onAccept OnAccept, onClosed OnClosed) error {
-	addr := fmt.Sprintf("0.0.0.0:%d", s.port)
+	for _, port := range s.ports {
+		if err := s.listen(ctx, port, onAccept, onClosed); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (s *Server) listen(ctx context.Context, port uint16, onAccept OnAccept, onClosed OnClosed) error {
+	addr := fmt.Sprintf("0.0.0.0:%d", port)
 	cfg := net.ListenConfig{}
 
 	// for some reason, sometimes the address will still be in use after
 	// checkpointing, so we wrap the listen in a retry.
+	var listener net.Listener
 	if err := backoff.Retry(
 		func() error {
 			// make sure to run the listener in our target namespace
@@ -62,7 +73,8 @@ func (s *Server) Start(ctx context.Context, onAccept OnAccept, onClosed OnClosed
 					return fmt.Errorf("unable to listen: %w", err)
 				}
 
-				s.listener = l
+				listener = l
+				s.listeners = append(s.listeners, l)
 				return nil
 			})
 		},
@@ -78,7 +90,7 @@ func (s *Server) Start(ctx context.Context, onAccept OnAccept, onClosed OnClosed
 	s.onClosed = onClosed
 
 	s.wg.Add(1)
-	go s.serve(ctx)
+	go s.serve(ctx, listener, port)
 	return nil
 }
 
@@ -89,20 +101,20 @@ func (s *Server) Stop(ctx context.Context) {
 		s.proxyCancel()
 	}
 
-	if s.listener != nil {
-		s.listener.Close()
+	for _, l := range s.listeners {
+		l.Close()
 	}
 
 	s.wg.Wait()
 	log.G(ctx).Info("activator stopped")
 }
 
-func (s *Server) serve(ctx context.Context) {
+func (s *Server) serve(ctx context.Context, listener net.Listener, port uint16) {
 	defer s.wg.Done()
 	wg := sync.WaitGroup{}
 
 	for {
-		conn, err := s.listener.Accept()
+		conn, err := listener.Accept()
 		if err != nil {
 			select {
 			case <-s.quit:
@@ -121,14 +133,14 @@ func (s *Server) serve(ctx context.Context) {
 			wg.Add(1)
 			go func() {
 				log.G(ctx).Info("accepting connection")
-				s.handleConection(ctx, conn)
+				s.handleConection(ctx, conn, port)
 				wg.Done()
 			}()
 		}
 	}
 }
 
-func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
+func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16) {
 	// we close our listener after accepting the first connection so it's free
 	// to use for the to-be-activated program.
 
@@ -146,15 +158,18 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 		// we lock the network, close the listener, call onAccept and unlock only for
 		// the first connection we get.
 		beforeLock := time.Now()
-		if err := s.Network.Lock(); err != nil {
+		if err := s.Network.Lock([]uint16{port}); err != nil {
 			log.G(ctx).Errorf("error locking network: %s", err)
 			return
 		}
 		log.G(ctx).Printf("took %s to lock network", time.Since(beforeLock))
 
-		if err := s.listener.Close(); err != nil {
-			log.G(ctx).Errorf("error during listener close: %s", err)
-			return
+		var closeErr error
+		for _, listener := range s.listeners {
+			closeErr = listener.Close()
+		}
+		if closeErr != nil {
+			log.G(ctx).Errorf("error during listener close: %s", closeErr)
 		}
 
 		container, err = s.onAccept()
@@ -164,7 +179,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 		}
 
 		beforeUnlock := time.Now()
-		if err := s.Network.Unlock(UnlockOptions{}); err != nil {
+		if err := s.Network.Unlock([]uint16{port}); err != nil {
 			log.G(ctx).Errorf("error unlocking network: %s", err)
 			return
 		}
@@ -176,7 +191,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	// fork is done but we need to finish up the initial connection. We do
 	// this by connecting to our forked process and piping the tcpConn that we
 	// initially accpted.
-	initialConn, err := s.connect(ctx)
+	initialConn, err := s.connect(ctx, port)
 	if err != nil {
 		log.G(ctx).Errorf("error establishing initial connection: %s", err)
 		return
@@ -200,7 +215,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn) {
 	}
 }
 
-func (s *Server) connect(ctx context.Context) (net.Conn, error) {
+func (s *Server) connect(ctx context.Context, port uint16) (net.Conn, error) {
 	var initialConn net.Conn
 	var err error
 
@@ -218,7 +233,7 @@ func (s *Server) connect(ctx context.Context) (net.Conn, error) {
 			}
 
 			if err := s.ns.Do(func(_ ns.NetNS) error {
-				initialConn, err = net.DialTimeout("tcp4", fmt.Sprintf("localhost:%d", s.port), s.connectTimeout)
+				initialConn, err = net.DialTimeout("tcp4", fmt.Sprintf("localhost:%d", port), s.connectTimeout)
 				return err
 			}); err != nil {
 				var serr syscall.Errno
