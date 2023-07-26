@@ -232,7 +232,7 @@ zeropod_running{container="nginx",namespace="default",pod="nginx"} 0
 ## TODO
 
 - [x] Support more than 1 container in a zeropod
-	- [ ] Support scaling more than 1 container in a zeropod (use-cases might be limited here)
+	- [x] Support scaling more than 1 container in a zeropod (use-cases might be limited here)
 - [x] Fix logs after restore
 - [ ] Visibility into state (scaled down or up) from the outside
 	- [ ] k8s events?
@@ -242,7 +242,7 @@ zeropod_running{container="nginx",namespace="default",pod="nginx"} 0
 - [x] e2e testing
 - [x] Scale down/up on demand instead of time based
 	- [x] technically scaling up on demand is now possible with exec. You can just exec a non-existing process.
-- [ ] Less configuration - try to detect the port(s) a contanier is listening on
+- [x] Less configuration - try to detect the port(s) a contanier is listening on
 - [x] Configurable installer (paths etc.)
 - [ ] Create uninstaller
 - [ ] Create issues instead of this list
