@@ -3,14 +3,14 @@ resources:
 images:
   - name: manager
     newName: ghcr.io/ctrox/zeropod-manager
-    newTag: v0.1.0
+    newTag: v0.0.2
   - name: installer
     newName: ghcr.io/ctrox/zeropod-installer
-    newTag: v0.1.0
+    newTag: v0.0.2
 patches:
   - patch: |-
       - op: add
         path: /spec/template/spec/containers/1/args/-
-        value: -criu-image=ghcr.io/ctrox/zeropod-criu:v3.18
+        value: -criu-image=ghcr.io/ctrox/zeropod-criu:a2c4dd2
     target:
       kind: DaemonSet
