@@ -36,6 +36,7 @@ type Container struct {
 	platform       stdio.Platform
 	tracker        socket.Tracker
 	stopMetrics    context.CancelFunc
+	setContainer   func(container *runc.Container)
 
 	// mutex to lock during checkpoint/restore operations since concurrent
 	// restores can cause cgroup confusion. This mutex is shared between all
@@ -197,6 +198,10 @@ func (c *Container) Stop(ctx context.Context) {
 
 func (c *Container) Process() process.Process {
 	return c.process
+}
+
+func (c *Container) RegisterSetContainer(f func(*runc.Container)) {
+	c.setContainer = f
 }
 
 var errNoPortsDetected = errors.New("no listening ports detected")

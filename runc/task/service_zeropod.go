@@ -136,6 +136,10 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}
 
+	zeropodContainer.RegisterSetContainer(func(c *runc.Container) {
+		w.setContainer(c)
+	})
+
 	w.zeropodContainers[r.ID] = zeropodContainer
 
 	w.shutdown.RegisterCallback(func(ctx context.Context) error {
@@ -184,14 +188,14 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 		zeropodContainer.StopActivator(ctx)
 
-		restoredContainer, p, err := zeropodContainer.Restore(ctx, container)
+		_, p, err := zeropodContainer.Restore(ctx, container)
 		if err != nil {
 			// restore failed, this is currently unrecoverable, so we shutdown
 			// our shim and let containerd recreate it.
 			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
 			os.Exit(1)
 		}
-		w.AddContainer(restoredContainer)
+
 		zeropodContainer.SetScaledDown(false)
 		log.G(ctx).Printf("restored process for exec: %d in %s", p.Pid(), time.Since(beforeRestore))
 	}
@@ -220,6 +224,11 @@ func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 }
 
 func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
+	// our container might be just in the process of checkpoint/restore, so we
+	// ensure that has finished.
+	w.checkpointRestore.Lock()
+	defer w.checkpointRestore.Unlock()
+
 	zeropodContainer, err := w.getZeropodContainer(r.ID)
 	if err != nil {
 		return w.service.Kill(ctx, r)
@@ -229,6 +238,7 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 		log.G(ctx).Infof("requested scaled down process %d to be killed", zeropodContainer.Process().Pid())
 		zeropodContainer.Process().SetExited(0)
 		zeropodContainer.InitialProcess().SetExited(0)
+
 		return w.service.Kill(ctx, r)
 	}
 
@@ -313,7 +323,9 @@ func (w *wrapper) checkProcesses(e runcC.Exit) {
 	}
 }
 
-func (s *service) AddContainer(container *runc.Container) {
+// setContainer replaces the container in the task service. This is important
+// to call after restore since the container object will have changed.
+func (s *service) setContainer(container *runc.Container) {
 	s.mu.Lock()
 	s.containers[container.ID] = container
 	s.mu.Unlock()

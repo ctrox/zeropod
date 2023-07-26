@@ -77,6 +77,10 @@ func (c *Container) Restore(ctx context.Context, container *runc.Container) (*ru
 	c.id = container.ID
 	c.process = p
 
+	if c.setContainer != nil {
+		c.setContainer(container)
+	}
+
 	return container, p, nil
 }
 
