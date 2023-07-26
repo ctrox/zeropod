@@ -20,7 +20,7 @@ import (
 	"github.com/containerd/containerd/runtime/v2/task"
 )
 
-func (c *Container) Restore(ctx context.Context, container *runc.Container) (*runc.Container, process.Process, error) {
+func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
 	c.checkpointRestore.Lock()
 	defer c.checkpointRestore.Unlock()
 
@@ -29,20 +29,20 @@ func (c *Container) Restore(ctx context.Context, container *runc.Container) (*ru
 		// as soon as we checkpoint the container, the log pipe is closed. As
 		// we currently have no way to instruct containerd to restore the logs
 		// and pipe it again, we do it manually.
-		if err := c.restoreLoggers(container.ID, c.initialProcess.Stdio()); err != nil {
+		if err := c.restoreLoggers(c.ID(), c.initialProcess.Stdio()); err != nil {
 			log.G(ctx).Errorf("error restoring loggers: %s", err)
 		}
 	}()
 
 	createReq := &task.CreateTaskRequest{
-		ID:               container.ID,
-		Bundle:           container.Bundle,
+		ID:               c.ID(),
+		Bundle:           c.Bundle,
 		Terminal:         false,
 		Stdin:            c.initialProcess.Stdio().Stdin,
 		Stdout:           c.initialProcess.Stdio().Stdout,
 		Stderr:           c.initialProcess.Stdio().Stderr,
 		ParentCheckpoint: "",
-		Checkpoint:       containerDir(container.Bundle),
+		Checkpoint:       containerDir(c.Bundle),
 	}
 
 	if c.cfg.DisableCheckpointing {
@@ -74,7 +74,7 @@ func (c *Container) Restore(ctx context.Context, container *runc.Container) (*ru
 	}
 	restoreDuration.With(c.labels()).Observe(time.Since(beforeRestore).Seconds())
 
-	c.id = container.ID
+	c.Container = container
 	c.process = p
 
 	if c.setContainer != nil {

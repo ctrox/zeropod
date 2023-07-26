@@ -151,7 +151,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	// TODO: this is not a good idea (the 10s). A better idea is probably to
 	// wait whenever we try to first get the Port from the app (retry until
 	// the app is listening).
-	if err := zeropodContainer.ScheduleScaleDown(container); err != nil {
+	if err := zeropodContainer.ScheduleScaleDown(); err != nil {
 		return nil, err
 	}
 
@@ -166,11 +166,6 @@ func (w *wrapper) getZeropodContainer(id string) (*zeropod.Container, bool) {
 }
 
 func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
-	container, err := w.getContainer(r.ID)
-	if err != nil {
-		return nil, err
-	}
-
 	zeropodContainer, ok := w.getZeropodContainer(r.ID)
 	if !ok {
 		return w.service.Exec(ctx, r)
@@ -185,7 +180,7 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 
 		zeropodContainer.StopActivator(ctx)
 
-		_, p, err := zeropodContainer.Restore(ctx, container)
+		_, p, err := zeropodContainer.Restore(ctx)
 		if err != nil {
 			// restore failed, this is currently unrecoverable, so we shutdown
 			// our shim and let containerd recreate it.
@@ -207,13 +202,8 @@ func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	}
 
 	if len(r.ExecID) != 0 {
-		container, err := w.getContainer(r.ID)
-		if err != nil {
-			return nil, err
-		}
-
 		// on delete of an exec container we want to schedule scaling down again.
-		if err := zeropodContainer.ScheduleScaleDown(container); err != nil {
+		if err := zeropodContainer.ScheduleScaleDown(); err != nil {
 			return nil, err
 		}
 	}

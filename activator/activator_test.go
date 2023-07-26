@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,7 +37,7 @@ func TestActivator(t *testing.T) {
 	}))
 
 	if err := s.Start(ctx,
-		func() (*runc.Container, error) {
+		func() error {
 			l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
 			if err != nil {
 				log.Fatal(err)
@@ -64,9 +63,9 @@ func TestActivator(t *testing.T) {
 				ts2.Close()
 			})
 
-			return nil, nil
+			return nil
 		},
-		func(c *runc.Container) error {
+		func() error {
 			return nil
 		},
 	); err != nil {

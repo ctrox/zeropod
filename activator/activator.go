@@ -12,7 +12,6 @@ import (
 
 	"github.com/cenkalti/backoff/v4"
 	"github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containernetworking/plugins/pkg/ns"
 )
 
@@ -31,8 +30,8 @@ type Server struct {
 	Network        NetworkLocker
 }
 
-type OnAccept func() (*runc.Container, error)
-type OnClosed func(*runc.Container) error
+type OnAccept func() error
+type OnClosed func() error
 
 func NewServer(ctx context.Context, ports []uint16, ns ns.NetNS, locker NetworkLocker) (*Server, error) {
 	s := &Server{
@@ -151,9 +150,8 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16
 	// (something like -count=50).
 	defer conn.Close()
 
-	var container *runc.Container
 	var err error
-
+	listenerClosed := false
 	s.once.Do(func() {
 		// we lock the network, close the listener, call onAccept and unlock only for
 		// the first connection we get.
@@ -171,9 +169,9 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16
 		if closeErr != nil {
 			log.G(ctx).Errorf("error during listener close: %s", closeErr)
 		}
+		listenerClosed = true
 
-		container, err = s.onAccept()
-		if err != nil {
+		if err := s.onAccept(); err != nil {
 			log.G(ctx).Errorf("error during onAccept: %s", err)
 			return
 		}
@@ -208,8 +206,8 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16
 
 	log.G(ctx).Println("initial connection closed", conn.RemoteAddr().String())
 
-	if container != nil {
-		if err := s.onClosed(container); err != nil {
+	if listenerClosed {
+		if err := s.onClosed(); err != nil {
 			log.G(ctx).Error(err)
 		}
 	}

@@ -20,11 +20,12 @@ import (
 )
 
 type Container struct {
+	*runc.Container
+
 	context        context.Context
 	netLocker      activator.NetworkLocker
 	activator      *activator.Server
 	cfg            *Config
-	id             string
 	initialProcess process.Process
 	process        process.Process
 	cgroup         any
@@ -79,13 +80,13 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 	go startMetricsServer(metricsCtx, container.ID)
 
 	c := &Container{
+		Container:         container,
 		context:           ctx,
 		platform:          pt,
 		cfg:               cfg,
-		id:                container.ID,
-		initialProcess:    p,
 		cgroup:            container.Cgroup(),
 		process:           p,
+		initialProcess:    p,
 		logPath:           logPath,
 		netNS:             targetNS,
 		netLocker:         activator.NewNetworkLocker(targetNS),
@@ -99,11 +100,11 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 	return c, nil
 }
 
-func (c *Container) ScheduleScaleDown(container *runc.Container) error {
-	return c.scheduleScaleDownIn(container, c.cfg.ScaleDownDuration)
+func (c *Container) ScheduleScaleDown() error {
+	return c.scheduleScaleDownIn(c.cfg.ScaleDownDuration)
 }
 
-func (c *Container) scheduleScaleDownIn(container *runc.Container, in time.Duration) error {
+func (c *Container) scheduleScaleDownIn(in time.Duration) error {
 	// cancel any potential pending scaledonws
 	c.CancelScaleDown()
 
@@ -134,7 +135,7 @@ func (c *Container) scheduleScaleDownIn(container *runc.Container, in time.Durat
 
 		log.G(c.context).Info("scaling down after scale down duration is up")
 
-		if err := c.scaleDown(c.context, container, c.process); err != nil {
+		if err := c.scaleDown(c.context); err != nil {
 			// checkpointing failed, this is currently unrecoverable, so we
 			// shutdown our shim and let containerd recreate it.
 			log.G(c.context).Fatalf("scale down failed: %s", err)
@@ -150,7 +151,6 @@ func (c *Container) CancelScaleDown() {
 	if c.scaleDownTimer == nil {
 		return
 	}
-
 	c.scaleDownTimer.Stop()
 }
 
@@ -170,7 +170,7 @@ func (c *Container) ScaledDown() bool {
 }
 
 func (c *Container) ID() string {
-	return c.id
+	return c.Container.ID
 }
 
 func (c *Container) InitialProcess() process.Process {
@@ -237,13 +237,13 @@ func (c *Container) initActivator(ctx context.Context) error {
 }
 
 // startActivator starts the activator
-func (c *Container) startActivator(ctx context.Context, container *runc.Container) error {
+func (c *Container) startActivator(ctx context.Context) error {
 	// create a new context in order to not run into deadline of parent context
 	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", RuntimeName))
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := c.activator.Start(ctx, c.restoreHandler(ctx, container), c.checkpointHandler(ctx)); err != nil {
+	if err := c.activator.Start(ctx, c.restoreHandler(ctx), c.checkpointHandler(ctx)); err != nil {
 		log.G(ctx).Errorf("failed to start activator: %s", err)
 		return err
 	}
@@ -252,8 +252,8 @@ func (c *Container) startActivator(ctx context.Context, container *runc.Containe
 	return nil
 }
 
-func (c *Container) restoreHandler(ctx context.Context, container *runc.Container) activator.OnAccept {
-	return func() (*runc.Container, error) {
+func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
+	return func() error {
 		log.G(ctx).Printf("got a request")
 
 		// we "lock" the network to ensure no requests get a connection
@@ -261,28 +261,29 @@ func (c *Container) restoreHandler(ctx context.Context, container *runc.Containe
 		// the process is restored we remove the lock and let traffic flow.
 
 		beforeRestore := time.Now()
-		restoredContainer, p, err := c.Restore(ctx, container)
+		restoredContainer, p, err := c.Restore(ctx)
 		if err != nil {
 			// restore failed, this is currently unrecoverable, so we shutdown
 			// our shim and let containerd recreate it.
 			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
 			os.Exit(1)
 		}
+		c.Container = restoredContainer
 
 		if err := c.tracker.TrackPid(uint32(p.Pid())); err != nil {
-			return nil, fmt.Errorf("unable to track pid %d: %w", p.Pid(), err)
+			return fmt.Errorf("unable to track pid %d: %w", p.Pid(), err)
 		}
 
 		c.SetScaledDown(false)
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
-		return restoredContainer, nil
+		return nil
 	}
 }
 
 func (c *Container) checkpointHandler(ctx context.Context) activator.OnClosed {
-	return func(container *runc.Container) error {
-		return c.ScheduleScaleDown(container)
+	return func() error {
+		return c.ScheduleScaleDown()
 	}
 }
 
