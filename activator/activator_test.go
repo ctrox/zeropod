@@ -35,6 +35,10 @@ func TestActivator(t *testing.T) {
 	for name, tc := range tests {
 		tc := tc
 		t.Run(name, func(t *testing.T) {
+			if tc.netLocker.Backend() == NetworkLockerNFTables && !nftablesSupported() {
+				t.Skip("skipping nftables test as system does not support it")
+			}
+
 			ctx, cancel := context.WithCancel(context.Background())
 
 			port, port2, err := getFreePorts()
