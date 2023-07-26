@@ -25,7 +25,6 @@ type Container struct {
 	activator      *activator.Server
 	cfg            *Config
 	id             string
-	initialID      string
 	initialProcess process.Process
 	process        process.Process
 	cgroup         any
@@ -84,7 +83,6 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		platform:          pt,
 		cfg:               cfg,
 		id:                container.ID,
-		initialID:         container.ID,
 		initialProcess:    p,
 		cgroup:            container.Cgroup(),
 		process:           p,
@@ -173,10 +171,6 @@ func (c *Container) ScaledDown() bool {
 
 func (c *Container) ID() string {
 	return c.id
-}
-
-func (c *Container) InitialID() string {
-	return c.initialID
 }
 
 func (c *Container) InitialProcess() process.Process {

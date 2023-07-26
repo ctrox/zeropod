@@ -158,14 +158,11 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	return resp, err
 }
 
-func (w *wrapper) getZeropodContainer(id string) (*zeropod.Container, error) {
+func (w *wrapper) getZeropodContainer(id string) (*zeropod.Container, bool) {
 	w.mut.Lock()
-	container := w.zeropodContainers[id]
+	container, ok := w.zeropodContainers[id]
 	w.mut.Unlock()
-	if container == nil {
-		return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "zeropod container not created")
-	}
-	return container, nil
+	return container, ok
 }
 
 func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
@@ -174,15 +171,15 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		return nil, err
 	}
 
-	zeropodContainer, err := w.getZeropodContainer(r.ID)
-	if err != nil {
+	zeropodContainer, ok := w.getZeropodContainer(r.ID)
+	if !ok {
 		return w.service.Exec(ctx, r)
 	}
 
 	zeropodContainer.CancelScaleDown()
 
 	// restore it for exec in case we are scaled down
-	if w.isScaledDownContainer(r.ID, zeropodContainer) {
+	if zeropodContainer.ScaledDown() {
 		log.G(ctx).Printf("got exec for scaled down container, restoring")
 		beforeRestore := time.Now()
 
@@ -204,12 +201,12 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 }
 
 func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
-	zeropodContainer, err := w.getZeropodContainer(r.ID)
-	if err != nil {
+	zeropodContainer, ok := w.getZeropodContainer(r.ID)
+	if !ok {
 		return w.service.Delete(ctx, r)
 	}
 
-	if len(r.ExecID) != 0 && r.ID == zeropodContainer.InitialID() {
+	if len(r.ExecID) != 0 {
 		container, err := w.getContainer(r.ID)
 		if err != nil {
 			return nil, err
@@ -229,12 +226,12 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	w.checkpointRestore.Lock()
 	defer w.checkpointRestore.Unlock()
 
-	zeropodContainer, err := w.getZeropodContainer(r.ID)
-	if err != nil {
+	zeropodContainer, ok := w.getZeropodContainer(r.ID)
+	if !ok {
 		return w.service.Kill(ctx, r)
 	}
 
-	if len(r.ExecID) == 0 && w.isScaledDownContainer(r.ID, zeropodContainer) {
+	if len(r.ExecID) == 0 && zeropodContainer.ScaledDown() {
 		log.G(ctx).Infof("requested scaled down process %d to be killed", zeropodContainer.Process().Pid())
 		zeropodContainer.Process().SetExited(0)
 		zeropodContainer.InitialProcess().SetExited(0)
@@ -242,8 +239,8 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 		return w.service.Kill(ctx, r)
 	}
 
-	if len(r.ExecID) == 0 && zeropodContainer.InitialID() == r.ID {
-		log.G(ctx).Infof("requested initial container %s to be killed", zeropodContainer.InitialID())
+	if len(r.ExecID) == 0 {
+		log.G(ctx).Infof("requested container %s to be killed", r.ID)
 		zeropodContainer.Stop(ctx)
 
 		if err := zeropodContainer.Process().Kill(ctx, r.Signal, r.All); err != nil {
@@ -254,14 +251,6 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 	}
 
 	return w.service.Kill(ctx, r)
-}
-
-func (w *wrapper) isScaledDownContainer(id string, container *zeropod.Container) bool {
-	if container == nil {
-		return false
-	}
-
-	return id == container.InitialID() && container.ScaledDown()
 }
 
 func (w *wrapper) processExits() {
@@ -294,9 +283,9 @@ func (w *wrapper) checkProcesses(e runcC.Exit) {
 				}
 			}
 
-			zeropodContainer, err := w.getZeropodContainer(container.ID)
-			if err == nil {
-				if zeropodContainer.ScaledDown() && container.ID == zeropodContainer.ID() {
+			zeropodContainer, ok := w.getZeropodContainer(container.ID)
+			if ok {
+				if zeropodContainer.ScaledDown() {
 					log.G(w.context).Infof("not setting exited because process has scaled down: %v", p.Pid())
 					continue
 				}
