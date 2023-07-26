@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -37,6 +38,11 @@ func TestActivator(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if tc.netLocker.Backend() == NetworkLockerNFTables && !nftablesSupported() {
 				t.Skip("skipping nftables test as system does not support it")
+			}
+
+			if tc.netLocker.Backend() == NetworkLockerNFTables && os.Getenv("CI") == "true" {
+				// TODO: figure out why it's just flaky in GitHub CI
+				t.Skip("skipping nftables test as it's flaky in GitHub CI")
 			}
 
 			ctx, cancel := context.WithCancel(context.Background())

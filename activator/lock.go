@@ -136,7 +136,7 @@ type iptablesLocker struct {
 }
 
 func (n *iptablesLocker) Backend() NetworkLockerBackend {
-	return NetworkLockerNFTables
+	return NetworkLockerIPTables
 }
 
 // Lock "locks" the network by adding iptables rules that drops all
