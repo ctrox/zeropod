@@ -1,0 +1,6 @@
+resources:
+  - uninstaller.yaml
+images:
+  - name: installer
+    newName: ghcr.io/ctrox/zeropod-installer
+    newTag: dev

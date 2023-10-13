@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -24,10 +25,12 @@ import (
 )
 
 var (
-	criuImage    = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:a2c4dd2", "criu image to use.")
-	criuNFTables = flag.Bool("criu-nftables", true, "use criu with nftables")
-	runtime      = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
-	hostOptPath  = flag.String("host-opt-path", "/opt/zeropod", "path where zeropod binaries are stored on the host")
+	criuImage      = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:a2c4dd2", "criu image to use.")
+	criuNFTables   = flag.Bool("criu-nftables", true, "use criu with nftables")
+	runtime        = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
+	hostOptPath    = flag.String("host-opt-path", "/opt/zeropod", "path where zeropod binaries are stored on the host")
+	uninstall      = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
+	installTimeout = flag.Duration("timeout", time.Minute, "duration the installer waits for the installation to complete")
 )
 
 type containerRuntime string
@@ -37,18 +40,19 @@ const (
 	runtimeRKE2       containerRuntime = "rke2"
 	runtimeK3S        containerRuntime = "k3s"
 
-	optPath          = "/opt/zeropod"
-	binPath          = "bin/"
-	criuConfigFile   = "/etc/criu/default.conf"
-	shimBinaryName   = "containerd-shim-zeropod-v2"
-	runtimePath      = "/build/" + shimBinaryName
-	containerdConfig = "/etc/containerd/config.toml"
-	templateSuffix   = ".tmpl"
-	runtimeClassName = "zeropod"
-	runtimeHandler   = "zeropod"
-	defaultCriuBin   = "criu"
-	criuIPTablesBin  = "criu-iptables"
-	criuConfig       = `tcp-close
+	optPath            = "/opt/zeropod"
+	binPath            = "bin/"
+	criuConfigFile     = "/etc/criu/default.conf"
+	shimBinaryName     = "containerd-shim-zeropod-v2"
+	runtimePath        = "/build/" + shimBinaryName
+	containerdConfig   = "/etc/containerd/config.toml"
+	configBackupSuffix = ".original"
+	templateSuffix     = ".tmpl"
+	runtimeClassName   = "zeropod"
+	runtimeHandler     = "zeropod"
+	defaultCriuBin     = "criu"
+	criuIPTablesBin    = "criu-iptables"
+	criuConfig         = `tcp-close
 skip-in-flight
 network-lock skip
 `
@@ -75,19 +79,37 @@ network-lock skip
 func main() {
 	flag.Parse()
 
-	if err := installCriu(); err != nil {
+	client, err := inClusterClient()
+	if err != nil {
+		log.Fatalf("unable to create in-cluster client: %s", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), *installTimeout)
+	defer cancel()
+
+	if *uninstall {
+		if err := runUninstall(ctx, client); err != nil {
+			log.Fatalf("error uninstalling zeropod: %s", err)
+		}
+
+		log.Println("uninstaller completed")
+		// we exit after uninstall as this should be run as a one-time job
+		os.Exit(0)
+	}
+
+	if err := installCriu(ctx); err != nil {
 		log.Fatalf("error installing criu: %s", err)
 	}
 
 	log.Println("installed criu binaries")
 
-	if err := installRuntime(containerRuntime(*runtime)); err != nil {
+	if err := installRuntime(ctx, containerRuntime(*runtime)); err != nil {
 		log.Fatalf("error installing runtime: %s", err)
 	}
 
 	log.Println("installed runtime")
 
-	if err := installRuntimeClass(); err != nil {
+	if err := installRuntimeClass(ctx, client); err != nil {
 		log.Fatalf("error installing zeropod runtimeClass: %s", err)
 	}
 
@@ -106,13 +128,11 @@ func main() {
 	<-quitChannel
 }
 
-func installCriu() error {
+func installCriu(ctx context.Context) error {
 	client, err := containerd.New("/run/containerd/containerd.sock", containerd.WithDefaultNamespace("k8s"))
 	if err != nil {
 		return err
 	}
-
-	ctx := context.Background()
 
 	image, err := client.Pull(ctx, *criuImage)
 	if err != nil {
@@ -149,12 +169,10 @@ func installCriu() error {
 	return nil
 }
 
-func installRuntime(runtime containerRuntime) error {
+func installRuntime(ctx context.Context, runtime containerRuntime) error {
 	log.Printf("installing runtime for %s", runtime)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
-	defer cancel()
-	conn, err := dbus.NewSystemdConnectionContext(context.Background())
+	conn, err := dbus.NewSystemdConnectionContext(ctx)
 	if err != nil {
 		return fmt.Errorf("unable to connect to dbus: %w", err)
 	}
@@ -176,7 +194,7 @@ func installRuntime(runtime containerRuntime) error {
 		return fmt.Errorf("unable to write shim file: %w", err)
 	}
 
-	restartRequired, err := configureContainerd(runtime)
+	restartRequired, err := configureContainerd(runtime, containerdConfig)
 	if err != nil {
 		return fmt.Errorf("unable to configure containerd: %w", err)
 	}
@@ -224,7 +242,7 @@ func restartUnit(ctx context.Context, conn *dbus.Conn, service string) error {
 	return nil
 }
 
-func configureContainerd(runtime containerRuntime) (restartRequired bool, err error) {
+func configureContainerd(runtime containerRuntime, containerdConfig string) (restartRequired bool, err error) {
 	conf := &config.Config{}
 	if err := config.LoadConfig(containerdConfig, conf); err != nil {
 		return false, err
@@ -237,19 +255,22 @@ func configureContainerd(runtime containerRuntime) (restartRequired bool, err er
 		}
 	}
 
-	containerdCfg := containerdConfig
+	// backup the original config
+	if err := copyConfig(containerdConfig, containerdConfig+configBackupSuffix); err != nil {
+		return false, err
+	}
 
 	if runtime == runtimeRKE2 || runtime == runtimeK3S {
 		// for rke2/k3s the containerd config has to be customized via the
 		// config.toml.tmpl file. So we make a copy of the original config and
 		// insert our shim config into the template.
-		if out, err := exec.Command("cp", containerdCfg, containerdCfg+templateSuffix).CombinedOutput(); err != nil {
+		if out, err := exec.Command("cp", containerdConfig, containerdConfig+templateSuffix).CombinedOutput(); err != nil {
 			return false, fmt.Errorf("unable to copy config.toml to template: %s: %w", out, err)
 		}
-		containerdCfg = containerdConfig + templateSuffix
+		containerdConfig = containerdConfig + templateSuffix
 	}
 
-	cfg, err := os.OpenFile(containerdCfg, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	cfg, err := os.OpenFile(containerdConfig, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {
 		return false, err
 	}
@@ -258,7 +279,7 @@ func configureContainerd(runtime containerRuntime) (restartRequired bool, err er
 		return false, err
 	}
 
-	configured, err := optConfigured()
+	configured, err := optConfigured(containerdConfig)
 	if err != nil {
 		return false, err
 	}
@@ -272,7 +293,38 @@ func configureContainerd(runtime containerRuntime) (restartRequired bool, err er
 	return true, nil
 }
 
-func optConfigured() (bool, error) {
+func restoreContainerdConfig() error {
+	if _, err := os.Stat(containerdConfig + configBackupSuffix); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			log.Println("could not find config backup, either it has already been restored or it never existed")
+			return nil
+		}
+	}
+
+	if err := copyConfig(containerdConfig+configBackupSuffix, containerdConfig); err != nil {
+		return err
+	}
+
+	if err := os.Remove(containerdConfig + configBackupSuffix); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func copyConfig(from, to string) error {
+	originalConfig, err := os.ReadFile(from)
+	if err != nil {
+		return fmt.Errorf("could not read containerd config: %w", err)
+	}
+	if err := os.WriteFile(to, originalConfig, os.ModePerm); err != nil {
+		return fmt.Errorf("could not write config backup: %w", err)
+	}
+
+	return nil
+}
+
+func optConfigured(containerdConfig string) (bool, error) {
 	conf := &config.Config{}
 	if err := config.LoadConfig(containerdConfig, conf); err != nil {
 		return false, err
@@ -286,28 +338,52 @@ func optConfigured() (bool, error) {
 	return false, nil
 }
 
-func installRuntimeClass() error {
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		return err
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		return err
-	}
-
+func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
 	runtimeClass := &nodev1.RuntimeClass{
 		ObjectMeta: v1.ObjectMeta{Name: runtimeClassName},
 		Handler:    runtimeHandler,
 	}
 
-	if _, err := clientset.NodeV1().RuntimeClasses().Create(
-		context.Background(), runtimeClass, v1.CreateOptions{},
-	); err != nil {
+	if _, err := client.NodeV1().RuntimeClasses().Create(ctx, runtimeClass, v1.CreateOptions{}); err != nil {
 		if !kerrors.IsAlreadyExists(err) {
 			return err
 		}
+	}
+
+	return nil
+}
+
+func removeRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
+	if err := client.NodeV1().RuntimeClasses().Delete(ctx, runtimeClassName, v1.DeleteOptions{}); err != nil {
+		if !kerrors.IsNotFound(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func inClusterClient() (kubernetes.Interface, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, err
+	}
+
+	return kubernetes.NewForConfig(config)
+}
+
+// runUninstall removes all components installed by zeropod and restores the
+// original configuration.
+func runUninstall(ctx context.Context, client kubernetes.Interface) error {
+	if err := removeRuntimeClass(ctx, client); err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(optPath); err != nil {
+		return fmt.Errorf("removing opt path: %w", err)
+	}
+
+	if err := restoreContainerdConfig(); err != nil {
+		return err
 	}
 
 	return nil

@@ -1,0 +1,55 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: zeropod-uninstaller
+  namespace: zeropod-system
+  labels:
+    app.kubernetes.io/name: zeropod-node
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: zeropod-node
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: zeropod-node
+      nodeSelector:
+        zeropod.ctrox.dev/node: "true"
+      containers:
+        - name: installer
+          image: installer
+          args:
+            - -uninstall
+          imagePullPolicy: IfNotPresent
+          volumeMounts:
+            - mountPath: /etc/containerd
+              name: containerd-etc
+            - mountPath: /run/containerd
+              name: containerd-run
+            - mountPath: /opt
+              name: opt
+            - mountPath: /run/systemd
+              name: systemd-run
+            - mountPath: /etc/criu
+              name: criu-etc
+      tolerations:
+        - key: kubernetes.io/arch
+          operator: Equal
+          value: arm64
+          effect: NoSchedule
+      volumes:
+        - name: containerd-etc
+          hostPath:
+            path: /etc/containerd
+        - name: containerd-run
+          hostPath:
+            path: /run/containerd
+        - name: opt
+          hostPath:
+            path: /opt
+        - name: systemd-run
+          hostPath:
+            path: /run/systemd
+        - name: criu-etc
+          hostPath:
+            path: /etc/criu
