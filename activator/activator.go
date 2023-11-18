@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
-	"github.com/containerd/containerd/log"
+	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 )
 

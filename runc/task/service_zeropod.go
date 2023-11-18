@@ -7,33 +7,33 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ctrox/zeropod/zeropod"
-	ptypes "github.com/gogo/protobuf/types"
-	"github.com/sirupsen/logrus"
-
 	"github.com/containerd/cgroups"
-	eventstypes "github.com/containerd/containerd/api/events"
-	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/pkg/cri/annotations"
-	"github.com/containerd/containerd/pkg/oom"
-	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
-	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
-	"github.com/containerd/containerd/pkg/process"
-	"github.com/containerd/containerd/pkg/shutdown"
-	"github.com/containerd/containerd/runtime/v2/runc"
-	"github.com/containerd/containerd/runtime/v2/shim"
-	taskAPI "github.com/containerd/containerd/runtime/v2/task"
-	"github.com/containerd/containerd/sys/reaper"
+	eventstypes "github.com/containerd/containerd/v2/api/events"
+	taskAPI "github.com/containerd/containerd/v2/api/runtime/task/v3"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
+	"github.com/containerd/containerd/v2/errdefs"
+	"github.com/containerd/containerd/v2/pkg/cri/annotations"
+	"github.com/containerd/containerd/v2/pkg/oom"
+	oomv1 "github.com/containerd/containerd/v2/pkg/oom/v1"
+	oomv2 "github.com/containerd/containerd/v2/pkg/oom/v2"
+	"github.com/containerd/containerd/v2/pkg/process"
+	"github.com/containerd/containerd/v2/pkg/shutdown"
+	"github.com/containerd/containerd/v2/protobuf"
+	ptypes "github.com/containerd/containerd/v2/protobuf/types"
+	"github.com/containerd/containerd/v2/runtime/v2/shim"
+	"github.com/containerd/containerd/v2/sys/reaper"
 	runcC "github.com/containerd/go-runc"
+	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+	"github.com/ctrox/zeropod/zeropod"
+	"github.com/sirupsen/logrus"
 )
 
 var (
-	_ = (taskAPI.TaskService)(&wrapper{})
+	_ = shim.TTRPCService(&wrapper{})
 )
 
-func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TaskService, error) {
+func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TTRPCTaskService, error) {
 	var (
 		ep  oom.Watcher
 		err error
@@ -48,12 +48,14 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	}
 	go ep.Run(ctx)
 	s := &service{
-		context:    ctx,
-		events:     make(chan interface{}, 128),
-		ec:         reaper.Default.Subscribe(),
-		ep:         ep,
-		shutdown:   sd,
-		containers: make(map[string]*runc.Container),
+		context:         ctx,
+		events:          make(chan interface{}, 128),
+		ec:              reaper.Default.Subscribe(),
+		ep:              ep,
+		shutdown:        sd,
+		containers:      make(map[string]*runc.Container),
+		running:         make(map[int][]containerProcess),
+		exitSubscribers: make(map[*map[int][]runcC.Exit]struct{}),
 	}
 	w := &wrapper{
 		service:           s,
@@ -77,7 +79,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		})
 	}
 
-	return w, err
+	return w, nil
 }
 
 type wrapper struct {
@@ -89,7 +91,7 @@ type wrapper struct {
 }
 
 func (w *wrapper) RegisterTTRPC(server *ttrpc.Server) error {
-	taskAPI.RegisterTaskService(server, w)
+	taskAPI.RegisterTTRPCTaskService(server, w)
 	return nil
 }
 
@@ -289,12 +291,12 @@ func (w *wrapper) checkProcesses(e runcC.Exit) {
 			}
 
 			p.SetExited(e.Status)
-			w.sendL(&eventstypes.TaskExit{
+			w.send(&eventstypes.TaskExit{
 				ContainerID: container.ID,
 				ID:          p.ID(),
 				Pid:         uint32(e.Pid),
 				ExitStatus:  uint32(e.Status),
-				ExitedAt:    p.ExitedAt(),
+				ExitedAt:    protobuf.ToTimestamp(p.ExitedAt()),
 			})
 			return
 		}

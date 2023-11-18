@@ -8,9 +8,9 @@ import (
 	"path"
 	"time"
 
-	"github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/pkg/process"
+	"github.com/containerd/containerd/v2/pkg/process"
 	runcC "github.com/containerd/go-runc"
+	"github.com/containerd/log"
 )
 
 const retryInterval = time.Second

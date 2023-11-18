@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/containerd/containerd/log"
-	"github.com/containerd/containerd/runtime/v2/shim"
+	"github.com/containerd/containerd/v2/runtime/v2/shim"
+	"github.com/containerd/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -86,10 +86,10 @@ func startMetricsServer(ctx context.Context, containerID string) {
 	}
 
 	// write metrics address to filesystem
-	if err := shim.WriteAddress("metrics_address", metricsAddress); err != nil {
-		log.G(ctx).WithError(err).Errorf("failed to write metrics address")
-		return
-	}
+	// if err := shim.WriteAddress("metrics_address", metricsAddress); err != nil {
+	// 	log.G(ctx).WithError(err).Errorf("failed to write metrics address")
+	// 	return
+	// }
 
 	mux := http.NewServeMux()
 	handler := promhttp.HandlerFor(

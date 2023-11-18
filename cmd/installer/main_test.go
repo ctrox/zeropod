@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"os"
 	"testing"
 
@@ -60,8 +61,9 @@ func TestConfigureContainerd(t *testing.T) {
 
 	require.NoError(t, os.WriteFile(configFile.Name(), []byte(kindContainerdConfig), os.ModePerm))
 
-	restart, err := configureContainerd(runtimeContainerd, configFile.Name())
+	restart, err := configureContainerd(context.Background(), runtimeContainerd, configFile.Name())
 	require.NoError(t, err)
+	assert.True(t, restart)
 
 	newFile, err := os.ReadFile(configFile.Name())
 	require.NoError(t, err)
@@ -71,5 +73,8 @@ func TestConfigureContainerd(t *testing.T) {
 
 	assert.NotEmpty(t, backupInfo.Size())
 	assert.NotEmpty(t, newFile)
-	assert.True(t, restart)
+
+	restart, err = configureContainerd(context.Background(), runtimeContainerd, configFile.Name())
+	require.NoError(t, err)
+	assert.False(t, restart, "calling configureContainerd a second time should not require a restart")
 }

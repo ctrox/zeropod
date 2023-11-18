@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/containerd/containerd"
-	"github.com/containerd/containerd/services/server/config"
+	"github.com/containerd/containerd/v2/client"
+	"github.com/containerd/containerd/v2/services/server/config"
 	"github.com/coreos/go-systemd/v22/dbus"
 	nodev1 "k8s.io/api/node/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -129,20 +129,20 @@ func main() {
 }
 
 func installCriu(ctx context.Context) error {
-	client, err := containerd.New("/run/containerd/containerd.sock", containerd.WithDefaultNamespace("k8s"))
+	containerdClient, err := client.New("/run/containerd/containerd.sock", client.WithDefaultNamespace("k8s"))
 	if err != nil {
 		return err
 	}
 
-	image, err := client.Pull(ctx, *criuImage)
+	image, err := containerdClient.Pull(ctx, *criuImage)
 	if err != nil {
 		return err
 	}
 
-	if err := client.Install(
-		ctx, image, containerd.WithInstallLibs,
-		containerd.WithInstallReplace,
-		containerd.WithInstallPath(optPath),
+	if err := containerdClient.Install(
+		ctx, image, client.WithInstallLibs,
+		client.WithInstallReplace,
+		client.WithInstallPath(optPath),
 	); err != nil {
 		return err
 	}
@@ -194,7 +194,7 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 		return fmt.Errorf("unable to write shim file: %w", err)
 	}
 
-	restartRequired, err := configureContainerd(runtime, containerdConfig)
+	restartRequired, err := configureContainerd(ctx, runtime, containerdConfig)
 	if err != nil {
 		return fmt.Errorf("unable to configure containerd: %w", err)
 	}
@@ -242,17 +242,15 @@ func restartUnit(ctx context.Context, conn *dbus.Conn, service string) error {
 	return nil
 }
 
-func configureContainerd(runtime containerRuntime, containerdConfig string) (restartRequired bool, err error) {
+func configureContainerd(ctx context.Context, runtime containerRuntime, containerdConfig string) (restartRequired bool, err error) {
 	conf := &config.Config{}
-	if err := config.LoadConfig(containerdConfig, conf); err != nil {
+	if err := config.LoadConfig(ctx, containerdConfig, conf); err != nil {
 		return false, err
 	}
 
-	if criPlugins, ok := conf.Plugins[criPluginKey]; ok {
-		if criPlugins.Has(zeropodRuntimeKey) {
-			log.Println("runtime already configured, no need to restart containerd")
-			return false, nil
-		}
+	if zeropodConfigured(conf) {
+		log.Println("runtime already configured, no need to restart containerd")
+		return false, nil
 	}
 
 	// backup the original config
@@ -279,15 +277,12 @@ func configureContainerd(runtime containerRuntime, containerdConfig string) (res
 		return false, err
 	}
 
-	configured, err := optConfigured(containerdConfig)
-	if err != nil {
-		return false, err
-	}
-
-	if !configured {
+	if !optConfigured(conf) {
 		if _, err := cfg.WriteString(fmt.Sprintf(optPlugin, *hostOptPath)); err != nil {
 			return false, err
 		}
+	} else {
+		log.Println("opt plugin is already configured")
 	}
 
 	return true, nil
@@ -324,18 +319,45 @@ func copyConfig(from, to string) error {
 	return nil
 }
 
-func optConfigured(containerdConfig string) (bool, error) {
-	conf := &config.Config{}
-	if err := config.LoadConfig(containerdConfig, conf); err != nil {
-		return false, err
-	}
-	if opt, ok := conf.Plugins[containerdOptKey]; ok {
-		if opt.Has("path") {
-			return true, nil
+// zeropodConfigured travereses the containerd config and returns true if the
+// zeropod runtime plugin is already configured.
+func optConfigured(conf *config.Config) bool {
+	if optPlugins, ok := conf.Plugins[containerdOptKey]; ok {
+		pluginMap, ok := optPlugins.(map[string]interface{})
+		if !ok {
+			return false
+		}
+
+		if _, ok := pluginMap["path"]; ok {
+			return true
 		}
 	}
 
-	return false, nil
+	return false
+}
+
+// zeropodConfigured travereses the containerd config and returns true if the
+// zeropod runtime plugin is already configured.
+func zeropodConfigured(conf *config.Config) bool {
+	if criPlugins, ok := conf.Plugins[criPluginKey]; ok {
+		pluginMap, ok := criPlugins.(map[string]interface{})
+		if !ok {
+			return false
+		}
+		for _, v := range pluginMap {
+			containerdPlugins, ok := v.(map[string]interface{})
+			if !ok {
+				continue
+			}
+
+			runtime := containerdPlugins["runtimes"].(map[string]interface{})
+			if _, ok := runtime[runtimeHandler]; ok {
+				return true
+			}
+		}
+	}
+
+	return false
 }
 
 func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
