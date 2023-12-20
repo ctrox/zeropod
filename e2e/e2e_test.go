@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/pointer"
+	"k8s.io/utils/ptr"
 )
 
 const runtimeClassName = "zeropod"
@@ -212,12 +212,12 @@ func TestE2E(t *testing.T) {
 		}{
 			"running": {
 				metric:     prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning),
-				gaugeValue: pointer.Float64(1),
+				gaugeValue: ptr.To(float64(1)),
 				pod:        runningPod,
 			},
 			"not running": {
 				metric:     prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning),
-				gaugeValue: pointer.Float64(0),
+				gaugeValue: ptr.To(float64(0)),
 				pod:        checkpointedPod,
 			},
 			"last checkpoint time": {
@@ -228,7 +228,7 @@ func TestE2E(t *testing.T) {
 				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricCheckPointDuration),
 				pod:    checkpointedPod,
 				// we expect two checkpoints as the first one happens due to the startupProbe
-				histogramSampleCount: pointer.Uint64(2),
+				histogramSampleCount: ptr.To(uint64(2)),
 			},
 			"last restore time": {
 				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricLastRestoreTime),
@@ -238,7 +238,7 @@ func TestE2E(t *testing.T) {
 				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration),
 				pod:    restoredPod,
 				// we expect two restores as the first one happens due to the startupProbe
-				histogramSampleCount: pointer.Uint64(2),
+				histogramSampleCount: ptr.To(uint64(2)),
 			},
 		}
 
