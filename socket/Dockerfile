@@ -7,11 +7,11 @@ ADD go.* /app
 RUN go mod download
 
 # we use fedora since it has a recent version of bpftool
-FROM fedora:38
+FROM fedora:39
 RUN dnf install -y llvm clang bpftool libbpf-devel golang
 
 RUN mkdir /headers
-RUN cp /usr/include/bpf/bpf_helper* /headers
+RUN cp /usr/include/bpf/bpf_* /headers
 RUN bpftool btf dump file /sys/kernel/btf/vmlinux format c > /headers/vmlinux.h
 
 COPY --from=gomod /go /root/go

@@ -178,8 +178,6 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 		log.G(ctx).Printf("got exec for scaled down container, restoring")
 		beforeRestore := time.Now()
 
-		zeropodContainer.StopActivator(ctx)
-
 		_, p, err := zeropodContainer.Restore(ctx)
 		if err != nil {
 			// restore failed, this is currently unrecoverable, so we shutdown

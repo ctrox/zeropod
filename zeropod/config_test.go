@@ -2,6 +2,7 @@ package zeropod
 
 import (
 	"context"
+	"runtime"
 	"testing"
 	"time"
 
@@ -79,6 +80,9 @@ func TestNewConfig(t *testing.T) {
 
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
+			if tc.annotations[PreDumpAnnotationKey] == "true" && runtime.GOARCH == "arm64" {
+				t.Skip("skipping pre-dump test as it's not supported on arm64")
+			}
 			cfg, err := NewConfig(context.Background(), &specs.Spec{
 				Annotations: tc.annotations,
 			})

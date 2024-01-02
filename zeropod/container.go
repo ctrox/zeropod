@@ -23,7 +23,6 @@ type Container struct {
 	*runc.Container
 
 	context        context.Context
-	netLocker      activator.NetworkLocker
 	activator      *activator.Server
 	cfg            *Config
 	initialProcess process.Process
@@ -89,7 +88,6 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		initialProcess:    p,
 		logPath:           logPath,
 		netNS:             targetNS,
-		netLocker:         activator.NewNetworkLocker(targetNS),
 		tracker:           tracker,
 		stopMetrics:       stopMetrics,
 		checkpointRestore: cr,
@@ -223,7 +221,7 @@ func (c *Container) initActivator(ctx context.Context) error {
 
 	log.G(ctx).Infof("creating activator for ports: %v", c.cfg.Ports)
 
-	srv, err := activator.NewServer(ctx, c.cfg.Ports, c.netNS, c.netLocker)
+	srv, err := activator.NewServer(ctx, c.cfg.Ports, c.netNS)
 	if err != nil {
 		return err
 	}
@@ -231,6 +229,11 @@ func (c *Container) initActivator(ctx context.Context) error {
 
 	if c.activator == nil {
 		return fmt.Errorf("no activator initialized, container might not be listening on any port")
+	}
+
+	if err := c.startActivator(ctx); err != nil {
+		log.G(ctx).Errorf("unable to start zeropod: %s", err)
+		return err
 	}
 
 	return nil
@@ -243,7 +246,7 @@ func (c *Container) startActivator(ctx context.Context) error {
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := c.activator.Start(ctx, c.restoreHandler(ctx), c.checkpointHandler(ctx)); err != nil {
+	if err := c.activator.Start(ctx, activator.OnAccept(c.restoreHandler(ctx))); err != nil {
 		log.G(ctx).Errorf("failed to start activator: %s", err)
 		return err
 	}
@@ -255,10 +258,6 @@ func (c *Container) startActivator(ctx context.Context) error {
 func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 	return func() error {
 		log.G(ctx).Printf("got a request")
-
-		// we "lock" the network to ensure no requests get a connection
-		// refused while nothing is listening on the zeropod port. As soon as
-		// the process is restored we remove the lock and let traffic flow.
 
 		beforeRestore := time.Now()
 		restoredContainer, p, err := c.Restore(ctx)
@@ -277,12 +276,6 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 		c.SetScaledDown(false)
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
-		return nil
-	}
-}
-
-func (c *Container) checkpointHandler(ctx context.Context) activator.OnClosed {
-	return func() error {
 		return c.ScheduleScaleDown()
 	}
 }

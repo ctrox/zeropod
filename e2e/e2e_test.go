@@ -100,22 +100,19 @@ func TestE2E(t *testing.T) {
 			sequentialReqs: 1,
 			maxReqDuration: time.Second,
 		},
-
-		// TODO: fix parallel tests. These are flaky at the moment, probably
-		// because the actual activator implementation is buggy.
-		// "parallel requests": {
-		// 	pod:            testPod(false, 0),
-		// 	parallelReqs:   4,
-		// 	sequentialReqs: 1,
-		// 	maxReqDuration: time.Second * 2,
-		// },
-		// "parallel requests with keepalive": {
-		// 	pod:            testPod(false, 0),
-		// 	parallelReqs:   4,
-		// 	sequentialReqs: 1,
-		// 	keepAlive:      true,
-		// 	maxReqDuration: time.Second * 2,
-		// },
+		"parallel requests": {
+			pod:            testPod(scaleDownAfter(time.Second)),
+			parallelReqs:   10,
+			sequentialReqs: 5,
+			maxReqDuration: time.Second,
+		},
+		"parallel requests with keepalive": {
+			pod:            testPod(scaleDownAfter(time.Second)),
+			parallelReqs:   10,
+			sequentialReqs: 5,
+			keepAlive:      true,
+			maxReqDuration: time.Second,
+		},
 	}
 
 	for name, tc := range cases {

@@ -81,6 +81,11 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		c.setContainer(container)
 	}
 
+	// process is running again, we don't need to redirect traffic anymore
+	if err := c.activator.DisableRedirects(); err != nil {
+		return nil, nil, fmt.Errorf("could not disable redirects: %w", err)
+	}
+
 	return container, p, nil
 }
 

@@ -24,6 +24,10 @@ func (c *Container) scaleDown(ctx context.Context) error {
 		return err
 	}
 
+	if err := c.activator.Reset(); err != nil {
+		return err
+	}
+
 	if err := c.tracker.RemovePid(uint32(c.process.Pid())); err != nil {
 		// key could not exist, just log the error for now
 		log.G(ctx).Errorf("unable to remove pid %d: %s", c.process.Pid(), err)
@@ -40,28 +44,8 @@ func (c *Container) scaleDown(ctx context.Context) error {
 		if err := c.checkpoint(ctx); err != nil {
 			return err
 		}
-
 	}
 
-	beforeActivator := time.Now()
-	if err := c.startActivator(ctx); err != nil {
-		log.G(ctx).Errorf("unable to start zeropod: %s", err)
-		return err
-	}
-
-	if c.cfg.DisableCheckpointing {
-		log.G(ctx).Infof("activator started in %s", time.Since(beforeActivator))
-		return nil
-	}
-
-	// after checkpointing is done and we have started our activator in place
-	// of the real process' socket, we can unlock the network again.
-	if err := c.netLocker.Unlock(c.cfg.Ports); err != nil {
-		log.G(ctx).Errorf("unable to remove nftable: %s", err)
-		return err
-	}
-
-	log.G(ctx).Infof("activator started and net-lock removed in %s", time.Since(beforeActivator))
 	return nil
 }
 
@@ -111,24 +95,6 @@ func (c *Container) checkpoint(ctx context.Context) error {
 
 		log.G(ctx).Infof("pre-dumping done in %s", time.Since(beforePreDump))
 	}
-
-	// before executing the checkpoint we want to lock the network so that
-	// incoming connections during the checkpoint will be retried (on a TCP
-	// level since we drop the traffic).
-	if err := c.netLocker.Lock(c.cfg.Ports); err != nil {
-		return fmt.Errorf("unable to lock network: %w", err)
-	}
-
-	// TODO: as a result of the IP/NF tables rules we sometimes get > 1s
-	// delays when the client is connecting during checkpointing. This can be
-	// reproduced easily by running the benchmark without any sleeps. This is
-	// most probably caused by TCP SYN retransmissions:
-	// $ netstat -s | grep -i retrans
-	// 3 segments retransmitted
-	// TCPSynRetrans: 3
-	// Not sure if we can even do something about this as the issue is on the
-	// client side.
-	// https://arthurchiao.art/blog/customize-tcp-initial-rto-with-bpf/#tl-dr
 
 	c.SetScaledDown(true)
 
