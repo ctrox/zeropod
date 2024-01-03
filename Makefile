@@ -3,8 +3,7 @@ NAMESPACE := ctrox
 INSTALLER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-installer:dev
 MANAGER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-manager:dev
 TEST_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-test:dev
-# a2c4dd2 allows skipping iptables/nftables
-CRIU_VERSION := a2c4dd2
+CRIU_VERSION := v3.19
 CRIU_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-criu:$(CRIU_VERSION)
 DOCKER_SOCK := /var/run/docker.sock
 EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:dev

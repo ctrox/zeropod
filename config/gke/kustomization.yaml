@@ -4,10 +4,6 @@ patchesStrategicMerge:
   - daemonset.yaml
 patches:
   - patch: |-
-      # gke does not have nftables support (yet, dev kernel supports it)
-      - op: add
-        path: /spec/template/spec/containers/1/args/-
-        value: -criu-nftables=false
       - op: add
         path: /spec/template/spec/containers/1/args/-
         value: -host-opt-path=/var/lib/toolbox/zeropod
