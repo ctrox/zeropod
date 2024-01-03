@@ -25,8 +25,7 @@ import (
 )
 
 var (
-	criuImage      = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:a2c4dd2", "criu image to use.")
-	criuNFTables   = flag.Bool("criu-nftables", true, "use criu with nftables")
+	criuImage      = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v3.19", "criu image to use.")
 	runtime        = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
 	hostOptPath    = flag.String("host-opt-path", "/opt/zeropod", "path where zeropod binaries are stored on the host")
 	uninstall      = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
@@ -145,16 +144,6 @@ func installCriu(ctx context.Context) error {
 		containerd.WithInstallPath(optPath),
 	); err != nil {
 		return err
-	}
-
-	if !*criuNFTables {
-		log.Println("nftables disabled, installing criu with iptables")
-		// if we don't have nftables support, we need to use the criu binary
-		// without nftables support compiled in as the config alone does not seem
-		// to do the trick :/
-		if err := os.Rename(filepath.Join(optPath, "bin", criuIPTablesBin), filepath.Join(optPath, "bin", defaultCriuBin)); err != nil {
-			return err
-		}
 	}
 
 	// write the criu config
