@@ -31,7 +31,11 @@ type Server struct {
 
 type OnAccept func() error
 
-func NewServer(ctx context.Context, ports []uint16, nn ns.NetNS) (*Server, error) {
+func NewServer(ctx context.Context, ports []uint16, nn ns.NetNS, ifaces ...string) (*Server, error) {
+	if len(ifaces) == 0 {
+		return nil, fmt.Errorf("no interfaces have been supplied, at least one is required")
+	}
+
 	s := &Server{
 		quit:           make(chan interface{}),
 		ports:          ports,
@@ -41,9 +45,7 @@ func NewServer(ctx context.Context, ports []uint16, nn ns.NetNS) (*Server, error
 	}
 
 	if err := nn.Do(func(_ ns.NetNS) error {
-		// TODO: is this really always eth0?
-		// we need loopback for port-forwarding to work
-		objs, close, err := initBPF("lo", "eth0")
+		objs, close, err := initBPF(ifaces...)
 		if err != nil {
 			return err
 		}
@@ -64,7 +66,7 @@ func (s *Server) Start(ctx context.Context, onAccept OnAccept) error {
 			return err
 		}
 
-		log.G(ctx).Infof("redirecting port %d -> %d", port, proxyPort)
+		log.G(ctx).Debugf("redirecting port %d -> %d", port, proxyPort)
 		if err := s.RedirectPort(port, uint16(proxyPort)); err != nil {
 			return fmt.Errorf("redirecting port: %w", err)
 		}
@@ -97,8 +99,6 @@ func (s *Server) listen(ctx context.Context, port uint16, onAccept OnAccept) (in
 	addr := "0.0.0.0:0"
 	cfg := net.ListenConfig{}
 
-	// for some reason, sometimes the address will still be in use after
-	// checkpointing, so we wrap the listen in a retry.
 	var listener net.Listener
 	if err := s.ns.Do(func(_ ns.NetNS) error {
 		l, err := cfg.Listen(ctx, "tcp4", addr)
@@ -113,7 +113,7 @@ func (s *Server) listen(ctx context.Context, port uint16, onAccept OnAccept) (in
 		return 0, err
 	}
 
-	log.G(ctx).Infof("listening on %s in ns %s", listener.Addr(), s.ns.Path())
+	log.G(ctx).Debugf("listening on %s in ns %s", listener.Addr(), s.ns.Path())
 
 	s.firstAccept = sync.Once{}
 	s.onAccept = onAccept
@@ -130,7 +130,7 @@ func (s *Server) listen(ctx context.Context, port uint16, onAccept OnAccept) (in
 }
 
 func (s *Server) Stop(ctx context.Context) {
-	log.G(ctx).Info("stopping activator")
+	log.G(ctx).Debugf("stopping activator")
 
 	if s.proxyCancel != nil {
 		s.proxyCancel()
@@ -143,7 +143,7 @@ func (s *Server) Stop(ctx context.Context) {
 	s.bpfCloseFunc()
 
 	s.wg.Wait()
-	log.G(ctx).Info("activator stopped")
+	log.G(ctx).Debugf("activator stopped")
 }
 
 func (s *Server) serve(ctx context.Context, listener net.Listener, port uint16) {
@@ -169,7 +169,7 @@ func (s *Server) serve(ctx context.Context, listener net.Listener, port uint16) 
 		} else {
 			wg.Add(1)
 			go func() {
-				log.G(ctx).Info("accepting connection")
+				log.G(ctx).Debug("accepting connection")
 				s.handleConection(ctx, conn, port)
 				wg.Done()
 			}()
@@ -180,6 +180,18 @@ func (s *Server) serve(ctx context.Context, listener net.Listener, port uint16) 
 func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16) {
 	defer conn.Close()
 
+	tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		log.G(ctx).Errorf("unable to get TCP Addr from remote addr: %T", conn.RemoteAddr())
+		return
+	}
+
+	log.G(ctx).Debugf("registering connection on remote port %d", tcpAddr.Port)
+	if err := s.registerConnection(uint16(tcpAddr.Port)); err != nil {
+		log.G(ctx).Errorf("error registering connection: %s", err)
+		return
+	}
+
 	s.firstAccept.Do(func() {
 		if err := s.onAccept(); err != nil {
 			log.G(ctx).Errorf("accept function: %s", err)
@@ -187,41 +199,32 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16
 		}
 	})
 
-	tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
-	if !ok {
-		log.G(ctx).Errorf("unable to get TCP Addr from remote addr: %T", conn.RemoteAddr())
-		return
-	}
-
-	log.G(ctx).Infof("registering connection on port %d", tcpAddr.Port)
-	if err := s.registerConnection(uint16(tcpAddr.Port)); err != nil {
-		log.G(ctx).Errorf("error registering fade out port: %s", err)
-	}
-
-	log.G(ctx).Printf("proxying connection to program at localhost:%d", port)
-
-	initialConn, err := s.connect(ctx, port)
+	backendConn, err := s.connect(ctx, port)
 	if err != nil {
 		log.G(ctx).Errorf("error establishing connection: %s", err)
 		return
 	}
-	defer initialConn.Close()
+	defer backendConn.Close()
 
-	log.G(ctx).Println("dial succeeded", initialConn.RemoteAddr().String())
+	log.G(ctx).Println("dial succeeded", backendConn.RemoteAddr().String())
 
 	requestContext, cancel := context.WithTimeout(ctx, s.proxyTimeout)
 	s.proxyCancel = cancel
 	defer cancel()
-	if err := proxy(requestContext, conn, initialConn); err != nil {
+	if err := proxy(requestContext, conn, backendConn); err != nil {
 		log.G(ctx).Errorf("error proxying request: %s", err)
+	}
+
+	if err := s.removeConnection(uint16(tcpAddr.Port)); err != nil {
+		log.G(ctx).Errorf("error removing connection: %s", err)
+		return
 	}
 
 	log.G(ctx).Println("connection closed", conn.RemoteAddr().String())
 }
 
 func (s *Server) connect(ctx context.Context, port uint16) (net.Conn, error) {
-	var initialConn net.Conn
-	var err error
+	var backendConn net.Conn
 
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
@@ -237,7 +240,29 @@ func (s *Server) connect(ctx context.Context, port uint16) (net.Conn, error) {
 			}
 
 			if err := s.ns.Do(func(_ ns.NetNS) error {
-				initialConn, err = net.DialTimeout("tcp4", fmt.Sprintf("localhost:%d", port), s.connectTimeout)
+				// to ensure we don't create a redirect loop we need to know
+				// the local port of our connection to the activated process.
+				// We reserve a free port, store it in the disable bpf map and
+				// then use it to make the connection.
+				backendConnPort, err := freePort()
+				if err != nil {
+					return fmt.Errorf("unable to get free port: %w", err)
+				}
+
+				log.G(ctx).Debugf("registering backend connection port %d in bpf map", backendConnPort)
+				if err := s.disableRedirect(uint16(backendConnPort)); err != nil {
+					return err
+				}
+
+				addr, err := net.ResolveTCPAddr("tcp4", fmt.Sprintf("127.0.0.1:%d", backendConnPort))
+				if err != nil {
+					return err
+				}
+				d := net.Dialer{
+					LocalAddr: addr,
+					Timeout:   s.connectTimeout,
+				}
+				backendConn, err = d.Dial("tcp4", fmt.Sprintf("localhost:%d", port))
 				return err
 			}); err != nil {
 				var serr syscall.Errno
@@ -248,7 +273,7 @@ func (s *Server) connect(ctx context.Context, port uint16) (net.Conn, error) {
 				return nil, fmt.Errorf("unable to connect to process: %s", err)
 			}
 
-			return initialConn, nil
+			return backendConn, nil
 		}
 	}
 }
@@ -280,4 +305,22 @@ func copy(done chan struct{}, errors chan error, dst io.Writer, src io.Reader) {
 	if err != nil {
 		errors <- err
 	}
+}
+
+func freePort() (int, error) {
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return 0, err
+	}
+
+	addr, ok := listener.Addr().(*net.TCPAddr)
+	if !ok {
+		return 0, fmt.Errorf("addr is not a net.TCPAddr: %T", listener.Addr())
+	}
+
+	if err := listener.Close(); err != nil {
+		return 0, err
+	}
+
+	return addr.Port, nil
 }
