@@ -53,7 +53,8 @@ type bpfSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfProgramSpecs struct {
-	TcRedirector *ebpf.ProgramSpec `ebpf:"tc_redirector"`
+	TcRedirectEgress  *ebpf.ProgramSpec `ebpf:"tc_redirect_egress"`
+	TcRedirectIngress *ebpf.ProgramSpec `ebpf:"tc_redirect_ingress"`
 }
 
 // bpfMapSpecs contains maps before they are loaded into the kernel.
@@ -62,7 +63,8 @@ type bpfProgramSpecs struct {
 type bpfMapSpecs struct {
 	ActiveConnections *ebpf.MapSpec `ebpf:"active_connections"`
 	DisableRedirect   *ebpf.MapSpec `ebpf:"disable_redirect"`
-	Redirects         *ebpf.MapSpec `ebpf:"redirects"`
+	EgressRedirects   *ebpf.MapSpec `ebpf:"egress_redirects"`
+	IngressRedirects  *ebpf.MapSpec `ebpf:"ingress_redirects"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -86,14 +88,16 @@ func (o *bpfObjects) Close() error {
 type bpfMaps struct {
 	ActiveConnections *ebpf.Map `ebpf:"active_connections"`
 	DisableRedirect   *ebpf.Map `ebpf:"disable_redirect"`
-	Redirects         *ebpf.Map `ebpf:"redirects"`
+	EgressRedirects   *ebpf.Map `ebpf:"egress_redirects"`
+	IngressRedirects  *ebpf.Map `ebpf:"ingress_redirects"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
 		m.ActiveConnections,
 		m.DisableRedirect,
-		m.Redirects,
+		m.EgressRedirects,
+		m.IngressRedirects,
 	)
 }
 
@@ -101,12 +105,14 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfPrograms struct {
-	TcRedirector *ebpf.Program `ebpf:"tc_redirector"`
+	TcRedirectEgress  *ebpf.Program `ebpf:"tc_redirect_egress"`
+	TcRedirectIngress *ebpf.Program `ebpf:"tc_redirect_ingress"`
 }
 
 func (p *bpfPrograms) Close() error {
 	return _BpfClose(
-		p.TcRedirector,
+		p.TcRedirectEgress,
+		p.TcRedirectIngress,
 	)
 }
 

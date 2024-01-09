@@ -221,7 +221,9 @@ func (c *Container) initActivator(ctx context.Context) error {
 
 	log.G(ctx).Infof("creating activator for ports: %v", c.cfg.Ports)
 
-	srv, err := activator.NewServer(ctx, c.cfg.Ports, c.netNS)
+	// TODO: is this really always eth0?
+	// as for loopback, this is required for port-forwarding to work
+	srv, err := activator.NewServer(ctx, c.cfg.Ports, c.netNS, "lo", "eth0")
 	if err != nil {
 		return err
 	}
@@ -246,7 +248,7 @@ func (c *Container) startActivator(ctx context.Context) error {
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := c.activator.Start(ctx, activator.OnAccept(c.restoreHandler(ctx))); err != nil {
+	if err := c.activator.Start(ctx, c.restoreHandler(ctx)); err != nil {
 		log.G(ctx).Errorf("failed to start activator: %s", err)
 		return err
 	}

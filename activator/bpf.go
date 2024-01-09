@@ -70,12 +70,14 @@ func initBPF(ifaces ...string) (*bpfObjects, func(), error) {
 				Handle:    1,
 				Protocol:  unix.ETH_P_ALL,
 			},
-			Fd:           objs.TcRedirector.FD(),
-			Name:         objs.TcRedirector.String(),
+			Fd:           objs.TcRedirectIngress.FD(),
+			Name:         objs.TcRedirectIngress.String(),
 			DirectAction: true,
 		}
 		egress := ingress
 		egress.Parent = netlink.HANDLE_MIN_EGRESS
+		egress.Fd = objs.TcRedirectEgress.FD()
+		egress.Name = objs.TcRedirectEgress.String()
 
 		if err := netlink.FilterReplace(&ingress); err != nil {
 			return nil, nil, fmt.Errorf("failed to replace tc filter: %w", err)
@@ -111,10 +113,10 @@ func pinPath() string {
 
 // RedirectPort redirects the port from to on ingress and to from on egress.
 func (a *Server) RedirectPort(from, to uint16) error {
-	if err := a.bpfObjs.Redirects.Put(&from, &to); err != nil {
+	if err := a.bpfObjs.IngressRedirects.Put(&from, &to); err != nil {
 		return fmt.Errorf("unable to put ports %d -> %d into bpf map: %w", from, to, err)
 	}
-	if err := a.bpfObjs.Redirects.Put(&to, &from); err != nil {
+	if err := a.bpfObjs.EgressRedirects.Put(&to, &from); err != nil {
 		return fmt.Errorf("unable to put ports %d -> %d into bpf map: %w", to, from, err)
 	}
 	return nil
@@ -123,6 +125,13 @@ func (a *Server) RedirectPort(from, to uint16) error {
 func (a *Server) registerConnection(port uint16) error {
 	if err := a.bpfObjs.ActiveConnections.Put(&port, uint8(1)); err != nil {
 		return fmt.Errorf("unable to put port %d into bpf map: %w", port, err)
+	}
+	return nil
+}
+
+func (a *Server) removeConnection(port uint16) error {
+	if err := a.bpfObjs.ActiveConnections.Delete(&port); err != nil {
+		return fmt.Errorf("unable to delete port %d in bpf map: %w", port, err)
 	}
 	return nil
 }
