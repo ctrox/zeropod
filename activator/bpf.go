@@ -84,11 +84,6 @@ func initBPF(ifaces ...string) (*bpfObjects, func(), error) {
 		}
 		filters = append(filters, &ingress)
 
-		// for loopback we don't need an egress filter
-		if devID.Index == 1 {
-			continue
-		}
-
 		if err := netlink.FilterReplace(&egress); err != nil {
 			return nil, nil, fmt.Errorf("failed to replace tc filter: %w", err)
 		}
