@@ -113,16 +113,11 @@ static __always_inline int parse_and_redirect(struct __sk_buff *ctx, bool ingres
             if (ip->protocol == IPPROTO_TCP) {
                 struct tcphdr *tcp = (void*)ip + sizeof(*ip);
                 if ((void*)tcp + sizeof(*tcp) <= data_end) {
-                    if (ctx->ifindex == 1) {
-                        ingress_redirect(tcp);
-                        return egress_redirect(tcp);
-                    }
-
                     if (ingress) {
                         return ingress_redirect(tcp);
-                    } else {
-                        return egress_redirect(tcp);
                     }
+
+                    return egress_redirect(tcp);
                 }
             }
         }

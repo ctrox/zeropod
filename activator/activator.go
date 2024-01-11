@@ -216,8 +216,7 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16
 	}
 
 	if err := s.removeConnection(uint16(tcpAddr.Port)); err != nil {
-		log.G(ctx).Errorf("error removing connection: %s", err)
-		return
+		log.G(ctx).Warnf("error removing connection: %s", err)
 	}
 
 	log.G(ctx).Println("connection closed", conn.RemoteAddr().String())
