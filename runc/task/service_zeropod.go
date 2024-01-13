@@ -8,24 +8,21 @@ import (
 	"time"
 
 	"github.com/ctrox/zeropod/zeropod"
-	ptypes "github.com/gogo/protobuf/types"
-	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/types/known/emptypb"
 
 	"github.com/containerd/cgroups"
-	eventstypes "github.com/containerd/containerd/api/events"
+	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/containerd/log"
 	"github.com/containerd/containerd/pkg/cri/annotations"
 	"github.com/containerd/containerd/pkg/oom"
 	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
 	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
-	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/shutdown"
 	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containerd/containerd/runtime/v2/shim"
-	taskAPI "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/containerd/sys/reaper"
 	runcC "github.com/containerd/go-runc"
+	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 )
 
@@ -48,12 +45,14 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	}
 	go ep.Run(ctx)
 	s := &service{
-		context:    ctx,
-		events:     make(chan interface{}, 128),
-		ec:         reaper.Default.Subscribe(),
-		ep:         ep,
-		shutdown:   sd,
-		containers: make(map[string]*runc.Container),
+		context:         ctx,
+		events:          make(chan interface{}, 128),
+		ec:              reaper.Default.Subscribe(),
+		ep:              ep,
+		shutdown:        sd,
+		containers:      make(map[string]*runc.Container),
+		running:         make(map[int][]containerProcess),
+		exitSubscribers: make(map[*map[int][]runcC.Exit]struct{}),
 	}
 	w := &wrapper{
 		service:           s,
@@ -165,7 +164,7 @@ func (w *wrapper) getZeropodContainer(id string) (*zeropod.Container, bool) {
 	return container, ok
 }
 
-func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*ptypes.Empty, error) {
+func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*emptypb.Empty, error) {
 	zeropodContainer, ok := w.getZeropodContainer(r.ID)
 	if !ok {
 		return w.service.Exec(ctx, r)
@@ -208,7 +207,7 @@ func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	return w.service.Delete(ctx, r)
 }
 
-func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Empty, error) {
+func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Empty, error) {
 	// our container might be just in the process of checkpoint/restore, so we
 	// ensure that has finished.
 	w.checkpointRestore.Lock()
@@ -243,61 +242,61 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 
 func (w *wrapper) processExits() {
 	for e := range w.ec {
-		w.checkProcesses(e)
-	}
-}
-
-func (w *wrapper) checkProcesses(e runcC.Exit) {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-
-	for _, container := range w.containers {
-		if !container.HasPid(e.Pid) {
+		cps := w.running[e.Pid]
+		preventExit := false
+		for _, cp := range cps {
+			if w.preventExit(cp) {
+				preventExit = true
+			}
+		}
+		if preventExit {
 			continue
 		}
 
-		for _, p := range container.All() {
-			if p.Pid() != e.Pid {
-				continue
-			}
+		// While unlikely, it is not impossible for a container process to exit
+		// and have its PID be recycled for a new container process before we
+		// have a chance to process the first exit. As we have no way to tell
+		// for sure which of the processes the exit event corresponds to (until
+		// pidfd support is implemented) there is no way for us to handle the
+		// exit correctly in that case.
 
-			if ip, ok := p.(*process.Init); ok {
-				// Ensure all children are killed
-				if runc.ShouldKillAllOnExit(w.context, container.Bundle) {
-					if err := ip.KillAll(w.context); err != nil {
-						logrus.WithError(err).WithField("id", ip.ID()).
-							Error("failed to kill init's children")
-					}
-				}
-			}
-
-			zeropodContainer, ok := w.getZeropodContainer(container.ID)
-			if ok {
-				if zeropodContainer.ScaledDown() {
-					log.G(w.context).Infof("not setting exited because process has scaled down: %v", p.Pid())
-					continue
-				}
-
-				if zeropodContainer.InitialProcess() != nil &&
-					p.ID() == zeropodContainer.InitialProcess().ID() ||
-					p.ID() == zeropodContainer.Process().ID() {
-					// we also need to set the original process as being exited so we can exit cleanly
-					zeropodContainer.InitialProcess().SetExited(0)
-				}
-			}
-
-			p.SetExited(e.Status)
-			w.sendL(&eventstypes.TaskExit{
-				ContainerID: container.ID,
-				ID:          p.ID(),
-				Pid:         uint32(e.Pid),
-				ExitStatus:  uint32(e.Status),
-				ExitedAt:    p.ExitedAt(),
-			})
-			return
+		w.lifecycleMu.Lock()
+		// Inform any concurrent s.Start() calls so they can handle the exit
+		// if the PID belongs to them.
+		for subscriber := range w.exitSubscribers {
+			(*subscriber)[e.Pid] = append((*subscriber)[e.Pid], e)
 		}
-		return
+		// Handle the exit for a created/started process. If there's more than
+		// one, assume they've all exited. One of them will be the correct
+		// process.
+		delete(w.running, e.Pid)
+		w.lifecycleMu.Unlock()
+
+		for _, cp := range cps {
+			w.mu.Lock()
+			w.handleProcessExit(e, cp.Container, cp.Process)
+			w.mu.Unlock()
+		}
 	}
+}
+
+func (w *wrapper) preventExit(cp containerProcess) bool {
+	zeropodContainer, ok := w.getZeropodContainer(cp.Container.ID)
+	if ok {
+		if zeropodContainer.ScaledDown() {
+			log.G(w.context).Infof("not setting exited because process has scaled down: %v", cp.Process.Pid())
+			return true
+		}
+
+		// we need to set the original process as being exited so we can exit cleanly
+		if zeropodContainer.InitialProcess() != nil &&
+			cp.Process.ID() == zeropodContainer.InitialProcess().ID() ||
+			cp.Process.ID() == zeropodContainer.Process().ID() {
+			zeropodContainer.InitialProcess().SetExited(0)
+		}
+	}
+
+	return false
 }
 
 // setContainer replaces the container in the task service. This is important

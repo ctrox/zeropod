@@ -1,5 +1,4 @@
 //go:build linux
-// +build linux
 
 /*
    Copyright The containerd Authors.
@@ -25,9 +24,11 @@ import (
 	"os"
 	"sync"
 
-	"github.com/containerd/cgroups"
-	cgroupsv2 "github.com/containerd/cgroups/v2"
+	"github.com/containerd/cgroups/v3"
+	"github.com/containerd/cgroups/v3/cgroup1"
+	cgroupsv2 "github.com/containerd/cgroups/v3/cgroup2"
 	eventstypes "github.com/containerd/containerd/api/events"
+	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/namespaces"
@@ -38,15 +39,15 @@ import (
 	"github.com/containerd/containerd/pkg/shutdown"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/pkg/userns"
+	"github.com/containerd/containerd/protobuf"
+	ptypes "github.com/containerd/containerd/protobuf/types"
 	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/containerd/runtime/v2/shim"
-	taskAPI "github.com/containerd/containerd/runtime/v2/task"
 	"github.com/containerd/containerd/sys/reaper"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/ttrpc"
-	"github.com/containerd/typeurl"
-	ptypes "github.com/gogo/protobuf/types"
+	"github.com/containerd/typeurl/v2"
 	"github.com/sirupsen/logrus"
 )
 
@@ -71,12 +72,14 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 	}
 	go ep.Run(ctx)
 	s := &service{
-		context:    ctx,
-		events:     make(chan interface{}, 128),
-		ec:         reaper.Default.Subscribe(),
-		ep:         ep,
-		shutdown:   sd,
-		containers: make(map[string]*runc.Container),
+		context:         ctx,
+		events:          make(chan interface{}, 128),
+		ec:              reaper.Default.Subscribe(),
+		ep:              ep,
+		shutdown:        sd,
+		containers:      make(map[string]*runc.Container),
+		running:         make(map[int][]containerProcess),
+		exitSubscribers: make(map[*map[int][]runcC.Exit]struct{}),
 	}
 	go s.processExits()
 	runcC.Monitor = reaper.Default
@@ -99,8 +102,7 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 
 // service is the shim implementation of a remote shim over GRPC
 type service struct {
-	mu          sync.Mutex
-	eventSendMu sync.Mutex
+	mu sync.Mutex
 
 	context  context.Context
 	events   chan interface{}
@@ -110,13 +112,111 @@ type service struct {
 
 	containers map[string]*runc.Container
 
+	lifecycleMu sync.Mutex
+	running     map[int][]containerProcess // pid -> running process, guarded by lifecycleMu
+	// Subscriptions to exits for PIDs. Adding/deleting subscriptions and
+	// dereferencing the subscription pointers must only be done while holding
+	// lifecycleMu.
+	exitSubscribers map[*map[int][]runcC.Exit]struct{}
+
 	shutdown shutdown.Service
+}
+
+type containerProcess struct {
+	Container *runc.Container
+	Process   process.Process
+}
+
+// preStart prepares for starting a container process and handling its exit.
+// The container being started should be passed in as c when starting the
+// container init process for an already-created container. c should be nil when
+// creating a container or when starting an exec.
+//
+// The returned handleStarted closure records that the process has started so
+// that its exit can be handled efficiently. If the process has already exited,
+// it handles the exit immediately. handleStarted should be called after the
+// event announcing the start of the process has been published.
+// Note that handleStarted needs to be aware of whether s.mu is already held
+// when it is called. If s.mu has been held, we don't need to lock it when
+// calling handleProcessExit.
+//
+// The returned cleanup closure releases resources used to handle early exits.
+// It must be called before the caller of preStart returns, otherwise severe
+// memory leaks will occur.
+func (s *service) preStart(c *runc.Container) (handleStarted func(*runc.Container, process.Process, bool), cleanup func()) {
+	exits := make(map[int][]runcC.Exit)
+
+	s.lifecycleMu.Lock()
+	defer s.lifecycleMu.Unlock()
+	s.exitSubscribers[&exits] = struct{}{}
+
+	if c != nil {
+		// Remove container init process from s.running so it will once again be
+		// treated as an early exit if it exits before handleStarted is called.
+		pid := c.Pid()
+		var newRunning []containerProcess
+		for _, cp := range s.running[pid] {
+			if cp.Container != c {
+				newRunning = append(newRunning, cp)
+			}
+		}
+		if len(newRunning) > 0 {
+			s.running[pid] = newRunning
+		} else {
+			delete(s.running, pid)
+		}
+	}
+
+	handleStarted = func(c *runc.Container, p process.Process, muLocked bool) {
+		var pid int
+		if p != nil {
+			pid = p.Pid()
+		}
+
+		s.lifecycleMu.Lock()
+		ees, exited := exits[pid]
+		delete(s.exitSubscribers, &exits)
+		exits = nil
+		if pid == 0 { // no-op
+			s.lifecycleMu.Unlock()
+		} else if exited {
+			s.lifecycleMu.Unlock()
+			for _, ee := range ees {
+				if muLocked {
+					s.handleProcessExit(ee, c, p)
+				} else {
+					s.mu.Lock()
+					s.handleProcessExit(ee, c, p)
+					s.mu.Unlock()
+				}
+			}
+		} else {
+			s.running[pid] = append(s.running[pid], containerProcess{
+				Container: c,
+				Process:   p,
+			})
+			s.lifecycleMu.Unlock()
+		}
+	}
+
+	cleanup = func() {
+		if exits != nil {
+			s.lifecycleMu.Lock()
+			defer s.lifecycleMu.Unlock()
+			delete(s.exitSubscribers, &exits)
+		}
+	}
+
+	return handleStarted, cleanup
 }
 
 // Create a new initial process and container with the underlying OCI runtime
 func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	handleStarted, cleanup := s.preStart(nil)
+	defer cleanup()
 
 	container, err := runc.NewContainer(ctx, s.platform, r)
 	if err != nil {
@@ -139,6 +239,12 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		Pid:        uint32(container.Pid()),
 	})
 
+	// The following line cannot return an error as the only state in which that
+	// could happen would also cause the container.Pid() call above to
+	// nil-deference panic.
+	proc, _ := container.Process("")
+	handleStarted(container, proc, true)
+
 	return &taskAPI.CreateTaskResponse{
 		Pid: uint32(container.Pid()),
 	}, nil
@@ -156,18 +262,22 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil, err
 	}
 
-	// hold the send lock so that the start events are sent before any exit events in the error case
-	s.eventSendMu.Lock()
+	var cinit *runc.Container
+	if r.ExecID == "" {
+		cinit = container
+	}
+	handleStarted, cleanup := s.preStart(cinit)
+	defer cleanup()
 	p, err := container.Start(ctx, r)
 	if err != nil {
-		s.eventSendMu.Unlock()
+		handleStarted(container, p, false)
 		return nil, errdefs.ToGRPC(err)
 	}
 
 	switch r.ExecID {
 	case "":
 		switch cg := container.Cgroup().(type) {
-		case cgroups.Cgroup:
+		case cgroup1.Cgroup:
 			if err := s.ep.Add(container.ID, cg); err != nil {
 				logrus.WithError(err).Error("add cg to OOM monitor")
 			}
@@ -200,7 +310,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			Pid:         uint32(p.Pid()),
 		})
 	}
-	s.eventSendMu.Unlock()
+	handleStarted(container, p, false)
 	return &taskAPI.StartResponse{
 		Pid: uint32(p.Pid()),
 	}, nil
@@ -225,12 +335,12 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 			ContainerID: container.ID,
 			Pid:         uint32(p.Pid()),
 			ExitStatus:  uint32(p.ExitStatus()),
-			ExitedAt:    p.ExitedAt(),
+			ExitedAt:    protobuf.ToTimestamp(p.ExitedAt()),
 		})
 	}
 	return &taskAPI.DeleteResponse{
 		ExitStatus: uint32(p.ExitStatus()),
-		ExitedAt:   p.ExitedAt(),
+		ExitedAt:   protobuf.ToTimestamp(p.ExitedAt()),
 		Pid:        uint32(p.Pid()),
 	}, nil
 }
@@ -284,18 +394,18 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	if err != nil {
 		return nil, err
 	}
-	status := task.StatusUnknown
+	status := task.Status_UNKNOWN
 	switch st {
 	case "created":
-		status = task.StatusCreated
+		status = task.Status_CREATED
 	case "running":
-		status = task.StatusRunning
+		status = task.Status_RUNNING
 	case "stopped":
-		status = task.StatusStopped
+		status = task.Status_STOPPED
 	case "paused":
-		status = task.StatusPaused
+		status = task.Status_PAUSED
 	case "pausing":
-		status = task.StatusPausing
+		status = task.Status_PAUSING
 	}
 	sio := p.Stdio()
 	return &taskAPI.StateResponse{
@@ -308,7 +418,7 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 		Stderr:     sio.Stderr,
 		Terminal:   sio.Terminal,
 		ExitStatus: uint32(p.ExitStatus()),
-		ExitedAt:   p.ExitedAt(),
+		ExitedAt:   protobuf.ToTimestamp(p.ExitedAt()),
 	}, nil
 }
 
@@ -360,7 +470,7 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 	if err != nil {
 		return nil, err
 	}
-	pids, err := s.getContainerPids(ctx, r.ID)
+	pids, err := s.getContainerPids(ctx, container)
 	if err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
@@ -374,7 +484,7 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 				d := &options.ProcessDetails{
 					ExecID: p.ID(),
 				}
-				a, err := typeurl.MarshalAny(d)
+				a, err := protobuf.MarshalAnyToProto(d)
 				if err != nil {
 					return nil, fmt.Errorf("failed to marshal process %d info: %w", pid, err)
 				}
@@ -439,7 +549,7 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 
 	return &taskAPI.WaitResponse{
 		ExitStatus: uint32(p.ExitStatus()),
-		ExitedAt:   p.ExitedAt(),
+		ExitedAt:   protobuf.ToTimestamp(p.ExitedAt()),
 	}, nil
 }
 
@@ -482,8 +592,8 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 	}
 	var statsx interface{}
 	switch cg := cgx.(type) {
-	case cgroups.Cgroup:
-		stats, err := cg.Stat(cgroups.IgnoreNotExist)
+	case cgroup1.Cgroup:
+		stats, err := cg.Stat(cgroup1.IgnoreNotExist)
 		if err != nil {
 			return nil, err
 		}
@@ -502,13 +612,37 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 		return nil, err
 	}
 	return &taskAPI.StatsResponse{
-		Stats: data,
+		Stats: protobuf.FromAny(data),
 	}, nil
 }
 
 func (s *service) processExits() {
 	for e := range s.ec {
-		s.checkProcesses(e)
+		// While unlikely, it is not impossible for a container process to exit
+		// and have its PID be recycled for a new container process before we
+		// have a chance to process the first exit. As we have no way to tell
+		// for sure which of the processes the exit event corresponds to (until
+		// pidfd support is implemented) there is no way for us to handle the
+		// exit correctly in that case.
+
+		s.lifecycleMu.Lock()
+		// Inform any concurrent s.Start() calls so they can handle the exit
+		// if the PID belongs to them.
+		for subscriber := range s.exitSubscribers {
+			(*subscriber)[e.Pid] = append((*subscriber)[e.Pid], e)
+		}
+		// Handle the exit for a created/started process. If there's more than
+		// one, assume they've all exited. One of them will be the correct
+		// process.
+		cps := s.running[e.Pid]
+		delete(s.running, e.Pid)
+		s.lifecycleMu.Unlock()
+
+		for _, cp := range cps {
+			s.mu.Lock()
+			s.handleProcessExit(e, cp.Container, cp.Process)
+			s.mu.Unlock()
+		}
 	}
 }
 
@@ -516,60 +650,34 @@ func (s *service) send(evt interface{}) {
 	s.events <- evt
 }
 
-func (s *service) sendL(evt interface{}) {
-	s.eventSendMu.Lock()
-	s.events <- evt
-	s.eventSendMu.Unlock()
+// s.mu must be locked when calling handleProcessExit
+func (s *service) handleProcessExit(e runcC.Exit, c *runc.Container, p process.Process) {
+	if ip, ok := p.(*process.Init); ok {
+		// Ensure all children are killed
+		if runc.ShouldKillAllOnExit(s.context, c.Bundle) {
+			if err := ip.KillAll(s.context); err != nil {
+				logrus.WithError(err).WithField("id", ip.ID()).
+					Error("failed to kill init's children")
+			}
+		}
+	}
+
+	p.SetExited(e.Status)
+	s.send(&eventstypes.TaskExit{
+		ContainerID: c.ID,
+		ID:          p.ID(),
+		Pid:         uint32(e.Pid),
+		ExitStatus:  uint32(e.Status),
+		ExitedAt:    protobuf.ToTimestamp(p.ExitedAt()),
+	})
 }
 
-func (s *service) checkProcesses(e runcC.Exit) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	for _, container := range s.containers {
-		if !container.HasPid(e.Pid) {
-			continue
-		}
-
-		for _, p := range container.All() {
-			if p.Pid() != e.Pid {
-				continue
-			}
-
-			if ip, ok := p.(*process.Init); ok {
-				// Ensure all children are killed
-				if runc.ShouldKillAllOnExit(s.context, container.Bundle) {
-					if err := ip.KillAll(s.context); err != nil {
-						logrus.WithError(err).WithField("id", ip.ID()).
-							Error("failed to kill init's children")
-					}
-				}
-			}
-
-			p.SetExited(e.Status)
-			s.sendL(&eventstypes.TaskExit{
-				ContainerID: container.ID,
-				ID:          p.ID(),
-				Pid:         uint32(e.Pid),
-				ExitStatus:  uint32(e.Status),
-				ExitedAt:    p.ExitedAt(),
-			})
-			return
-		}
-		return
-	}
-}
-
-func (s *service) getContainerPids(ctx context.Context, id string) ([]uint32, error) {
-	container, err := s.getContainer(id)
-	if err != nil {
-		return nil, err
-	}
+func (s *service) getContainerPids(ctx context.Context, container *runc.Container) ([]uint32, error) {
 	p, err := container.Process("")
 	if err != nil {
 		return nil, errdefs.ToGRPC(err)
 	}
-	ps, err := p.(*process.Init).Runtime().Ps(ctx, id)
+	ps, err := p.(*process.Init).Runtime().Ps(ctx, container.ID)
 	if err != nil {
 		return nil, err
 	}

@@ -8,8 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/containerd/containerd/api/runtime/task/v2"
 	"github.com/containerd/containerd/cio"
-	"github.com/containerd/containerd/log"
+	"github.com/containerd/log"
 	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/containerd/pkg/cri/config"
 	crio "github.com/containerd/containerd/pkg/cri/io"
@@ -17,7 +18,6 @@ import (
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime/v2/runc"
-	"github.com/containerd/containerd/runtime/v2/task"
 )
 
 func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {

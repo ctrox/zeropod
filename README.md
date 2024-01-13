@@ -112,8 +112,8 @@ issues with your software, please don't hesitate to create an issue.
 
 ### Requirements
 
-* Kubernetes v1.20+ (older versions with RuntimeClass enabled *might* work)
-* Containerd (1.5+ has been tested)
+* Kubernetes v1.23+
+* Containerd 1.6+
 
 As zeropod is implemented using a [runtime
 class](https://kubernetes.io/docs/concepts/containers/runtime-class/), it
