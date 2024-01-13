@@ -26,16 +26,22 @@ First off, what is this containerd shim? The shim sits between containerd and
 the container sandbox. Each container has such a long-running process that
 calls out to runc to manage the lifecycle of a container.
 
+<details><summary>show containerd architecture</summary>
+
 ![containerd architecture](https://github.com/containerd/containerd/blob/81bc6ce6e9f8f74af1bbbf25126db3b461cb0520/docs/cri/architecture.png)
+
+</details>
 
 There are several components that make zeropod work but here are the most
 important ones:
 
 * Checkpointing is done using [CRIU](https://github.com/checkpoint-restore/criu).
-* After checkpointing, a TCP socket is created in place of the application.
-  The activator component is responsible for accepting a connection, closing
-  the socket, restoring the process and then proxying the initial request(s)
-  to the restored application.
+* After checkpointing, a userspace TCP proxy (activator) is created on a
+  random port and an eBPF program is loaded to redirect packets destined to
+  the checkpointed container to the activator. The activator then accepts the
+  connection, restores the process, signals to disable the eBPF redirect and
+  then proxies the initial request(s) to the restored application. See
+  [activation sequence](#activation-sequence) for more details.
 * All subsequent connections go directly to the application without any
   proxying and performance impact.
 * An eBPF probe is used to track the last TCP activity on the running
@@ -53,6 +59,44 @@ important ones:
   merge all metrics from the different shim processes. The shim exposes a unix
   socket for the manager to connect. The manager exposes the merged metrics on
   an HTTP endpoint.
+
+### Activation sequence
+
+This diagram shows what happens when a user initiates a connection to a
+checkpointed container.
+
+<details><summary>show diagram</summary>
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Redirector
+    participant Activator
+    participant Container
+    Note over Container: checkpointed
+    Note over Activator: listening on port 41234
+    User->>Redirector: TCP connect to port 80
+    Note right of User: local port 12345
+    Redirector->>Redirector: redirect to port 41234
+    Redirector->>Activator: TCP connect
+    Activator->>Activator: TCP accept
+    Activator->>Container: restore
+    loop every millisecond
+        Activator->>Container: TCP connect to port 80
+    end
+    Note over Container: restored
+    Container-->>Activator: TCP accept
+    Activator-->>Redirector: TCP accept
+    Redirector-->>Redirector: redirect to port 12345
+    Redirector-->>User: TCP accept
+    Note right of User: connection between user<br>and container established
+    User->>Container: TCP connect to port 80
+    Note over Redirector: pass
+    Container-->>User: TCP accept
+    Note over Redirector: pass
+```
+
+</details>
 
 ## Compatibility
 
