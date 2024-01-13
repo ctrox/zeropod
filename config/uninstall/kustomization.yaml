@@ -1,6 +1,20 @@
 resources:
-  - uninstaller.yaml
-images:
-  - name: installer
-    newName: ghcr.io/ctrox/zeropod-installer
-    newTag: dev
+  - ../production
+patches:
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/0/args/-
+        value: -uninstall
+      - op: replace
+        path: /spec/template/spec/initContainers/0/volumeMounts/2
+        value:
+          mountPath: /opt
+          name: opt
+      - op: replace
+        path: /spec/template/spec/volumes/2
+        value:
+          hostPath:
+            path: /opt
+          name: opt
+    target:
+      kind: DaemonSet

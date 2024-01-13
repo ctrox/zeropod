@@ -8,10 +8,8 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
 	"path"
 	"path/filepath"
-	"syscall"
 	"time"
 
 	"github.com/containerd/containerd"
@@ -92,7 +90,6 @@ func main() {
 		}
 
 		log.Println("uninstaller completed")
-		// we exit after uninstall as this should be run as a one-time job
 		os.Exit(0)
 	}
 
@@ -115,16 +112,6 @@ func main() {
 	log.Println("installed runtimeClass")
 
 	log.Println("installer completed")
-
-	go func() {
-		for {
-			time.Sleep(time.Second)
-		}
-	}()
-
-	quitChannel := make(chan os.Signal, 1)
-	signal.Notify(quitChannel, syscall.SIGINT, syscall.SIGTERM)
-	<-quitChannel
 }
 
 func installCriu(ctx context.Context) error {

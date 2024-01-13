@@ -10,7 +10,7 @@ images:
 patches:
   - patch: |-
       - op: add
-        path: /spec/template/spec/containers/1/args/-
+        path: /spec/template/spec/initContainers/0/args/-
         value: -criu-image=ghcr.io/ctrox/zeropod-criu:v3.19
     target:
       kind: DaemonSet

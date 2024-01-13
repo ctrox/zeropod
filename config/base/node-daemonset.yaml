@@ -17,16 +17,7 @@ spec:
       serviceAccountName: zeropod-node
       nodeSelector:
         zeropod.ctrox.dev/node: "true"
-      containers:
-        - name: manager
-          image: manager
-          imagePullPolicy: IfNotPresent
-          ports:
-            - name: metrics
-              containerPort: 8080
-          volumeMounts:
-            - mountPath: /run/zeropod
-              name: zeropod-run
+      initContainers:
         - name: installer
           image: installer
           args: []
@@ -42,6 +33,16 @@ spec:
               name: systemd-run
             - mountPath: /etc/criu
               name: criu-etc
+      containers:
+        - name: manager
+          image: manager
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: metrics
+              containerPort: 8080
+          volumeMounts:
+            - mountPath: /run/zeropod
+              name: zeropod-run
       tolerations:
         - key: kubernetes.io/arch
           operator: Equal
@@ -54,12 +55,12 @@ spec:
         - name: containerd-run
           hostPath:
             path: /run/containerd
-        - name: zeropod-run
-          hostPath:
-            path: /run/zeropod
         - name: zeropod-opt
           hostPath:
             path: /opt/zeropod
+        - name: zeropod-run
+          hostPath:
+            path: /run/zeropod
         - name: systemd-run
           hostPath:
             path: /run/systemd
