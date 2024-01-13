@@ -86,7 +86,9 @@ func setup(t testing.TB) (*rest.Config, client.Client, int) {
 	cfg, err := startKind(t, "zeropod-e2e", port)
 	require.NoError(t, err)
 
-	client, err := client.New(cfg, client.Options{})
+	client, err := client.New(cfg, client.Options{
+		WarningHandler: client.WarningHandlerOptions{SuppressWarnings: true},
+	})
 	require.NoError(t, err)
 
 	t.Log("deploying zeropod-node")

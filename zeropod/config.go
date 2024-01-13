@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd/log"
+	"github.com/containerd/log"
 	"github.com/mitchellh/mapstructure"
 	"github.com/opencontainers/runtime-spec/specs-go"
 )

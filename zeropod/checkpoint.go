@@ -8,7 +8,7 @@ import (
 	"path"
 	"time"
 
-	"github.com/containerd/containerd/log"
+	"github.com/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
 	runcC "github.com/containerd/go-runc"
 )
