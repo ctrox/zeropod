@@ -169,9 +169,8 @@ Once applied, check for `node` pod(s) in the `zeropod-system` namespace. If
 everything worked it should be in status `Running`:
 
 ```bash
-$ kubectl get pods -n zeropod-system
-NAME                 READY   STATUS    RESTARTS   AGE
-zeropod-node-zr8k7   2/2     Running   0          35s
+$ kubectl -n zeropod-system wait --for=condition=Ready pod -l app.kubernetes.io/name=zeropod-node
+pod/zeropod-node-wgzrv condition met
 ```
 
 Now you can create workloads which make use of zeropod.
@@ -185,6 +184,18 @@ Depending on your cluster setup, none of the predefined configs might not
 match yours. In this case you need clone the repo and adjust the manifests in
 `config/` accordingly. If your setup is common, a PR to add your configuration
 adjustments would be most welcome.
+
+### Uninstalling
+
+To uninstall zeropod, you can apply the uninstall manifest to spawn a pod to
+do the cleanup on all labelled zeropod nodes. After all the uninstall pods
+have finished, we can delete all the manifests.
+
+```bash
+kubectl apply -k https://github.com/ctrox/zeropod/config/uninstall
+kubectl -n zeropod-system wait --for=condition=Ready pod -l app.kubernetes.io/name=zeropod-node
+kubectl delete -k https://github.com/ctrox/zeropod/config/production
+```
 
 ## Configuration
 
@@ -272,24 +283,6 @@ zeropod_restore_duration_seconds_count{container="nginx",namespace="default",pod
 # TYPE zeropod_running gauge
 zeropod_running{container="nginx",namespace="default",pod="nginx"} 0
 ```
-
-## TODO
-
-- [x] Support more than 1 container in a zeropod
-	- [x] Support scaling more than 1 container in a zeropod (use-cases might be limited here)
-- [x] Fix logs after restore
-- [ ] Visibility into state (scaled down or up) from the outside
-	- [ ] k8s events?
-	- [x] Metrics
-	- [ ] Custom resource that syncs with a zeropod?
-- [x] Create installer DaemonSet (runtime shim, containerd config, criu binary)
-- [x] e2e testing
-- [x] Scale down/up on demand instead of time based
-	- [x] technically scaling up on demand is now possible with exec. You can just exec a non-existing process.
-- [x] Less configuration - try to detect the port(s) a contanier is listening on
-- [x] Configurable installer (paths etc.)
-- [ ] Create uninstaller
-- [ ] Create issues instead of this list
 
 ## Development
 
