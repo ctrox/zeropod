@@ -2,41 +2,34 @@ package zeropod
 
 import (
 	"context"
+	"fmt"
 	"os"
-	"strings"
-	"time"
-
-	"github.com/containerd/containerd/integration/remote/util"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-	runtimev1 "k8s.io/cri-api/pkg/apis/runtime/v1"
+	"path/filepath"
+	"sort"
 )
 
-// getLogPath gets the log path of the container by connecting back to
-// containerd. There might be a less convoluted way to do this.
-func getLogPath(ctx context.Context, containerID string) (string, error) {
-	endpoint := os.Getenv("GRPC_ADDRESS")
-	if len(endpoint) == 0 {
-		endpoint = strings.TrimSuffix(os.Getenv("TTRPC_ADDRESS"), ".ttrpc")
-	}
+// getLogPath gets the log path of the container by searching for the last log
+// file in the CRI pod log path.
+// TODO: it would be nicer to get this path via annotations but it looks like
+// containerd only passes that to the sandbox container (pause). One possible
+// solution would be to implement log restoring in the sandbox container
+// instead of the zeropod.
+func getLogPath(ctx context.Context, cfg *Config) (string, error) {
+	logDir := fmt.Sprintf("/var/log/pods/%s_%s_%s/%s", cfg.PodNamespace, cfg.PodName, cfg.PodUID, cfg.ContainerName)
 
-	addr, dialer, err := util.GetAddressAndDialer(endpoint)
+	dir, err := os.Open(logDir)
 	if err != nil {
 		return "", err
 	}
+	defer dir.Close()
 
-	ctx, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(dialer))
+	names, err := dir.Readdirnames(0)
 	if err != nil {
 		return "", err
 	}
+	sort.Slice(names, func(i, j int) bool {
+		return i < j
+	})
 
-	resp, err := runtimev1.NewRuntimeServiceClient(conn).ContainerStatus(ctx, &runtimev1.ContainerStatusRequest{ContainerId: containerID})
-	if err != nil {
-		return "", err
-	}
-
-	return resp.Status.LogPath, nil
+	return filepath.Join(logDir, names[len(names)-1]), nil
 }

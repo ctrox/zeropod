@@ -60,7 +60,7 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		return nil, err
 	}
 
-	logPath, err := getLogPath(ctx, container.ID)
+	logPath, err := getLogPath(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get log path: %w", err)
 	}
