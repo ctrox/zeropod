@@ -9,6 +9,7 @@ import (
 	"strconv"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/ctrox/zeropod/socket"
 	"github.com/vishvananda/netlink"
@@ -39,6 +40,8 @@ func initBPF(ifaces ...string) (*bpfObjects, func(), error) {
 	}); err != nil {
 		return nil, nil, fmt.Errorf("loading objects: %w", err)
 	}
+
+	btf.FlushKernelSpec()
 
 	qdiscs := []*netlink.GenericQdisc{}
 	filters := []*netlink.BpfFilter{}

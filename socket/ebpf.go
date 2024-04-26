@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	"golang.org/x/sys/unix"
@@ -46,6 +47,8 @@ func NewEBPFTracker() (Tracker, error) {
 	}); err != nil {
 		return nil, fmt.Errorf("loading objects: %w", err)
 	}
+
+	btf.FlushKernelSpec()
 
 	// in the past we used inet_sock_set_state here but we now we use a
 	// kretprobe with inet_csk_accept as inet_sock_set_state is not giving us
