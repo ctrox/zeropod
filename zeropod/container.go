@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime/v2/runc"
+	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/socket"
@@ -283,7 +283,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 }
 
 func snapshotDir(bundle string) string {
-	return path.Join(bundle, "snapshots")
+	return path.Join(bundle, "work", "snapshots")
 }
 
 func containerDir(bundle string) string {
