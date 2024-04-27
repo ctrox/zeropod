@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ctrox/zeropod/activator"
 	"github.com/stretchr/testify/require"
 )
 
@@ -15,8 +16,12 @@ import (
 // an HTTP server and doing a request against it. This test requires elevated
 // privileges to run.
 func TestEBPFTracker(t *testing.T) {
-	require.NoError(t, MountDebugFS())
-	require.NoError(t, MountBPFFS(BPFFSPath))
+	require.NoError(t, activator.MountDebugFS())
+	require.NoError(t, activator.MountBPFFS(activator.BPFFSPath))
+
+	clean, err := LoadEBPFTracker()
+	require.NoError(t, err)
+	defer func() { require.NoError(t, clean()) }()
 
 	tracker, err := NewEBPFTracker()
 	require.NoError(t, err)

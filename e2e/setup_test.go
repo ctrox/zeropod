@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ctrox/zeropod/socket"
+	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/zeropod"
 	"github.com/phayes/freeport"
 	"github.com/pkg/errors"
@@ -137,8 +137,8 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 						ContainerPath: "/host/proc",
 					},
 					{
-						HostPath:      socket.BPFFSPath,
-						ContainerPath: socket.BPFFSPath,
+						HostPath:      activator.BPFFSPath,
+						ContainerPath: activator.BPFFSPath,
 					},
 				},
 			}},

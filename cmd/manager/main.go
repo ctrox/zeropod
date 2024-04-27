@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/ctrox/zeropod/manager"
+	"github.com/ctrox/zeropod/socket"
 )
 
 var (
@@ -29,6 +30,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	cleanSocketTracker, err := socket.LoadEBPFTracker()
+	if err != nil {
+		slog.Error("loading socket tracker", "err", err)
+		os.Exit(1)
+	}
+
 	server := &http.Server{Addr: *metricsAddr}
 	http.HandleFunc("/metrics", manager.Handler)
 
@@ -43,6 +50,7 @@ func main() {
 
 	<-ctx.Done()
 	slog.Info("stopping manager")
+	cleanSocketTracker()
 	if err := server.Shutdown(ctx); err != nil {
 		slog.Error("shutting down server", "err", err)
 	}

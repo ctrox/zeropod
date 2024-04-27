@@ -5,18 +5,20 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/rlimit"
-	"github.com/ctrox/zeropod/socket"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf redirector.c -- -I/headers
+
+const BPFFSPath = "/sys/fs/bpf"
 
 type BPF struct {
 	pid     int
@@ -126,5 +128,30 @@ func PinPath(pid int) string {
 }
 
 func MapsPath() string {
-	return filepath.Join(socket.BPFFSPath, "zeropod_maps")
+	return filepath.Join(BPFFSPath, "zeropod_maps")
+}
+
+// MountBPFFS executes a mount -t bpf on the supplied path
+func MountBPFFS(path string) error {
+	return mount("bpf", "bpf", path)
+}
+
+// MountBPFFS mounts the kernel debugfs
+func MountDebugFS() error {
+	return mount("debugfs", "debugfs", "/sys/kernel/debug")
+}
+
+func mount(name, typ, path string) error {
+	const alreadyMountedCode = 32
+	out, err := exec.Command("mount", "-t", typ, name, path).CombinedOutput()
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if exitError.ExitCode() == alreadyMountedCode {
+				return nil
+			}
+		}
+		return fmt.Errorf("unable to mount BPF fs: %s: %s", err, out)
+	}
+
+	return nil
 }

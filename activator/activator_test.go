@@ -13,13 +13,12 @@ import (
 	"time"
 
 	"github.com/containernetworking/plugins/pkg/ns"
-	"github.com/ctrox/zeropod/socket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func TestActivator(t *testing.T) {
-	require.NoError(t, socket.MountBPFFS(socket.BPFFSPath))
+	require.NoError(t, MountBPFFS(BPFFSPath))
 
 	nn, err := ns.GetCurrentNS()
 	require.NoError(t, err)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
+	"github.com/ctrox/zeropod/socket"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -80,9 +81,13 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 		select {
 		// watch for events
 		case event := <-watcher.Events:
+			if filepath.Base(event.Name) == socket.TCPEventsMap {
+				continue
+			}
+
 			pid, err := strconv.Atoi(filepath.Base(event.Name))
 			if err != nil {
-				slog.Error("unable to parse pid from added name", "name", filepath.Base(event.Name))
+				slog.Warn("unable to parse pid from added name", "name", filepath.Base(event.Name))
 				break
 			}
 
@@ -149,16 +154,20 @@ func getSandboxPids() ([]int, error) {
 		return nil, err
 	}
 
-	pids, err := f.Readdirnames(0)
+	dirs, err := f.Readdirnames(0)
 	if err != nil {
 		return nil, err
 	}
 
-	intPids := make([]int, 0, len(pids))
-	for _, pid := range pids {
-		intPid, err := strconv.Atoi(pid)
+	intPids := make([]int, 0, len(dirs))
+	for _, dir := range dirs {
+		if dir == socket.TCPEventsMap {
+			continue
+		}
+
+		intPid, err := strconv.Atoi(dir)
 		if err != nil {
-			slog.Error("unable to parse pid from dir name", "name", pid)
+			slog.Warn("unable to parse pid from dir name", "name", dir)
 			continue
 		}
 		intPids = append(intPids, intPid)
