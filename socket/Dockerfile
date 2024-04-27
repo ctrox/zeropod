@@ -12,9 +12,14 @@ RUN dnf install -y llvm clang bpftool libbpf-devel golang
 
 RUN mkdir /headers
 RUN cp /usr/include/bpf/bpf_* /headers
-RUN bpftool btf dump file /sys/kernel/btf/vmlinux format c > /headers/vmlinux.h
+COPY socket/vmlinux.h.gz /headers
+RUN gunzip /headers/vmlinux.h.gz
 
-COPY --from=gomod /go /root/go
+COPY --from=gomod /go /tmp
+ENV GOCACHE=/tmp
+ENV GOMODCACHE=/tmp/pkg/mod
+
+RUN mkdir -m 777 /app
 WORKDIR /app
 
 ENTRYPOINT ["go", "generate", "./..."]

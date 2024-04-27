@@ -62,15 +62,15 @@ test:
 # of the host into the container. For now this is the only way to run the e2e
 # tests on Mac OS with apple silicon as the shim requires GOOS=linux.
 docker-test-e2e: build-test
-	docker run --rm -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make test-e2e
+	docker run --rm --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make test-e2e
 
 docker-bench: build-test
-	docker run --rm -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make bench
+	docker run --rm --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make bench
 
 # has to have SYS_ADMIN because the test tries to set netns and mount bpffs
 # we use --pid=host to make the ebpf tracker work without a pid resolver
 docker-test:
-	docker run --rm -ti --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host -v $(PWD):/app $(TEST_IMAGE) make test
+	docker run --rm --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host -v $(PWD):/app $(TEST_IMAGE) make test
 
 CLANG ?= clang
 CFLAGS := -O2 -g -Wall -Werror
@@ -81,4 +81,10 @@ CFLAGS := -O2 -g -Wall -Werror
 generate: export BPF_CLANG := $(CLANG)
 generate: export BPF_CFLAGS := $(CFLAGS)
 generate:
-	docker run --rm -ti -v $(PWD):/app --env=BPF_CLANG="$(CLANG)" --env=BPF_CFLAGS="$(CFLAGS)" $(EBPF_IMAGE) go generate ./...
+	docker run --rm -v $(PWD):/app:Z --user $(shell id -u):$(shell id -g) --env=BPF_CLANG="$(CLANG)" --env=BPF_CFLAGS="$(CFLAGS)" $(EBPF_IMAGE)
+
+# to improve reproducibility of the bpf builds, we dump the vmlinux.h and
+# store it compressed in git instead of dumping it during the build.
+update-vmlinux:
+	docker run --rm -v $(PWD):/app:Z --entrypoint /bin/sh --user $(shell id -u):$(shell id -g) $(EBPF_IMAGE) \
+		-c "bpftool btf dump file /sys/kernel/btf/vmlinux format c" | gzip > socket/vmlinux.h.gz
