@@ -15,6 +15,7 @@ require (
 	github.com/containerd/typeurl/v2 v2.1.1
 	github.com/containernetworking/plugins v1.2.0
 	github.com/coreos/go-systemd/v22 v22.5.0
+	github.com/fsnotify/fsnotify v1.7.0
 	github.com/mitchellh/mapstructure v1.5.0
 	github.com/opencontainers/runtime-spec v1.1.0
 	github.com/phayes/freeport v0.0.0-20220201140144-74d24b5ae9f5
@@ -59,7 +60,6 @@ require (
 	github.com/emicklei/go-restful/v3 v3.11.2 // indirect
 	github.com/evanphx/json-patch/v5 v5.7.0 // indirect
 	github.com/felixge/httpsnoop v1.0.3 // indirect
-	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
 	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

@@ -6,13 +6,20 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/cilium/ebpf"
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 )
+
+const ()
 
 type Server struct {
 	listeners      []net.Listener
@@ -25,41 +32,48 @@ type Server struct {
 	proxyCancel    context.CancelFunc
 	ns             ns.NetNS
 	firstAccept    sync.Once
-	bpfCloseFunc   func()
-	bpfObjs        *bpfObjects
+	maps           bpfMaps
+	sandboxPid     int
+	started        bool
 }
 
 type OnAccept func() error
 
-func NewServer(ctx context.Context, ports []uint16, nn ns.NetNS, ifaces ...string) (*Server, error) {
-	if len(ifaces) == 0 {
-		return nil, fmt.Errorf("no interfaces have been supplied, at least one is required")
-	}
-
+func NewServer(ctx context.Context, nn ns.NetNS) (*Server, error) {
 	s := &Server{
 		quit:           make(chan interface{}),
-		ports:          ports,
 		connectTimeout: time.Second * 5,
 		proxyTimeout:   time.Second * 5,
 		ns:             nn,
+		sandboxPid:     parsePidFromNetNS(nn),
 	}
 
-	if err := nn.Do(func(_ ns.NetNS) error {
-		objs, close, err := initBPF(ifaces...)
-		if err != nil {
-			return err
-		}
-		s.bpfObjs = objs
-		s.bpfCloseFunc = close
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-
-	return s, nil
+	return s, os.MkdirAll(PinPath(s.sandboxPid), os.ModePerm)
 }
 
-func (s *Server) Start(ctx context.Context, onAccept OnAccept) error {
+func parsePidFromNetNS(nn ns.NetNS) int {
+	parts := strings.Split(nn.Path(), "/")
+	if len(parts) < 3 {
+		return 0
+	}
+
+	pid, err := strconv.Atoi(parts[2])
+	if err != nil {
+		return 0
+	}
+
+	return pid
+}
+
+var ErrMapNotFound = errors.New("bpf map could not be found")
+
+func (s *Server) Start(ctx context.Context, ports []uint16, onAccept OnAccept) error {
+	s.ports = ports
+
+	if err := s.loadPinnedMaps(); err != nil {
+		return err
+	}
+
 	for _, port := range s.ports {
 		proxyPort, err := s.listen(ctx, port, onAccept)
 		if err != nil {
@@ -72,7 +86,12 @@ func (s *Server) Start(ctx context.Context, onAccept OnAccept) error {
 		}
 	}
 
+	s.started = true
 	return nil
+}
+
+func (s *Server) Started() bool {
+	return s.started
 }
 
 func (s *Server) Reset() error {
@@ -140,7 +159,9 @@ func (s *Server) Stop(ctx context.Context) {
 		l.Close()
 	}
 
-	s.bpfCloseFunc()
+	log.G(ctx).Debugf("removing %s", PinPath(s.sandboxPid))
+
+	_ = os.RemoveAll(PinPath(s.sandboxPid))
 
 	s.wg.Wait()
 	log.G(ctx).Debugf("activator stopped")
@@ -275,6 +296,98 @@ func (s *Server) connect(ctx context.Context, port uint16) (net.Conn, error) {
 			return backendConn, nil
 		}
 	}
+}
+
+const (
+	activeConnectionsMap = "active_connections"
+	disableRedirectMap   = "disable_redirect"
+	egressRedirectsMap   = "egress_redirects"
+	ingressRedirectsMap  = "ingress_redirects"
+)
+
+func (a *Server) loadPinnedMaps() error {
+	// either all or none of the maps are pinned, so we want to return
+	// ErrMapNotFound so it can be handled.
+	if _, err := os.Stat(filepath.Join(PinPath(a.sandboxPid), activeConnectionsMap)); os.IsNotExist(err) {
+		return ErrMapNotFound
+	}
+
+	var err error
+	opts := &ebpf.LoadPinOptions{}
+	if a.maps.ActiveConnections == nil {
+		a.maps.ActiveConnections, err = ebpf.LoadPinnedMap(a.mapPath(activeConnectionsMap), opts)
+		if err != nil {
+			return err
+		}
+	}
+
+	if a.maps.DisableRedirect == nil {
+		a.maps.DisableRedirect, err = ebpf.LoadPinnedMap(a.mapPath(disableRedirectMap), opts)
+		if err != nil {
+			return err
+		}
+	}
+
+	if a.maps.EgressRedirects == nil {
+		a.maps.EgressRedirects, err = ebpf.LoadPinnedMap(a.mapPath(egressRedirectsMap), opts)
+		if err != nil {
+			return err
+		}
+	}
+
+	if a.maps.IngressRedirects == nil {
+		a.maps.IngressRedirects, err = ebpf.LoadPinnedMap(a.mapPath(ingressRedirectsMap), opts)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (a *Server) mapPath(name string) string {
+	return filepath.Join(PinPath(a.sandboxPid), name)
+}
+
+// RedirectPort redirects the port from to on ingress and to from on egress.
+func (a *Server) RedirectPort(from, to uint16) error {
+	if err := a.maps.IngressRedirects.Put(&from, &to); err != nil {
+		return fmt.Errorf("unable to put ports %d -> %d into bpf map: %w", from, to, err)
+	}
+	if err := a.maps.EgressRedirects.Put(&to, &from); err != nil {
+		return fmt.Errorf("unable to put ports %d -> %d into bpf map: %w", to, from, err)
+	}
+	return nil
+}
+
+func (a *Server) registerConnection(port uint16) error {
+	if err := a.maps.ActiveConnections.Put(&port, uint8(1)); err != nil {
+		return fmt.Errorf("unable to put port %d into bpf map: %w", port, err)
+	}
+	return nil
+}
+
+func (a *Server) removeConnection(port uint16) error {
+	if err := a.maps.ActiveConnections.Delete(&port); err != nil {
+		return fmt.Errorf("unable to delete port %d in bpf map: %w", port, err)
+	}
+	return nil
+}
+
+func (a *Server) disableRedirect(port uint16) error {
+	if err := a.maps.DisableRedirect.Put(&port, uint8(1)); err != nil {
+		return fmt.Errorf("unable to put %d into bpf map: %w", port, err)
+	}
+	return nil
+}
+
+func (a *Server) enableRedirect(port uint16) error {
+	if err := a.maps.DisableRedirect.Delete(&port); err != nil {
+		if !errors.Is(err, ebpf.ErrKeyNotExist) {
+			return err
+		}
+	}
+	return nil
 }
 
 // proxy just proxies between conn1 and conn2.

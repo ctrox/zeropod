@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 	"time"
@@ -28,15 +29,19 @@ func TestActivator(t *testing.T) {
 	port, err := freePort()
 	require.NoError(t, err)
 
-	s, err := NewServer(ctx, []uint16{uint16(port)}, nn, "lo")
+	s, err := NewServer(ctx, nn)
 	require.NoError(t, err)
+
+	bpf, err := InitBPF(os.Getpid())
+	require.NoError(t, err)
+	require.NoError(t, bpf.AttachRedirector("lo"))
 
 	response := "ok"
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, response)
 	}))
 
-	err = s.Start(ctx, func() error {
+	err = s.Start(ctx, []uint16{uint16(port)}, func() error {
 		// simulate a delay until our server is started
 		time.Sleep(time.Millisecond * 200)
 		l, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))

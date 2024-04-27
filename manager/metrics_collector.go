@@ -3,7 +3,7 @@ package manager
 import (
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"os"
@@ -25,18 +25,18 @@ func Handler(w http.ResponseWriter, req *http.Request) {
 func fetchMetricsAndMerge(w io.Writer) {
 	socks, err := os.ReadDir(zeropod.MetricsSocketPath)
 	if err != nil {
-		log.Printf("error listing file in metrics socket path: %s: %s", zeropod.MetricsSocketPath, err)
+		slog.Error("error listing file in metrics socket path", "path", zeropod.MetricsSocketPath, "err", err)
 		return
 	}
 
 	mfs := map[string]*dto.MetricFamily{}
 	for _, sock := range socks {
 		sockName := filepath.Join(zeropod.MetricsSocketPath, sock.Name())
-		log.Printf("reading sock: %s", sockName)
+		slog.Info("reading sock", "name", sockName)
 
 		res, err := getMetrics(sockName)
 		if err != nil {
-			log.Println(err)
+			slog.Error("getting metrics", "err", err)
 			// we still want to read the rest of the sockets
 			continue
 		}
@@ -61,7 +61,7 @@ func fetchMetricsAndMerge(w io.Writer) {
 	for _, n := range names {
 		err := enc.Encode(mfs[n])
 		if err != nil {
-			log.Println(err)
+			slog.Error("encoding metrics", "err", err)
 			return
 		}
 	}

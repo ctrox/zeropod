@@ -23,7 +23,6 @@ build-kind: build
 	docker cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin/
 
 install-kind: build-installer build-manager
-	docker exec kind-control-plane mount -t bpf bpf /sys/fs/bpf
 	kind load docker-image $(INSTALLER_IMAGE)
 	kind load docker-image $(MANAGER_IMAGE)
 	kubectl apply -k config/kind
