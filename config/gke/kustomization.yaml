@@ -1,8 +1,7 @@
 resources:
   - ../production
-patchesStrategicMerge:
-  - daemonset.yaml
 patches:
+  - path: daemonset.yaml
   - patch: |-
       - op: add
         path: /spec/template/spec/initContainers/0/args/-
