@@ -120,10 +120,10 @@ class](https://kubernetes.io/docs/concepts/containers/runtime-class/), it
 needs to install binaries to your cluster nodes (by default in `/opt/zeropod`)
 and also configure Containerd to load the shim. If you first test this, it's
 probably best to use a [kind](https://kind.sigs.k8s.io) cluster or something
-similar that you can quickly setup and delete again. It uses a DaemonSet for
-installing components on the node itself and also runs a `manager` component
-as a second container for collecting metrics and probably other uses in the
-future.
+similar that you can quickly setup and delete again. It uses a DaemonSet
+called `zeropod-node` for installing components on the node itself and also
+runs the `manager` component for attaching the eBPF programs and collecting
+metrics.
 
 ### Installation
 
@@ -256,6 +256,29 @@ zeropod.ctrox.dev/pre-dump: "true"
 # use-cases where the application is stateless and super fast to startup.
 zeropod.ctrox.dev/disable-checkpointing: "true"
 ```
+
+## zeropod-node
+
+The zeropod-node Daemonset is scheduled on every node labelled
+`zeropod.ctrox.dev/node=true`. The individual components of the node daemon
+are documented in this section.
+
+### Installer
+
+The installer runs as an init-container and runs the binary
+`cmd/installer/main.go` with some distro-specific options to install the
+runtime binaries, configure containerd and register the `RuntimeClass`.
+
+### Manager
+
+The manager component starts after the installer init-container has succeeded.
+It provides functionality that is needed on a node-level and is would bloat
+the shim otherwise. For example, loading eBPF programs can be quite memory
+intensive so they have been moved from the shim to the manager to keep the
+shim memory usage as minimal as possible.
+
+In addition to that it collects metrics from all the shim processes and
+exposes those metrics on an HTTP endpoint.
 
 ## Metrics
 

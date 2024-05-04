@@ -1,8 +1,7 @@
 resources:
   - ../production
-patchesStrategicMerge:
-  - rke2.yaml
 patches:
+  - path: rke2.yaml
   - patch: |-
       - op: add
         path: /spec/template/spec/initContainers/0/args/-

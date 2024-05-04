@@ -10,6 +10,7 @@ struct {
 	__uint(max_entries, 1024); // should be enough pids?
 	__type(key, __u32);   // pid
 	__type(value, __u64); // ktime ns of the last tracked event
+	__uint(pinning, LIBBPF_PIN_BY_NAME);
 } tcp_events SEC(".maps");
 
 SEC("kretprobe/inet_csk_accept")

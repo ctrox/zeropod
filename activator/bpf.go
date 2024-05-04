@@ -1,16 +1,16 @@
 package activator
 
 import (
-	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/rlimit"
-	"github.com/ctrox/zeropod/socket"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
@@ -18,17 +18,26 @@ import (
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf redirector.c -- -I/headers
 
-func initBPF(ifaces ...string) (*bpfObjects, func(), error) {
+const BPFFSPath = "/sys/fs/bpf"
+
+type BPF struct {
+	pid     int
+	objs    *bpfObjects
+	qdiscs  []*netlink.GenericQdisc
+	filters []*netlink.BpfFilter
+}
+
+func InitBPF(pid int) (*BPF, error) {
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	// as a single shim process can host multiple containers, we store the map
 	// in a directory per shim process.
-	path := pinPath()
+	path := PinPath(pid)
 	if err := os.MkdirAll(path, os.ModePerm); err != nil {
-		return nil, nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
+		return nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
 	}
 
 	objs := bpfObjects{}
@@ -37,16 +46,37 @@ func initBPF(ifaces ...string) (*bpfObjects, func(), error) {
 			PinPath: path,
 		},
 	}); err != nil {
-		return nil, nil, fmt.Errorf("loading objects: %w", err)
+		return nil, fmt.Errorf("loading objects: %w", err)
 	}
 
-	qdiscs := []*netlink.GenericQdisc{}
-	filters := []*netlink.BpfFilter{}
+	return &BPF{pid: pid, objs: &objs}, nil
+}
 
+func (bpf *BPF) Cleanup() error {
+	if err := bpf.objs.Close(); err != nil {
+		return fmt.Errorf("unable to close bpf objects: %w", err)
+	}
+
+	for _, qdisc := range bpf.qdiscs {
+		if err := netlink.QdiscDel(qdisc); !os.IsNotExist(err) {
+			return fmt.Errorf("unable to delete qdisc: %w", err)
+		}
+	}
+	for _, filter := range bpf.filters {
+		if err := netlink.FilterDel(filter); !os.IsNotExist(err) {
+			return fmt.Errorf("unable to delete filter: %w", err)
+		}
+	}
+
+	slog.Info("deleting", "path", PinPath(bpf.pid))
+	return os.RemoveAll(PinPath(bpf.pid))
+}
+
+func (bpf *BPF) AttachRedirector(ifaces ...string) error {
 	for _, iface := range ifaces {
 		devID, err := net.InterfaceByName(iface)
 		if err != nil {
-			return nil, nil, fmt.Errorf("could not get interface ID: %w", err)
+			return fmt.Errorf("could not get interface ID: %w", err)
 		}
 
 		qdisc := &netlink.GenericQdisc{
@@ -59,9 +89,9 @@ func initBPF(ifaces ...string) (*bpfObjects, func(), error) {
 		}
 
 		if err := netlink.QdiscReplace(qdisc); err != nil {
-			return nil, nil, fmt.Errorf("could not replace qdisc: %w", err)
+			return fmt.Errorf("could not replace qdisc: %w", err)
 		}
-		qdiscs = append(qdiscs, qdisc)
+		bpf.qdiscs = append(bpf.qdiscs, qdisc)
 
 		ingress := netlink.BpfFilter{
 			FilterAttrs: netlink.FilterAttrs{
@@ -70,79 +100,58 @@ func initBPF(ifaces ...string) (*bpfObjects, func(), error) {
 				Handle:    1,
 				Protocol:  unix.ETH_P_ALL,
 			},
-			Fd:           objs.TcRedirectIngress.FD(),
-			Name:         objs.TcRedirectIngress.String(),
+			Fd:           bpf.objs.TcRedirectIngress.FD(),
+			Name:         bpf.objs.TcRedirectIngress.String(),
 			DirectAction: true,
 		}
 		egress := ingress
 		egress.Parent = netlink.HANDLE_MIN_EGRESS
-		egress.Fd = objs.TcRedirectEgress.FD()
-		egress.Name = objs.TcRedirectEgress.String()
+		egress.Fd = bpf.objs.TcRedirectEgress.FD()
+		egress.Name = bpf.objs.TcRedirectEgress.String()
 
 		if err := netlink.FilterReplace(&ingress); err != nil {
-			return nil, nil, fmt.Errorf("failed to replace tc filter: %w", err)
+			return fmt.Errorf("failed to replace tc filter: %w", err)
 		}
-		filters = append(filters, &ingress)
+		bpf.filters = append(bpf.filters, &ingress)
 
 		if err := netlink.FilterReplace(&egress); err != nil {
-			return nil, nil, fmt.Errorf("failed to replace tc filter: %w", err)
+			return fmt.Errorf("failed to replace tc filter: %w", err)
 		}
-		filters = append(filters, &egress)
+		bpf.filters = append(bpf.filters, &egress)
 	}
 
-	return &objs, func() {
-		for _, qdisc := range qdiscs {
-			netlink.QdiscDel(qdisc)
-		}
-		for _, filter := range filters {
-			netlink.FilterDel(filter)
-		}
-		objs.Close()
-		os.RemoveAll(pinPath())
-	}, nil
-}
-
-func pinPath() string {
-	return filepath.Join(socket.BPFFSPath, "zeropod_maps", strconv.Itoa(os.Getpid()))
-}
-
-// RedirectPort redirects the port from to on ingress and to from on egress.
-func (a *Server) RedirectPort(from, to uint16) error {
-	if err := a.bpfObjs.IngressRedirects.Put(&from, &to); err != nil {
-		return fmt.Errorf("unable to put ports %d -> %d into bpf map: %w", from, to, err)
-	}
-	if err := a.bpfObjs.EgressRedirects.Put(&to, &from); err != nil {
-		return fmt.Errorf("unable to put ports %d -> %d into bpf map: %w", to, from, err)
-	}
 	return nil
 }
 
-func (a *Server) registerConnection(port uint16) error {
-	if err := a.bpfObjs.ActiveConnections.Put(&port, uint8(1)); err != nil {
-		return fmt.Errorf("unable to put port %d into bpf map: %w", port, err)
-	}
-	return nil
+func PinPath(pid int) string {
+	return filepath.Join(MapsPath(), strconv.Itoa(pid))
 }
 
-func (a *Server) removeConnection(port uint16) error {
-	if err := a.bpfObjs.ActiveConnections.Delete(&port); err != nil {
-		return fmt.Errorf("unable to delete port %d in bpf map: %w", port, err)
-	}
-	return nil
+func MapsPath() string {
+	return filepath.Join(BPFFSPath, "zeropod_maps")
 }
 
-func (a *Server) disableRedirect(port uint16) error {
-	if err := a.bpfObjs.DisableRedirect.Put(&port, uint8(1)); err != nil {
-		return fmt.Errorf("unable to put %d into bpf map: %w", port, err)
-	}
-	return nil
+// MountBPFFS executes a mount -t bpf on the supplied path
+func MountBPFFS(path string) error {
+	return mount("bpf", "bpf", path)
 }
 
-func (a *Server) enableRedirect(port uint16) error {
-	if err := a.bpfObjs.DisableRedirect.Delete(&port); err != nil {
-		if !errors.Is(err, ebpf.ErrKeyNotExist) {
-			return err
+// MountBPFFS mounts the kernel debugfs
+func MountDebugFS() error {
+	return mount("debugfs", "debugfs", "/sys/kernel/debug")
+}
+
+func mount(name, typ, path string) error {
+	const alreadyMountedCode = 32
+	out, err := exec.Command("mount", "-t", typ, name, path).CombinedOutput()
+	if err != nil {
+		if exitError, ok := err.(*exec.ExitError); ok {
+			if exitError.ExitCode() == alreadyMountedCode {
+				return nil
+			}
 		}
+		return fmt.Errorf("unable to mount BPF fs: %s: %s", err, out)
 	}
+
 	return nil
 }

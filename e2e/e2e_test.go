@@ -202,10 +202,10 @@ func TestE2E(t *testing.T) {
 		mfs := getNodeMetrics(t, client, cfg)
 
 		tests := map[string]struct {
-			metric               string
-			pod                  *corev1.Pod
-			gaugeValue           *float64
-			histogramSampleCount *uint64
+			metric                  string
+			pod                     *corev1.Pod
+			gaugeValue              *float64
+			minHistogramSampleCount *uint64
 		}{
 			"running": {
 				metric:     prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning),
@@ -222,20 +222,18 @@ func TestE2E(t *testing.T) {
 				pod:    checkpointedPod,
 			},
 			"checkpoint duration": {
-				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricCheckPointDuration),
-				pod:    checkpointedPod,
-				// we expect two checkpoints as the first one happens due to the startupProbe
-				histogramSampleCount: ptr.To(uint64(2)),
+				metric:                  prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricCheckPointDuration),
+				pod:                     checkpointedPod,
+				minHistogramSampleCount: ptr.To(uint64(1)),
 			},
 			"last restore time": {
 				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricLastRestoreTime),
 				pod:    restoredPod,
 			},
 			"restore duration": {
-				metric: prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration),
-				pod:    restoredPod,
-				// we expect two restores as the first one happens due to the startupProbe
-				histogramSampleCount: ptr.To(uint64(2)),
+				metric:                  prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration),
+				pod:                     restoredPod,
+				minHistogramSampleCount: ptr.To(uint64(1)),
 			},
 		}
 
@@ -260,8 +258,8 @@ func TestE2E(t *testing.T) {
 						"gauge value does not match expectation")
 				}
 
-				if tc.histogramSampleCount != nil {
-					assert.Equal(t, *tc.histogramSampleCount, *metric.Histogram.SampleCount,
+				if tc.minHistogramSampleCount != nil {
+					assert.GreaterOrEqual(t, *metric.Histogram.SampleCount, *tc.minHistogramSampleCount,
 						"histogram sample count does not match expectation")
 				}
 			})

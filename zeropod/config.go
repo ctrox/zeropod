@@ -40,6 +40,7 @@ type annotationConfig struct {
 	ContainerType         string `mapstructure:"io.kubernetes.cri.container-type"`
 	PodName               string `mapstructure:"io.kubernetes.cri.sandbox-name"`
 	PodNamespace          string `mapstructure:"io.kubernetes.cri.sandbox-namespace"`
+	PodUID                string `mapstructure:"io.kubernetes.cri.sandbox-uid"`
 }
 
 type Config struct {
@@ -52,6 +53,7 @@ type Config struct {
 	ContainerType         string
 	PodName               string
 	PodNamespace          string
+	PodUID                string
 	spec                  *specs.Spec
 }
 
@@ -133,6 +135,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ContainerType:         cfg.ContainerType,
 		PodName:               cfg.PodName,
 		PodNamespace:          cfg.PodNamespace,
+		PodUID:                cfg.PodUID,
 		spec:                  spec,
 	}, nil
 }

@@ -8,19 +8,26 @@ import (
 	"path"
 	"time"
 
-	"github.com/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
 	runcC "github.com/containerd/go-runc"
+	"github.com/containerd/log"
+	"github.com/ctrox/zeropod/activator"
 )
 
 const retryInterval = time.Second
 
 func (c *Container) scaleDown(ctx context.Context) error {
-	if err := c.initActivator(ctx); err != nil {
+	if err := c.startActivator(ctx); err != nil {
 		if errors.Is(err, errNoPortsDetected) {
 			log.G(ctx).Infof("no ports detected, rescheduling scale down in %s", retryInterval)
 			return c.scheduleScaleDownIn(retryInterval)
 		}
+
+		if errors.Is(err, activator.ErrMapNotFound) {
+			log.G(ctx).Infof("activator is not ready, rescheduling scale down in %s", retryInterval)
+			return c.scheduleScaleDownIn(retryInterval)
+		}
+
 		return err
 	}
 

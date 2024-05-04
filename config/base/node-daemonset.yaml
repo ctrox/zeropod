@@ -33,6 +33,21 @@ spec:
               name: systemd-run
             - mountPath: /etc/criu
               name: criu-etc
+        - name: prepare-bpf-fs
+          args:
+          - mount | grep "/sys/fs/bpf type bpf" || mount -t bpf bpf /sys/fs/bpf
+          command:
+          - /bin/sh
+          - -c
+          - --
+          image: alpine:3.19.1
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            privileged: true
+          volumeMounts:
+          - mountPath: /sys/fs/bpf
+            mountPropagation: Bidirectional
+            name: bpf
       containers:
         - name: manager
           image: manager
@@ -43,6 +58,18 @@ spec:
           volumeMounts:
             - mountPath: /run/zeropod
               name: zeropod-run
+            - mountPath: /hostproc
+              name: hostproc
+            - mountPath: /sys/fs/bpf
+              name: bpf
+          securityContext:
+            capabilities:
+              add:
+                # for net nsenter
+                - "SYS_PTRACE"
+                - "SYS_ADMIN"
+                # for attaching qdiscs/filters
+                - "NET_ADMIN"
       tolerations:
         - key: kubernetes.io/arch
           operator: Equal
@@ -67,3 +94,11 @@ spec:
         - name: criu-etc
           hostPath:
             path: /etc/criu
+        - hostPath:
+            path: /proc
+            type: Directory
+          name: hostproc
+        - hostPath:
+            path: /sys/fs/bpf
+            type: Directory
+          name: bpf

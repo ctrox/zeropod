@@ -10,14 +10,13 @@ import (
 
 	"github.com/containerd/containerd/api/runtime/task/v2"
 	"github.com/containerd/containerd/cio"
-	"github.com/containerd/log"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/pkg/cri/config"
 	crio "github.com/containerd/containerd/pkg/cri/io"
 	cioutil "github.com/containerd/containerd/pkg/ioutil"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime/v2/runc"
+	"github.com/containerd/log"
 )
 
 func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
@@ -126,6 +125,9 @@ func (c *Container) restoreLoggers(id string, stdio stdio.Stdio) error {
 }
 
 func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdout io.WriteCloser, stderr io.WriteCloser, err error) {
+	// from github.com/containerd/containerd/pkg/cri/config
+	const maxContainerLogLineSize = 16 * 1024
+
 	if logPath != "" {
 		// Only generate container log when log path is specified.
 		f, err := os.OpenFile(logPath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0777)
@@ -139,10 +141,10 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 		}()
 		var stdoutCh, stderrCh <-chan struct{}
 		wc := cioutil.NewSerialWriteCloser(f)
-		stdout, stdoutCh = crio.NewCRILogger(logPath, wc, crio.Stdout, config.DefaultConfig().MaxContainerLogLineSize)
+		stdout, stdoutCh = crio.NewCRILogger(logPath, wc, crio.Stdout, maxContainerLogLineSize)
 		// Only redirect stderr when there is no tty.
 		if !tty {
-			stderr, stderrCh = crio.NewCRILogger(logPath, wc, crio.Stderr, config.DefaultConfig().MaxContainerLogLineSize)
+			stderr, stderrCh = crio.NewCRILogger(logPath, wc, crio.Stderr, maxContainerLogLineSize)
 		}
 		go func() {
 			if stdoutCh != nil {

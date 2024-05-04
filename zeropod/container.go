@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"github.com/containerd/containerd/errdefs"
-	"github.com/containerd/log"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime/v2/runc"
+	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/socket"
@@ -60,7 +60,7 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		return nil, err
 	}
 
-	logPath, err := getLogPath(ctx, container.ID)
+	logPath, err := getLogPath(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get log path: %w", err)
 	}
@@ -95,7 +95,7 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 
 	running.With(c.labels()).Set(1)
 
-	return c, nil
+	return c, c.initActivator(ctx)
 }
 
 func (c *Container) ScheduleScaleDown() error {
@@ -204,6 +204,21 @@ func (c *Container) initActivator(ctx context.Context) error {
 		return nil
 	}
 
+	srv, err := activator.NewServer(ctx, c.netNS)
+	if err != nil {
+		return err
+	}
+	c.activator = srv
+
+	return nil
+}
+
+// startActivator starts the activator
+func (c *Container) startActivator(ctx context.Context) error {
+	if c.activator.Started() {
+		return nil
+	}
+
 	if len(c.cfg.Ports) == 0 {
 		log.G(ctx).Info("no ports defined in config, detecting listening ports")
 		// if no ports are specified in the config, we try to find all listening ports
@@ -219,36 +234,18 @@ func (c *Container) initActivator(ctx context.Context) error {
 		c.cfg.Ports = ports
 	}
 
-	log.G(ctx).Infof("creating activator for ports: %v", c.cfg.Ports)
+	log.G(ctx).Infof("starting activator with ports: %v", c.cfg.Ports)
 
-	// TODO: is this really always eth0?
-	// as for loopback, this is required for port-forwarding to work
-	srv, err := activator.NewServer(ctx, c.cfg.Ports, c.netNS, "lo", "eth0")
-	if err != nil {
-		return err
-	}
-	c.activator = srv
-
-	if c.activator == nil {
-		return fmt.Errorf("no activator initialized, container might not be listening on any port")
-	}
-
-	if err := c.startActivator(ctx); err != nil {
-		log.G(ctx).Errorf("unable to start zeropod: %s", err)
-		return err
-	}
-
-	return nil
-}
-
-// startActivator starts the activator
-func (c *Container) startActivator(ctx context.Context) error {
 	// create a new context in order to not run into deadline of parent context
 	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", RuntimeName))
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := c.activator.Start(ctx, c.restoreHandler(ctx)); err != nil {
+	if err := c.activator.Start(ctx, c.cfg.Ports, c.restoreHandler(ctx)); err != nil {
+		if errors.Is(err, activator.ErrMapNotFound) {
+			return err
+		}
+
 		log.G(ctx).Errorf("failed to start activator: %s", err)
 		return err
 	}
@@ -283,7 +280,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 }
 
 func snapshotDir(bundle string) string {
-	return path.Join(bundle, "snapshots")
+	return path.Join(bundle, "work", "snapshots")
 }
 
 func containerDir(bundle string) string {

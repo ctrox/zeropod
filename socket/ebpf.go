@@ -3,32 +3,30 @@ package socket
 import (
 	"fmt"
 	"os"
-	"os/exec"
-	"path"
+	"path/filepath"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/ctrox/zeropod/activator"
 	"golang.org/x/sys/unix"
 )
-
-const BPFFSPath = "/sys/fs/bpf"
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf kprobe.c -- -I/headers
 
-// NewEBPFTracker returns a TCP connection tracker that will keep track of the
-// last TCP accept of specific processes. It writes the results to an ebpf map
-// keyed with the PID and the value contains the timestamp of the last
-// observed accept.
-func NewEBPFTracker() (Tracker, error) {
+const TCPEventsMap = "tcp_events"
+
+// LoadEBPFTracker loads the eBPF program and attaches the kretprobe to track
+// connections system-wide.
+func LoadEBPFTracker() (func() error, error) {
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, err
 	}
 
-	pinPath := path.Join(BPFFSPath, "zeropod_maps")
+	pinPath := activator.MapsPath()
 	if err := os.MkdirAll(pinPath, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
 	}
@@ -47,7 +45,7 @@ func NewEBPFTracker() (Tracker, error) {
 		return nil, fmt.Errorf("loading objects: %w", err)
 	}
 
-	// in the past we used inet_sock_set_state here but we now we use a
+	// in the past we used inet_sock_set_state here but we now use a
 	// kretprobe with inet_csk_accept as inet_sock_set_state is not giving us
 	// reliable PIDs. https://github.com/iovisor/bcc/issues/2304
 	kp, err := link.Kretprobe("inet_csk_accept", objs.KretprobeInetCskAccept, &link.KprobeOptions{})
@@ -55,13 +53,19 @@ func NewEBPFTracker() (Tracker, error) {
 		return nil, fmt.Errorf("linking kprobe: %w", err)
 	}
 
-	// TODO: pinning a perf event does not seem possible? What are the
-	// implications here, will we run into issues if we have many probes
-	// at the same time?
-	// if err := kp.Pin(BPFFSPath); err != nil {
-	// 	return nil, err
-	// }
+	return func() error {
+		if err := objs.Close(); err != nil {
+			return err
+		}
+		return kp.Close()
+	}, nil
+}
 
+// NewEBPFTracker returns a TCP connection tracker that will keep track of the
+// last TCP accept of specific processes. It writes the results to an ebpf map
+// keyed with the PID and the value contains the timestamp of the last
+// observed accept.
+func NewEBPFTracker() (Tracker, error) {
 	var resolver PIDResolver
 	resolver = noopResolver{}
 	// if hostProcPath exists, we're probably running in a test container. We
@@ -70,11 +74,12 @@ func NewEBPFTracker() (Tracker, error) {
 		resolver = hostResolver{}
 	}
 
+	tcpEvents, err := ebpf.LoadPinnedMap(filepath.Join(activator.MapsPath(), TCPEventsMap), &ebpf.LoadPinOptions{})
+
 	return &EBPFTracker{
 		PIDResolver: resolver,
-		objs:        objs,
-		kp:          kp,
-	}, nil
+		tcpEvents:   tcpEvents,
+	}, err
 }
 
 // PIDResolver allows to customize how the PIDs of the connection tracker are
@@ -99,9 +104,8 @@ func (err NoActivityRecordedErr) Error() string {
 }
 
 type EBPFTracker struct {
-	objs bpfObjects
-	kp   link.Link
 	PIDResolver
+	tcpEvents *ebpf.Map
 }
 
 // TrackPid puts the pid into the TcpEvents map meaning tcp events of the
@@ -109,7 +113,7 @@ type EBPFTracker struct {
 func (c *EBPFTracker) TrackPid(pid uint32) error {
 	val := uint64(0)
 	pid = c.PIDResolver.Resolve(pid)
-	if err := c.objs.TcpEvents.Put(&pid, &val); err != nil {
+	if err := c.tcpEvents.Put(&pid, &val); err != nil {
 		return fmt.Errorf("unable to put pid %d into bpf map: %w", pid, err)
 	}
 
@@ -119,7 +123,7 @@ func (c *EBPFTracker) TrackPid(pid uint32) error {
 // RemovePid removes the pid from the TcpEvents map.
 func (c *EBPFTracker) RemovePid(pid uint32) error {
 	pid = c.PIDResolver.Resolve(pid)
-	return c.objs.TcpEvents.Delete(&pid)
+	return c.tcpEvents.Delete(&pid)
 }
 
 // LastActivity returns a time.Time of the last tcp activity recorded of the
@@ -128,7 +132,7 @@ func (c *EBPFTracker) LastActivity(pid uint32) (time.Time, error) {
 	var val uint64
 
 	pid = c.PIDResolver.Resolve(pid)
-	if err := c.objs.TcpEvents.Lookup(&pid, &val); err != nil {
+	if err := c.tcpEvents.Lookup(&pid, &val); err != nil {
 		return time.Time{}, fmt.Errorf("looking up %d: %w", pid, err)
 	}
 
@@ -140,10 +144,7 @@ func (c *EBPFTracker) LastActivity(pid uint32) (time.Time, error) {
 }
 
 func (c *EBPFTracker) Close() error {
-	if err := c.objs.Close(); err != nil {
-		return err
-	}
-	return c.kp.Close()
+	return c.tcpEvents.Close()
 }
 
 // convertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
@@ -168,29 +169,4 @@ func getBootTimeNS() (int64, error) {
 	}
 
 	return unix.TimespecToNsec(ts), nil
-}
-
-// MountBPFFS executes a mount -t bpf on the supplied path
-func MountBPFFS(path string) error {
-	return mount("bpf", "bpf", path)
-}
-
-// MountBPFFS mounts the kernel debugfs
-func MountDebugFS() error {
-	return mount("debugfs", "debugfs", "/sys/kernel/debug")
-}
-
-func mount(name, typ, path string) error {
-	const alreadyMountedCode = 32
-	out, err := exec.Command("mount", "-t", typ, name, path).CombinedOutput()
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			if exitError.ExitCode() == alreadyMountedCode {
-				return nil
-			}
-		}
-		return fmt.Errorf("unable to mount BPF fs: %s: %s", err, out)
-	}
-
-	return nil
 }
