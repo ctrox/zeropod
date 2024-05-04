@@ -179,6 +179,23 @@ func TestE2E(t *testing.T) {
 		assert.GreaterOrEqual(t, restoreCount(t, client, cfg, pod), 2, "pod should have been restored 2 times")
 	})
 
+	t.Run("delete in restored state", func(t *testing.T) {
+		// as we want to delete the pod when it is in a restored state, we
+		// first need to make sure it has checkpointed at least once. We give
+		// it 2 seconds to checkpoint initially and wait 5 seconds to ensure
+		// it has finished checkpointing.
+		pod := testPod(scaleDownAfter(time.Second * 2))
+		cleanupPod := createPodAndWait(t, ctx, client, pod)
+		defer cleanupPod()
+
+		time.Sleep(time.Second * 5)
+		stdout, stderr, err := podExec(cfg, pod, "date")
+		require.NoError(t, err)
+		t.Log(stdout, stderr)
+		// since the cleanup has been deferred it's called right after the
+		// exec and should test the deletion in the restored state.
+	})
+
 	t.Run("metrics", func(t *testing.T) {
 		// create two pods to test metric merging
 		runningPod := testPod(scaleDownAfter(time.Hour))

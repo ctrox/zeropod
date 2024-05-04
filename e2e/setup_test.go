@@ -143,7 +143,7 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 				},
 			}},
 		}),
-		cluster.CreateWithNodeImage("kindest/node:v1.26.3"),
+		cluster.CreateWithNodeImage("kindest/node:v1.29.2"),
 		cluster.CreateWithRetain(false),
 		cluster.CreateWithKubeconfigPath(f.Name()),
 		cluster.CreateWithWaitForReady(time.Minute*2),
@@ -274,6 +274,20 @@ func deployNode(t testing.TB, ctx context.Context, c client.Client) error {
 	}, time.Second*30, time.Millisecond*500); !ok {
 		return fmt.Errorf("runtimeClass not found")
 	}
+
+	// wait for node pod to be running
+	nodePods := &corev1.PodList{}
+	require.NoError(t, c.List(ctx, nodePods, client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}))
+	require.Equal(t, 1, len(nodePods.Items))
+
+	pod := &nodePods.Items[0]
+	require.Eventually(t, func() bool {
+		if err := c.Get(ctx, objectName(pod), pod); err != nil {
+			return false
+		}
+
+		return pod.Status.Phase == corev1.PodRunning
+	}, time.Minute, time.Second, "waiting for node pod to be running")
 
 	return nil
 }
