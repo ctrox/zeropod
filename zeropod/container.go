@@ -19,6 +19,8 @@ import (
 	"github.com/ctrox/zeropod/socket"
 )
 
+type HandleStartedFunc func(*runc.Container, process.Process, bool)
+
 type Container struct {
 	*runc.Container
 
@@ -35,7 +37,8 @@ type Container struct {
 	platform       stdio.Platform
 	tracker        socket.Tracker
 	stopMetrics    context.CancelFunc
-	setContainer   func(container *runc.Container)
+	preRestore     func() HandleStartedFunc
+	postRestore    func(*runc.Container, HandleStartedFunc)
 
 	// mutex to lock during checkpoint/restore operations since concurrent
 	// restores can cause cgroup confusion. This mutex is shared between all
@@ -192,8 +195,12 @@ func (c *Container) Process() process.Process {
 	return c.process
 }
 
-func (c *Container) RegisterSetContainer(f func(*runc.Container)) {
-	c.setContainer = f
+func (c *Container) RegisterPreRestore(f func() HandleStartedFunc) {
+	c.preRestore = f
+}
+
+func (c *Container) RegisterPostRestore(f func(*runc.Container, HandleStartedFunc)) {
+	c.postRestore = f
 }
 
 var errNoPortsDetected = errors.New("no listening ports detected")

@@ -56,6 +56,11 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 	// the process is not yet restored.
 	container.CgroupSet(c.cgroup)
 
+	var handleStarted HandleStartedFunc
+	if c.preRestore != nil {
+		handleStarted = c.preRestore()
+	}
+
 	p, err := container.Process("")
 	if err != nil {
 		return nil, nil, err
@@ -76,8 +81,8 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 	c.Container = container
 	c.process = p
 
-	if c.setContainer != nil {
-		c.setContainer(container)
+	if c.postRestore != nil {
+		c.postRestore(container, handleStarted)
 	}
 
 	// process is running again, we don't need to redirect traffic anymore

@@ -135,8 +135,12 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}
 
-	zeropodContainer.RegisterSetContainer(func(c *runc.Container) {
-		w.setContainer(c)
+	zeropodContainer.RegisterPreRestore(func() zeropod.HandleStartedFunc {
+		return w.preRestore()
+	})
+
+	zeropodContainer.RegisterPostRestore(func(c *runc.Container, handleStarted zeropod.HandleStartedFunc) {
+		w.postRestore(c, handleStarted)
 	})
 
 	w.zeropodContainers[r.ID] = zeropodContainer
@@ -299,10 +303,25 @@ func (w *wrapper) preventExit(cp containerProcess) bool {
 	return false
 }
 
-// setContainer replaces the container in the task service. This is important
+// preRestore should be called before restoring as it calls preStart in the
+// task service to get the handleStarted closure.
+func (w *wrapper) preRestore() zeropod.HandleStartedFunc {
+	handleStarted, cleanup := w.preStart(nil)
+	defer cleanup()
+	return handleStarted
+}
+
+// postRestore replaces the container in the task service. This is important
 // to call after restore since the container object will have changed.
-func (s *service) setContainer(container *runc.Container) {
-	s.mu.Lock()
-	s.containers[container.ID] = container
-	s.mu.Unlock()
+// Additionally, this also calls the passed in handleStarted to make sure we
+// monitor the process exits of the newly restored process.
+func (w *wrapper) postRestore(container *runc.Container, handleStarted zeropod.HandleStartedFunc) {
+	w.mu.Lock()
+	p, _ := container.Process("")
+	w.containers[container.ID] = container
+	w.mu.Unlock()
+
+	if handleStarted != nil {
+		handleStarted(container, p, false)
+	}
 }
