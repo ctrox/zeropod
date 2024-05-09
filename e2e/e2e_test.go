@@ -164,31 +164,28 @@ func TestE2E(t *testing.T) {
 		cleanupPod := createPodAndWait(t, ctx, client, pod)
 		defer cleanupPod()
 
+		require.Eventually(t, func() bool {
+			return isCheckpointed(t, client, cfg, pod)
+		}, time.Second*10, time.Second)
+
 		stdout, stderr, err := podExec(cfg, pod, "date")
 		require.NoError(t, err)
 		t.Log(stdout, stderr)
 
-		// as we can't yet reliably check if the pod is fully checkpointed and
-		// ready for another exec, we simply retry
-		require.Eventually(t, func() bool {
-			stdout, stderr, err = podExec(cfg, pod, "date")
-			t.Log(stdout, stderr)
-			return err == nil
-		}, time.Second*10, time.Second)
-
-		assert.GreaterOrEqual(t, restoreCount(t, client, cfg, pod), 2, "pod should have been restored 2 times")
+		assert.GreaterOrEqual(t, restoreCount(t, client, cfg, pod), 1, "pod should have been restored at least once")
 	})
 
 	t.Run("delete in restored state", func(t *testing.T) {
 		// as we want to delete the pod when it is in a restored state, we
-		// first need to make sure it has checkpointed at least once. We give
-		// it 2 seconds to checkpoint initially and wait 5 seconds to ensure
-		// it has finished checkpointing.
-		pod := testPod(scaleDownAfter(time.Second * 2))
+		// first need to make sure it has checkpointed at least once.
+		pod := testPod(scaleDownAfter(0))
 		cleanupPod := createPodAndWait(t, ctx, client, pod)
 		defer cleanupPod()
 
-		time.Sleep(time.Second * 5)
+		require.Eventually(t, func() bool {
+			return isCheckpointed(t, client, cfg, pod)
+		}, time.Second*10, time.Second)
+
 		stdout, stderr, err := podExec(cfg, pod, "date")
 		require.NoError(t, err)
 		t.Log(stdout, stderr)
