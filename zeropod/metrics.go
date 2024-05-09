@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/containerd/log"
 	"github.com/containerd/containerd/runtime/v2/shim"
+	"github.com/containerd/log"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -75,16 +75,31 @@ func metricsSocketAddress(containerID string) string {
 	return fmt.Sprintf("unix://%s.sock", filepath.Join(MetricsSocketPath, containerID))
 }
 
-func startMetricsServer(ctx context.Context, containerID string) {
+func StartMetricsServer(ctx context.Context, containerID string) {
 	metricsAddress := metricsSocketAddress(containerID)
-	log.G(ctx).Infof("starting metrics server at %s", metricsAddress)
-
 	listener, err := shim.NewSocket(metricsAddress)
 	if err != nil {
-		log.G(ctx).WithError(err).Error("failed to create metrics listener")
-		return
+		if !shim.SocketEaddrinuse(err) {
+			log.G(ctx).WithError(err)
+			return
+		}
+
+		if shim.CanConnect(metricsAddress) {
+			log.G(ctx).Debug("metrics socket already exists, skipping server start")
+			return
+		}
+
+		if err := shim.RemoveSocket(metricsAddress); err != nil {
+			log.G(ctx).WithError(fmt.Errorf("remove pre-existing socket: %w", err))
+		}
+
+		listener, err = shim.NewSocket(metricsAddress)
+		if err != nil {
+			log.G(ctx).WithError(err).Error("failed to create metrics listener")
+		}
 	}
 
+	log.G(ctx).Infof("starting metrics server at %s", metricsAddress)
 	// write metrics address to filesystem
 	if err := shim.WriteAddress("metrics_address", metricsAddress); err != nil {
 		log.G(ctx).WithError(err).Errorf("failed to write metrics address")
@@ -130,4 +145,12 @@ func (c *Container) labels() map[string]string {
 		LabelPodName:       c.cfg.PodName,
 		LabelPodNamespace:  c.cfg.PodNamespace,
 	}
+}
+
+func (c *Container) deleteMetrics() {
+	checkpointDuration.Delete(c.labels())
+	restoreDuration.Delete(c.labels())
+	lastCheckpointTime.Delete(c.labels())
+	lastRestoreTime.Delete(c.labels())
+	running.Delete(c.labels())
 }

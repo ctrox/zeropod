@@ -36,7 +36,6 @@ type Container struct {
 	scaleDownTimer *time.Timer
 	platform       stdio.Platform
 	tracker        socket.Tracker
-	stopMetrics    context.CancelFunc
 	preRestore     func() HandleStartedFunc
 	postRestore    func(*runc.Container, HandleStartedFunc)
 
@@ -78,9 +77,6 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		return nil, err
 	}
 
-	metricsCtx, stopMetrics := context.WithCancel(ctx)
-	go startMetricsServer(metricsCtx, container.ID)
-
 	c := &Container{
 		Container:         container,
 		context:           ctx,
@@ -92,7 +88,6 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		logPath:           logPath,
 		netNS:             targetNS,
 		tracker:           tracker,
-		stopMetrics:       stopMetrics,
 		checkpointRestore: cr,
 	}
 
@@ -188,7 +183,7 @@ func (c *Container) Stop(ctx context.Context) {
 		log.G(ctx).Errorf("unable to close tracker: %s", err)
 	}
 	c.StopActivator(ctx)
-	c.stopMetrics()
+	c.deleteMetrics()
 }
 
 func (c *Container) Process() process.Process {

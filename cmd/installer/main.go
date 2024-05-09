@@ -68,7 +68,8 @@ network-lock skip
     "zeropod.ctrox.dev/container-names",
     "zeropod.ctrox.dev/scaledown-duration",
     "zeropod.ctrox.dev/disable-checkpointing",
-    "zeropod.ctrox.dev/pre-dump"
+    "zeropod.ctrox.dev/pre-dump",
+    "io.containerd.runc.v2.group"
   ]
 `
 )
