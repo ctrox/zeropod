@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -70,13 +71,17 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		return nil
 	})
 
-	if address, err := shim.ReadAddress("address"); err == nil {
-		sd.RegisterCallback(func(context.Context) error {
-			return shim.RemoveSocket(address)
-		})
+	address, err := shim.ReadAddress("address")
+	if err != nil {
+		return nil, err
 	}
+	sd.RegisterCallback(func(context.Context) error {
+		return shim.RemoveSocket(address)
+	})
 
-	return w, err
+	go zeropod.StartMetricsServer(ctx, filepath.Base(address))
+
+	return w, nil
 }
 
 type wrapper struct {
@@ -226,6 +231,7 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 		log.G(ctx).Infof("requested scaled down process %d to be killed", zeropodContainer.Process().Pid())
 		zeropodContainer.Process().SetExited(0)
 		zeropodContainer.InitialProcess().SetExited(0)
+		zeropodContainer.Stop(ctx)
 
 		return w.service.Kill(ctx, r)
 	}
