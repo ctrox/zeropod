@@ -156,9 +156,6 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil
 	})
 
-	// TODO: this is not a good idea (the 10s). A better idea is probably to
-	// wait whenever we try to first get the Port from the app (retry until
-	// the app is listening).
 	if err := zeropodContainer.ScheduleScaleDown(); err != nil {
 		return nil, err
 	}
