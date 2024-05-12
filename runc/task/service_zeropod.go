@@ -80,7 +80,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		return shim.RemoveSocket(address)
 	})
 
-	go zeropod.StartMetricsServer(ctx, filepath.Base(address))
+	go startShimServer(ctx, filepath.Base(address))
 
 	return w, nil
 }

@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package zeropod.shim.v1;
+option go_package = "github.com/ctrox/zeropod/api/shim/v1/;v1";
+
+import "google/protobuf/empty.proto";
+import "io/prometheus/client/metrics.proto";
+
+service Shim {
+	rpc Metrics(MetricsRequest) returns (MetricsResponse);
+}
+
+message MetricsResponse {
+	repeated io.prometheus.client.MetricFamily metrics = 1;
+}
+
+message MetricsRequest {
+	google.protobuf.Empty empty = 1;
+}

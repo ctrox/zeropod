@@ -1,19 +1,21 @@
 package manager
 
 import (
-	"fmt"
+	"context"
 	"io"
 	"log/slog"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 
-	"github.com/ctrox/zeropod/zeropod"
+	"github.com/containerd/ttrpc"
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/ctrox/zeropod/runc/task"
 	dto "github.com/prometheus/client_model/go"
-
 	"github.com/prometheus/common/expfmt"
+	"golang.org/x/exp/maps"
 )
 
 func Handler(w http.ResponseWriter, req *http.Request) {
@@ -23,42 +25,40 @@ func Handler(w http.ResponseWriter, req *http.Request) {
 // fetchMetricsAndMerge gets metrics from each socket, merges them together
 // and writes them to w.
 func fetchMetricsAndMerge(w io.Writer) {
-	socks, err := os.ReadDir(zeropod.MetricsSocketPath)
+	socks, err := os.ReadDir(task.ShimSocketPath)
 	if err != nil {
-		slog.Error("error listing file in metrics socket path", "path", zeropod.MetricsSocketPath, "err", err)
+		slog.Error("error listing file in shim socket path", "path", task.ShimSocketPath, "err", err)
 		return
 	}
 
 	mfs := map[string]*dto.MetricFamily{}
 	for _, sock := range socks {
-		sockName := filepath.Join(zeropod.MetricsSocketPath, sock.Name())
-		slog.Info("reading sock", "name", sockName)
+		sockName := filepath.Join(task.ShimSocketPath, sock.Name())
+		slog.Debug("getting metrics", "name", sockName)
 
-		res, err := getMetrics(sockName)
+		shimMetrics, err := getMetricsOverTTRPC(context.Background(), sockName)
 		if err != nil {
 			slog.Error("getting metrics", "err", err)
 			// we still want to read the rest of the sockets
 			continue
 		}
+		for _, mf := range shimMetrics {
+			if mf.Name == nil {
+				continue
+			}
 
-		for n, mf := range res {
-			mfo, ok := mfs[n]
+			mfo, ok := mfs[*mf.Name]
 			if ok {
 				mfo.Metric = append(mfo.Metric, mf.Metric...)
 			} else {
-				mfs[n] = mf
+				mfs[*mf.Name] = mf
 			}
 		}
 	}
-
-	names := []string{}
-	for n := range mfs {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-
+	keys := maps.Keys(mfs)
+	slices.Sort(keys)
 	enc := expfmt.NewEncoder(w, expfmt.FmtText)
-	for _, n := range names {
+	for _, n := range keys {
 		err := enc.Encode(mfs[n])
 		if err != nil {
 			slog.Error("encoding metrics", "err", err)
@@ -67,30 +67,16 @@ func fetchMetricsAndMerge(w io.Writer) {
 	}
 }
 
-func getMetrics(sock string) (map[string]*dto.MetricFamily, error) {
-	tr := &http.Transport{
-		Dial: func(proto, addr string) (conn net.Conn, err error) {
-			return net.Dial("unix", sock)
-		},
-	}
-
-	client := &http.Client{Transport: tr}
-
-	// the host does not seem to matter when using unix sockets
-	resp, err := client.Get("http://localhost/metrics")
+func getMetricsOverTTRPC(ctx context.Context, sock string) ([]*dto.MetricFamily, error) {
+	conn, err := net.Dial("unix", sock)
 	if err != nil {
 		return nil, err
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("expected status 200, got %v", resp.StatusCode)
-	}
-
-	var parser expfmt.TextParser
-	mfs, err := parser.TextToMetricFamilies(resp.Body)
+	resp, err := v1.NewShimClient(ttrpc.NewClient(conn)).Metrics(ctx, &v1.MetricsRequest{})
 	if err != nil {
 		return nil, err
 	}
 
-	return mfs, nil
+	return resp.Metrics, nil
 }
