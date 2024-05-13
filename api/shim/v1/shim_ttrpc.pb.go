@@ -9,6 +9,21 @@ import (
 
 type ShimService interface {
 	Metrics(context.Context, *MetricsRequest) (*MetricsResponse, error)
+	GetStatus(context.Context, *ContainerRequest) (*ContainerStatus, error)
+	SubscribeStatus(context.Context, *SubscribeStatusRequest, Shim_SubscribeStatusServer) error
+}
+
+type Shim_SubscribeStatusServer interface {
+	Send(*ContainerStatus) error
+	ttrpc.StreamServer
+}
+
+type shimSubscribeStatusServer struct {
+	ttrpc.StreamServer
+}
+
+func (x *shimSubscribeStatusServer) Send(m *ContainerStatus) error {
+	return x.StreamServer.SendMsg(m)
 }
 
 func RegisterShimService(srv *ttrpc.Server, svc ShimService) {
@@ -21,15 +36,41 @@ func RegisterShimService(srv *ttrpc.Server, svc ShimService) {
 				}
 				return svc.Metrics(ctx, &req)
 			},
+			"GetStatus": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req ContainerRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.GetStatus(ctx, &req)
+			},
+		},
+		Streams: map[string]ttrpc.Stream{
+			"SubscribeStatus": {
+				Handler: func(ctx context.Context, stream ttrpc.StreamServer) (interface{}, error) {
+					m := new(SubscribeStatusRequest)
+					if err := stream.RecvMsg(m); err != nil {
+						return nil, err
+					}
+					return nil, svc.SubscribeStatus(ctx, m, &shimSubscribeStatusServer{stream})
+				},
+				StreamingClient: false,
+				StreamingServer: true,
+			},
 		},
 	})
+}
+
+type ShimClient interface {
+	Metrics(context.Context, *MetricsRequest) (*MetricsResponse, error)
+	GetStatus(context.Context, *ContainerRequest) (*ContainerStatus, error)
+	SubscribeStatus(context.Context, *SubscribeStatusRequest) (Shim_SubscribeStatusClient, error)
 }
 
 type shimClient struct {
 	client *ttrpc.Client
 }
 
-func NewShimClient(client *ttrpc.Client) ShimService {
+func NewShimClient(client *ttrpc.Client) ShimClient {
 	return &shimClient{
 		client: client,
 	}
@@ -41,4 +82,41 @@ func (c *shimClient) Metrics(ctx context.Context, req *MetricsRequest) (*Metrics
 		return nil, err
 	}
 	return &resp, nil
+}
+
+func (c *shimClient) GetStatus(ctx context.Context, req *ContainerRequest) (*ContainerStatus, error) {
+	var resp ContainerStatus
+	if err := c.client.Call(ctx, "zeropod.shim.v1.Shim", "GetStatus", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
+}
+
+func (c *shimClient) SubscribeStatus(ctx context.Context, req *SubscribeStatusRequest) (Shim_SubscribeStatusClient, error) {
+	stream, err := c.client.NewStream(ctx, &ttrpc.StreamDesc{
+		StreamingClient: false,
+		StreamingServer: true,
+	}, "zeropod.shim.v1.Shim", "SubscribeStatus", req)
+	if err != nil {
+		return nil, err
+	}
+	x := &shimSubscribeStatusClient{stream}
+	return x, nil
+}
+
+type Shim_SubscribeStatusClient interface {
+	Recv() (*ContainerStatus, error)
+	ttrpc.ClientStream
+}
+
+type shimSubscribeStatusClient struct {
+	ttrpc.ClientStream
+}
+
+func (x *shimSubscribeStatusClient) Recv() (*ContainerStatus, error) {
+	m := new(ContainerStatus)
+	if err := x.ClientStream.RecvMsg(m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }

@@ -36,6 +36,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err := manager.StartSubscribers(ctx); err != nil {
+		slog.Error("starting subscribers", "err", err)
+		os.Exit(1)
+	}
+
 	server := &http.Server{Addr: *metricsAddr}
 	http.HandleFunc("/metrics", manager.Handler)
 

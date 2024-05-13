@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/zeropod"
 	"google.golang.org/protobuf/types/known/emptypb"
 
@@ -58,8 +59,9 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	}
 	w := &wrapper{
 		service:           s,
-		zeropodContainers: make(map[string]*zeropod.Container),
 		checkpointRestore: sync.Mutex{},
+		zeropodContainers: make(map[string]*zeropod.Container),
+		zeropodEvents:     make(chan *v1.ContainerStatus, 128),
 	}
 	go w.processExits()
 	runcC.Monitor = reaper.Default
@@ -80,7 +82,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		return shim.RemoveSocket(address)
 	})
 
-	go startShimServer(ctx, filepath.Base(address))
+	go startShimServer(ctx, filepath.Base(address), w.zeropodEvents)
 
 	return w, nil
 }
@@ -91,6 +93,7 @@ type wrapper struct {
 	mut               sync.Mutex
 	checkpointRestore sync.Mutex
 	zeropodContainers map[string]*zeropod.Container
+	zeropodEvents     chan *v1.ContainerStatus
 }
 
 func (w *wrapper) RegisterTTRPC(server *ttrpc.Server) error {
@@ -136,7 +139,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 
 	log.G(ctx).Infof("creating zeropod container: %s", cfg.ContainerName)
 
-	zeropodContainer, err := zeropod.New(w.context, cfg, &w.checkpointRestore, container, w.platform)
+	zeropodContainer, err := zeropod.New(w.context, cfg, &w.checkpointRestore, container, w.platform, w.zeropodEvents)
 	if err != nil {
 		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}

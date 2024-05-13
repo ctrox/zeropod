@@ -20,12 +20,12 @@ func shimSocketAddress(id string) string {
 	return fmt.Sprintf("unix://%s.sock", filepath.Join(ShimSocketPath, id))
 }
 
-func startShimServer(ctx context.Context, id string) {
+func startShimServer(ctx context.Context, id string, events chan *v1.ContainerStatus) {
 	socket := shimSocketAddress(id)
 	listener, err := shim.NewSocket(socket)
 	if err != nil {
 		if !shim.SocketEaddrinuse(err) {
-			log.G(ctx).WithError(err)
+			log.G(ctx).WithError(err).Error("listening to socket")
 			return
 		}
 
@@ -35,7 +35,7 @@ func startShimServer(ctx context.Context, id string) {
 		}
 
 		if err := shim.RemoveSocket(socket); err != nil {
-			log.G(ctx).WithError(fmt.Errorf("remove pre-existing socket: %w", err))
+			log.G(ctx).WithError(err).Error("remove pre-existing socket")
 		}
 
 		listener, err = shim.NewSocket(socket)
@@ -57,7 +57,8 @@ func startShimServer(ctx context.Context, id string) {
 		return
 	}
 	defer s.Close()
-	v1.RegisterShimService(s, &shimService{metrics: zeropod.NewRegistry()})
+
+	v1.RegisterShimService(s, &shimService{metrics: zeropod.NewRegistry(), events: events})
 
 	defer func() {
 		listener.Close()
@@ -67,7 +68,7 @@ func startShimServer(ctx context.Context, id string) {
 
 	<-ctx.Done()
 
-	log.G(ctx).Info("stopping metrics server")
+	log.G(ctx).Info("stopping shim server")
 	listener.Close()
 	s.Close()
 	_ = os.RemoveAll(socket)
@@ -77,9 +78,35 @@ func startShimServer(ctx context.Context, id string) {
 // zeropod-specific functions like metrics.
 type shimService struct {
 	metrics *prometheus.Registry
+	task    wrapper
+	events  chan *v1.ContainerStatus
 }
 
-// Metrics implements v1.ShimService.
+// SubscribeStatus watches for shim events.
+func (s *shimService) SubscribeStatus(ctx context.Context, _ *v1.SubscribeStatusRequest, srv v1.Shim_SubscribeStatusServer) error {
+	for {
+		select {
+		case msg := <-s.events:
+			if err := srv.Send(msg); err != nil {
+				log.G(ctx).Errorf("unable to send event message: %s", err)
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
+}
+
+// GetStatus returns the status of a zeropod container.
+func (s *shimService) GetStatus(ctx context.Context, req *v1.ContainerRequest) (*v1.ContainerStatus, error) {
+	container, ok := s.task.zeropodContainers[req.Id]
+	if !ok {
+		return nil, fmt.Errorf("could not find zeropod container with id: %s", req.Id)
+	}
+
+	return container.Status(), nil
+}
+
+// Metrics returns metrics of the zeropod shim instance.
 func (s *shimService) Metrics(context.Context, *v1.MetricsRequest) (*v1.MetricsResponse, error) {
 	mfs, err := s.metrics.Gather()
 	return &v1.MetricsResponse{Metrics: mfs}, err

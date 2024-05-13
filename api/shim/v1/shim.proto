@@ -8,12 +8,35 @@ import "io/prometheus/client/metrics.proto";
 
 service Shim {
 	rpc Metrics(MetricsRequest) returns (MetricsResponse);
+	rpc GetStatus(ContainerRequest) returns (ContainerStatus);
+	rpc SubscribeStatus(SubscribeStatusRequest) returns (stream ContainerStatus);
+}
+
+message MetricsRequest {
+	google.protobuf.Empty empty = 1;
+}
+
+message SubscribeStatusRequest {
+	google.protobuf.Empty empty = 1;
 }
 
 message MetricsResponse {
 	repeated io.prometheus.client.MetricFamily metrics = 1;
 }
 
-message MetricsRequest {
-	google.protobuf.Empty empty = 1;
+message ContainerRequest {
+	string id = 1;
+}
+
+enum ContainerPhase {
+  SCALED_DOWN = 0;
+  RUNNING = 1;
+}
+
+message ContainerStatus {
+	string id = 1;
+	string name = 2;
+	string pod_name = 3;
+	string pod_namespace = 4;
+	ContainerPhase phase = 5;
 }
