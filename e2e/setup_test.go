@@ -121,6 +121,9 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 	if err := provider.Create(name,
 		cluster.CreateWithV1Alpha4Config(&v1alpha4.Cluster{
 			Name: name,
+			FeatureGates: map[string]bool{
+				"InPlacePodVerticalScaling": true,
+			},
 			Nodes: []v1alpha4.Node{{
 				Labels: map[string]string{zeropod.NodeLabel: "true"},
 				// setup port map for our node port
@@ -347,6 +350,14 @@ func portsAnnotation(portsMap string) podOption {
 	return annotations(map[string]string{
 		zeropod.PortsAnnotationKey: portsMap,
 	})
+}
+
+func resources(res corev1.ResourceRequirements) podOption {
+	return func(p *pod) {
+		for i := range p.Spec.Containers {
+			p.Spec.Containers[i].Resources = res
+		}
+	}
 }
 
 const agnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.39"

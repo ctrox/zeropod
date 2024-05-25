@@ -15,11 +15,18 @@ import (
 )
 
 var (
-	metricsAddr = flag.String("metrics-addr", ":8080", "address of the metrics server")
+	metricsAddr    = flag.String("metrics-addr", ":8080", "address of the metrics server")
+	debug          = flag.Bool("debug", true, "enable debug logs")
+	inPlaceScaling = flag.Bool("in-place-scaling", false,
+		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
 )
 
 func main() {
 	flag.Parse()
+
+	if *debug {
+		slog.SetLogLoggerLevel(slog.LevelDebug)
+	}
 	slog.Info("starting manager", "metrics-addr", *metricsAddr)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -36,7 +43,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := manager.StartSubscribers(ctx); err != nil {
+	subscribers := []manager.StatusHandler{}
+	if *inPlaceScaling {
+		podScaler, err := manager.NewPodScaler()
+		if err != nil {
+			slog.Error("podScaler init", "err", err)
+			os.Exit(1)
+		}
+		subscribers = append(subscribers, podScaler)
+	}
+
+	if err := manager.StartSubscribers(ctx, subscribers...); err != nil {
 		slog.Error("starting subscribers", "err", err)
 		os.Exit(1)
 	}

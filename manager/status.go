@@ -17,7 +17,17 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-func StartSubscribers(ctx context.Context) error {
+type StatusHandler interface {
+	Handle(context.Context, *v1.ContainerStatus) error
+}
+
+func StartSubscribers(ctx context.Context, handlers ...StatusHandler) error {
+	if _, err := os.Stat(task.ShimSocketPath); errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(task.ShimSocketPath, os.ModePerm); err != nil {
+			return err
+		}
+	}
+
 	socks, err := os.ReadDir(task.ShimSocketPath)
 	if err != nil {
 		return fmt.Errorf("error listing file in shim socket path: %s", err)
@@ -26,18 +36,18 @@ func StartSubscribers(ctx context.Context) error {
 	for _, sock := range socks {
 		sock := sock
 		go func() {
-			if err := subscribe(ctx, filepath.Join(task.ShimSocketPath, sock.Name())); err != nil {
+			if err := subscribe(ctx, filepath.Join(task.ShimSocketPath, sock.Name()), handlers); err != nil {
 				slog.Error("error subscribing", "sock", sock.Name(), "err", err)
 			}
 		}()
 	}
 
-	go watchForShims(ctx)
+	go watchForShims(ctx, handlers)
 
 	return nil
 }
 
-func subscribe(ctx context.Context, sock string) error {
+func subscribe(ctx context.Context, sock string, handlers []StatusHandler) error {
 	log := slog.With("sock", sock)
 	log.Info("subscribing to status events")
 
@@ -64,15 +74,19 @@ func subscribe(ctx context.Context, sock string) error {
 			}
 			break
 		}
-		slog.Info("received status",
-			"container", status.Name, "pod", status.PodName,
+		clog := slog.With("container", status.Name, "pod", status.PodName,
 			"namespace", status.PodNamespace, "phase", status.Phase)
+		for _, h := range handlers {
+			if err := h.Handle(ctx, status); err != nil {
+				clog.Error("handling status update", "err", err)
+			}
+		}
 	}
 
 	return nil
 }
 
-func watchForShims(ctx context.Context) error {
+func watchForShims(ctx context.Context, handlers []StatusHandler) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -88,7 +102,7 @@ func watchForShims(ctx context.Context) error {
 		case event := <-watcher.Events:
 			switch event.Op {
 			case fsnotify.Create:
-				if err := subscribe(ctx, event.Name); err != nil {
+				if err := subscribe(ctx, event.Name, handlers); err != nil {
 					slog.Error("error subscribing", "sock", event.Name, "err", err)
 				}
 			}

@@ -9,11 +9,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ctrox/zeropod/manager"
 	"github.com/ctrox/zeropod/zeropod"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/ptr"
 )
 
@@ -191,6 +193,33 @@ func TestE2E(t *testing.T) {
 		t.Log(stdout, stderr)
 		// since the cleanup has been deferred it's called right after the
 		// exec and should test the deletion in the restored state.
+	})
+
+	t.Run("resources scaling", func(t *testing.T) {
+		pod := testPod(scaleDownAfter(0), agnContainer("agn", 8080), resources(corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("100m"),
+				corev1.ResourceMemory: resource.MustParse("100Mi"),
+			},
+		}))
+
+		cleanupPod := createPodAndWait(t, ctx, client, pod)
+		defer cleanupPod()
+		require.Eventually(t, func() bool {
+			if err := client.Get(ctx, objectName(pod), pod); err != nil {
+				return false
+			}
+
+			resourcesScaledDown := false
+			for _, container := range pod.Status.ContainerStatuses {
+				t.Logf("allocated resources: %v", container.AllocatedResources)
+				resourcesScaledDown = container.AllocatedResources != nil &&
+					container.AllocatedResources[corev1.ResourceCPU] == manager.ScaledDownCPU &&
+					container.AllocatedResources[corev1.ResourceMemory] == manager.ScaledDownMemory
+			}
+
+			return resourcesScaledDown
+		}, time.Second*10, time.Second)
 	})
 
 	t.Run("metrics", func(t *testing.T) {

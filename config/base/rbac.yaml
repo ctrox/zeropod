@@ -8,7 +8,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: runtimeclass-installer
+  name: zeropod:runtimeclass-installer
 rules:
   - apiGroups:
       - node.k8s.io
@@ -22,11 +22,38 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: runtimeclass-installer
+  name: zeropod:runtimeclass-installer
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: runtimeclass-installer
+  name: zeropod:runtimeclass-installer
+subjects:
+  - kind: ServiceAccount
+    name: zeropod-node
+    namespace: zeropod-system
+---
+# the manager needs to get/update pods for dynamic resource requests
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: zeropod:pod-updater
+rules:
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: zeropod:pod-updater
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: zeropod:pod-updater
 subjects:
   - kind: ServiceAccount
     name: zeropod-node

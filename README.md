@@ -285,13 +285,34 @@ the shim otherwise. For example, loading eBPF programs can be quite memory
 intensive so they have been moved from the shim to the manager to keep the
 shim memory usage as minimal as possible.
 
-In addition to that it collects metrics from all the shim processes and
-exposes those metrics on an HTTP endpoint.
+These are the responsibilities of the manager:
+
+- Loading eBPF programs that the shim(s) rely on.
+- Collect metrics from all shim processes and expose them on HTTP for scraping.
+- Subscribes to shim scaling events and adjusts Pod requests.
+
+#### In-place Resource scaling (Experimental)
+
+This makes use of the feature flag
+[InPlacePodVerticalScaling](https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/1287-in-place-update-pod-resources)
+to automatically update the pod resource requests to a minimum on scale down
+events and revert them again on scale up. Once the Kubernetes feature flag is
+enabled, it also needs to be enabled using the manager flag
+`-in-place-scaling=true`.
+
+#### Flags
+
+```
+-metrics-addr=":8080"    sets the address of the metrics server
+-debug                   enables debug logging
+-in-place-scaling=false  enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag
+```
 
 ## Metrics
 
 The zeropod-node pod exposes metrics on `0.0.0.0:8080/metrics` in Prometheus
-format on each installed node. The following metrics are currently available:
+format on each installed node. The metrics address can be configured with the
+`-metrics-addr` flag. The following metrics are currently available:
 
 ```bash
 # HELP zeropod_checkpoint_duration_seconds The duration of the last checkpoint in seconds.

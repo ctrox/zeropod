@@ -7,3 +7,10 @@ images:
   - name: installer
     newName: ghcr.io/ctrox/zeropod-installer
     newTag: dev
+patches:
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -in-place-scaling=true
+    target:
+      kind: DaemonSet
