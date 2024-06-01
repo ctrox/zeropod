@@ -63,7 +63,8 @@ network-lock skip
 `
 	runtimeConfig = `
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod]
-  runtime_type = "io.containerd.zeropod.v2"
+  runtime_type = "io.containerd.runc.v2"
+  runtime_path = "%s/bin/containerd-shim-zeropod-v2"
   pod_annotations = [
     "zeropod.ctrox.dev/ports-map",
     "zeropod.ctrox.dev/container-names",
@@ -253,7 +254,7 @@ func configureContainerd(runtime containerRuntime, containerdConfig string) (res
 		return false, err
 	}
 
-	if _, err := cfg.WriteString(runtimeConfig); err != nil {
+	if _, err := cfg.WriteString(fmt.Sprintf(runtimeConfig, *hostOptPath)); err != nil {
 		return false, err
 	}
 
