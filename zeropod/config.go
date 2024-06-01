@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/containerd/namespaces"
 	"github.com/containerd/log"
 	"github.com/mitchellh/mapstructure"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -28,6 +29,7 @@ const (
 	portsDelim               = containersDelim
 	mappingDelim             = ";"
 	mapDelim                 = "="
+	defaultContainerdNS      = "k8s.io"
 )
 
 type annotationConfig struct {
@@ -54,6 +56,7 @@ type Config struct {
 	PodName               string
 	PodNamespace          string
 	PodUID                string
+	ContainerdNamespace   string
 	spec                  *specs.Spec
 }
 
@@ -125,6 +128,11 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		containerNames = strings.Split(cfg.ZeropodContainerNames, containersDelim)
 	}
 
+	ns, ok := namespaces.Namespace(ctx)
+	if !ok {
+		ns = defaultContainerdNS
+	}
+
 	return &Config{
 		Ports:                 containerPorts,
 		ScaleDownDuration:     dur,
@@ -136,6 +144,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		PodName:               cfg.PodName,
 		PodNamespace:          cfg.PodNamespace,
 		PodUID:                cfg.PodUID,
+		ContainerdNamespace:   ns,
 		spec:                  spec,
 	}, nil
 }
