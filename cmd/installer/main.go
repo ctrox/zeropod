@@ -15,6 +15,7 @@ import (
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/services/server/config"
 	"github.com/coreos/go-systemd/v22/dbus"
+	"github.com/ctrox/zeropod/zeropod"
 	nodev1 "k8s.io/api/node/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -62,7 +63,8 @@ network-lock skip
 `
 	runtimeConfig = `
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod]
-  runtime_type = "io.containerd.zeropod.v2"
+  runtime_type = "io.containerd.runc.v2"
+  runtime_path = "%s/bin/containerd-shim-zeropod-v2"
   pod_annotations = [
     "zeropod.ctrox.dev/ports-map",
     "zeropod.ctrox.dev/container-names",
@@ -252,7 +254,7 @@ func configureContainerd(runtime containerRuntime, containerdConfig string) (res
 		return false, err
 	}
 
-	if _, err := cfg.WriteString(runtimeConfig); err != nil {
+	if _, err := cfg.WriteString(fmt.Sprintf(runtimeConfig, *hostOptPath)); err != nil {
 		return false, err
 	}
 
@@ -319,6 +321,7 @@ func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error
 	runtimeClass := &nodev1.RuntimeClass{
 		ObjectMeta: v1.ObjectMeta{Name: runtimeClassName},
 		Handler:    runtimeHandler,
+		Scheduling: &nodev1.Scheduling{NodeSelector: map[string]string{zeropod.NodeLabel: "true"}},
 	}
 
 	if _, err := client.NodeV1().RuntimeClasses().Create(ctx, runtimeClass, v1.CreateOptions{}); err != nil {

@@ -13,6 +13,7 @@ import (
 
 	"github.com/containerd/cgroups"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
+	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/pkg/cri/annotations"
 	"github.com/containerd/containerd/pkg/oom"
@@ -196,6 +197,18 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*emp
 	}
 
 	return w.service.Exec(ctx, r)
+}
+
+func (w *wrapper) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.PidsResponse, error) {
+	zeropodContainer, ok := w.getZeropodContainer(r.ID)
+	if ok && zeropodContainer.ScaledDown() {
+		log.G(ctx).Debugf("pids of scaled down container, returning last known pid: %v", zeropodContainer.Pid())
+		return &taskAPI.PidsResponse{
+			Processes: []*task.ProcessInfo{{Pid: uint32(zeropodContainer.Pid())}},
+		}, nil
+	}
+
+	return w.service.Pids(ctx, r)
 }
 
 func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {

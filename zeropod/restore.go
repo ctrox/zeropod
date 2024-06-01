@@ -48,7 +48,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		createReq.Checkpoint = ""
 	}
 
-	container, err := runc.NewContainer(namespaces.WithNamespace(ctx, "k8s"), c.platform, createReq)
+	container, err := runc.NewContainer(namespaces.WithNamespace(ctx, c.cfg.ContainerdNamespace), c.platform, createReq)
 	if err != nil {
 		return nil, nil, err
 	}
