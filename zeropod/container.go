@@ -16,6 +16,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/socket"
 )
 
@@ -38,6 +39,7 @@ type Container struct {
 	tracker        socket.Tracker
 	preRestore     func() HandleStartedFunc
 	postRestore    func(*runc.Container, HandleStartedFunc)
+	events         chan *v1.ContainerStatus
 
 	// mutex to lock during checkpoint/restore operations since concurrent
 	// restores can cause cgroup confusion. This mutex is shared between all
@@ -45,7 +47,7 @@ type Container struct {
 	checkpointRestore *sync.Mutex
 }
 
-func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Container, pt stdio.Platform) (*Container, error) {
+func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Container, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
 	p, err := container.Process("")
 	if err != nil {
 		return nil, errdefs.ToGRPC(err)
@@ -89,9 +91,11 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		netNS:             targetNS,
 		tracker:           tracker,
 		checkpointRestore: cr,
+		events:            events,
 	}
 
 	running.With(c.labels()).Set(1)
+	c.sendEvent(c.Status())
 
 	return c, c.initActivator(ctx)
 }
@@ -158,6 +162,29 @@ func (c *Container) SetScaledDown(scaledDown bool) {
 	} else {
 		running.With(c.labels()).Set(1)
 		lastRestoreTime.With(c.labels()).Set(float64(time.Now().UnixNano()))
+	}
+	c.sendEvent(c.Status())
+}
+
+func (c *Container) Status() *v1.ContainerStatus {
+	phase := v1.ContainerPhase_RUNNING
+	if c.ScaledDown() {
+		phase = v1.ContainerPhase_SCALED_DOWN
+	}
+	return &v1.ContainerStatus{
+		Id:           c.ID(),
+		Name:         c.cfg.ContainerName,
+		PodName:      c.cfg.PodName,
+		PodNamespace: c.cfg.PodNamespace,
+		Phase:        phase,
+	}
+}
+
+func (c *Container) sendEvent(event *v1.ContainerStatus) {
+	select {
+	case c.events <- event:
+	default:
+		log.G(c.context).Infof("channel full, discarding event: %v", event)
 	}
 }
 

@@ -1,5 +1,7 @@
 resources:
   - ../base
+components:
+  - ../in-place-scaling
 images:
   - name: manager
     newName: ghcr.io/ctrox/zeropod-manager

@@ -1,16 +1,7 @@
 package zeropod
 
 import (
-	"context"
-	"fmt"
-	"net/http"
-	"os"
-	"path/filepath"
-
-	"github.com/containerd/containerd/runtime/v2/shim"
-	"github.com/containerd/log"
 	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 const (
@@ -69,66 +60,7 @@ var (
 	}, commonLabels)
 )
 
-const MetricsSocketPath = "/run/zeropod/s/"
-
-func metricsSocketAddress(containerID string) string {
-	return fmt.Sprintf("unix://%s.sock", filepath.Join(MetricsSocketPath, containerID))
-}
-
-func StartMetricsServer(ctx context.Context, containerID string) {
-	metricsAddress := metricsSocketAddress(containerID)
-	listener, err := shim.NewSocket(metricsAddress)
-	if err != nil {
-		if !shim.SocketEaddrinuse(err) {
-			log.G(ctx).WithError(err)
-			return
-		}
-
-		if shim.CanConnect(metricsAddress) {
-			log.G(ctx).Debug("metrics socket already exists, skipping server start")
-			return
-		}
-
-		if err := shim.RemoveSocket(metricsAddress); err != nil {
-			log.G(ctx).WithError(fmt.Errorf("remove pre-existing socket: %w", err))
-		}
-
-		listener, err = shim.NewSocket(metricsAddress)
-		if err != nil {
-			log.G(ctx).WithError(err).Error("failed to create metrics listener")
-		}
-	}
-
-	log.G(ctx).Infof("starting metrics server at %s", metricsAddress)
-	// write metrics address to filesystem
-	if err := shim.WriteAddress("metrics_address", metricsAddress); err != nil {
-		log.G(ctx).WithError(err).Errorf("failed to write metrics address")
-		return
-	}
-
-	mux := http.NewServeMux()
-	handler := promhttp.HandlerFor(
-		newRegistry(),
-		promhttp.HandlerOpts{
-			EnableOpenMetrics: false,
-		},
-	)
-
-	mux.Handle("/metrics", handler)
-
-	server := http.Server{Handler: mux}
-
-	go server.Serve(listener)
-
-	<-ctx.Done()
-
-	log.G(ctx).Info("stopping metrics server")
-	listener.Close()
-	server.Close()
-	_ = os.RemoveAll(metricsAddress)
-}
-
-func newRegistry() *prometheus.Registry {
+func NewRegistry() *prometheus.Registry {
 	reg := prometheus.NewRegistry()
 
 	reg.MustRegister(

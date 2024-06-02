@@ -52,6 +52,9 @@ spec:
         - name: manager
           image: manager
           imagePullPolicy: IfNotPresent
+          command: ["/zeropod-manager"]
+          args:
+            - -metrics-addr=:8080
           ports:
             - name: metrics
               containerPort: 8080
