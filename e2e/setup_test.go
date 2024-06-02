@@ -547,7 +547,7 @@ func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *cor
 	restoreDuration := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration)
 	val, ok := mfs[restoreDuration]
 	if !ok {
-		t.Errorf("could not find expected metric: %s", restoreDuration)
+		t.Fatalf("could not find expected metric: %s", restoreDuration)
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -555,15 +555,15 @@ func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *cor
 		zeropod.LabelPodNamespace: pod.Namespace,
 	})
 	if !ok {
-		t.Errorf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
+		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
 	}
 
 	if metric.Histogram == nil {
-		t.Errorf("found metric that is not a histogram")
+		t.Fatalf("found metric that is not a histogram")
 	}
 
 	if metric.Histogram.SampleCount == nil {
-		t.Errorf("histogram sample count is nil")
+		t.Fatalf("histogram sample count is nil")
 	}
 
 	return int(*metric.Histogram.SampleCount)
@@ -575,7 +575,7 @@ func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *
 	checkpointDuration := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricCheckPointDuration)
 	val, ok := mfs[checkpointDuration]
 	if !ok {
-		t.Errorf("could not find expected metric: %s", checkpointDuration)
+		t.Fatalf("could not find expected metric: %s", checkpointDuration)
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -583,15 +583,15 @@ func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *
 		zeropod.LabelPodNamespace: pod.Namespace,
 	})
 	if !ok {
-		t.Errorf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
+		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
 	}
 
 	if metric.Histogram == nil {
-		t.Errorf("found metric that is not a histogram")
+		t.Fatalf("found metric that is not a histogram")
 	}
 
 	if metric.Histogram.SampleCount == nil {
-		t.Errorf("histogram sample count is nil")
+		t.Fatalf("histogram sample count is nil")
 	}
 
 	return int(*metric.Histogram.SampleCount)
@@ -603,7 +603,7 @@ func isCheckpointed(t testing.TB, client client.Client, cfg *rest.Config, pod *c
 	running := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning)
 	val, ok := mfs[running]
 	if !ok {
-		t.Errorf("could not find expected metric: %s", running)
+		t.Fatalf("could not find expected metric: %s", running)
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -611,15 +611,15 @@ func isCheckpointed(t testing.TB, client client.Client, cfg *rest.Config, pod *c
 		zeropod.LabelPodNamespace: pod.Namespace,
 	})
 	if !ok {
-		t.Errorf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
+		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
 	}
 
 	if metric.Gauge == nil {
-		t.Errorf("found metric that is not a gauge")
+		t.Fatalf("found metric that is not a gauge")
 	}
 
 	if metric.Gauge.Value == nil {
-		t.Errorf("gauge value is nil")
+		t.Fatalf("gauge value is nil")
 	}
 
 	return *metric.Gauge.Value == 0 && checkpointCount(t, client, cfg, pod) >= 1
