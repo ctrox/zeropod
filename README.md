@@ -298,7 +298,11 @@ This makes use of the feature flag
 to automatically update the pod resource requests to a minimum on scale down
 events and revert them again on scale up. Once the Kubernetes feature flag is
 enabled, it also needs to be enabled using the manager flag
-`-in-place-scaling=true`.
+`-in-place-scaling=true` plus some additional permissions are required for the
+node driver to patch pods. To deploy this, simply uncomment the
+`in-place-scaling` component in the `config/production/kustomization.yaml`.
+This will add the flag and the required permissions when building the
+kustomization.
 
 #### Flags
 
