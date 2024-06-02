@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/containerd/containerd"
@@ -254,12 +255,17 @@ func configureContainerd(runtime containerRuntime, containerdConfig string) (res
 		return false, err
 	}
 
-	if _, err := cfg.WriteString(fmt.Sprintf(runtimeConfig, *hostOptPath)); err != nil {
+	configured, containerdOptPath, err := optConfigured(containerdConfig)
+	if err != nil {
 		return false, err
 	}
 
-	configured, err := optConfigured(containerdConfig)
-	if err != nil {
+	optPath := *hostOptPath
+	if configured {
+		optPath = containerdOptPath
+	}
+
+	if _, err := cfg.WriteString(fmt.Sprintf(runtimeConfig, strings.TrimSuffix(optPath, "/"))); err != nil {
 		return false, err
 	}
 
@@ -303,18 +309,18 @@ func copyConfig(from, to string) error {
 	return nil
 }
 
-func optConfigured(containerdConfig string) (bool, error) {
+func optConfigured(containerdConfig string) (bool, string, error) {
 	conf := &config.Config{}
 	if err := config.LoadConfig(containerdConfig, conf); err != nil {
-		return false, err
+		return false, "", err
 	}
 	if opt, ok := conf.Plugins[containerdOptKey]; ok {
 		if opt.Has("path") {
-			return true, nil
+			return true, opt.Get("path").(string), nil
 		}
 	}
 
-	return false, nil
+	return false, "", nil
 }
 
 func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
