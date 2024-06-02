@@ -32,7 +32,7 @@ jobs:
         run: sudo --preserve-env make test
 
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v3
 
@@ -46,10 +46,20 @@ jobs:
         with:
           go-version: "1.22"
 
+      - name: Install protoc-gen-go
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31
+          go install github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc@v1.2.4
+
+      - uses: awalsh128/cache-apt-pkgs-action@v1
+        with:
+          packages: protobuf-compiler libprotobuf-dev
+          version: 1.0
+
       - name: build ebpf image
         run: make build-ebpf
 
-      - name: generate ebpf
+      - name: generate ttrpc and ebpf
         run: make generate
 
       - name: check for diff
