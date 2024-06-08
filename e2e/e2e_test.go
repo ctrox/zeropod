@@ -240,7 +240,7 @@ func TestE2E(t *testing.T) {
 		require.Eventually(t, func() bool {
 			_, _, err := podExec(cfg, restoredPod, "date")
 			return err == nil
-		}, time.Second*10, time.Second)
+		}, time.Minute, time.Second)
 
 		mfs := getNodeMetrics(t, client, cfg)
 

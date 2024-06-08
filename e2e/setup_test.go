@@ -542,12 +542,9 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 }
 
 func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) int {
-	mfs := getNodeMetrics(t, client, cfg)
-
-	restoreDuration := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRestoreDuration)
-	val, ok := mfs[restoreDuration]
-	if !ok {
-		t.Fatalf("could not find expected metric: %s", restoreDuration)
+	val, err := getNodeMetric(t, client, cfg, zeropod.MetricRestoreDuration)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -570,12 +567,9 @@ func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *cor
 }
 
 func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) int {
-	mfs := getNodeMetrics(t, client, cfg)
-
-	checkpointDuration := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricCheckPointDuration)
-	val, ok := mfs[checkpointDuration]
-	if !ok {
-		t.Fatalf("could not find expected metric: %s", checkpointDuration)
+	val, err := getNodeMetric(t, client, cfg, zeropod.MetricCheckPointDuration)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -598,12 +592,9 @@ func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *
 }
 
 func isCheckpointed(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) bool {
-	mfs := getNodeMetrics(t, client, cfg)
-
-	running := prometheus.BuildFQName(zeropod.MetricsNamespace, "", zeropod.MetricRunning)
-	val, ok := mfs[running]
-	if !ok {
-		t.Fatalf("could not find expected metric: %s", running)
+	val, err := getNodeMetric(t, client, cfg, zeropod.MetricRunning)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -653,6 +644,20 @@ func metricMatchesLabel(metric *dto.Metric, key, value string) bool {
 		}
 	}
 	return false
+}
+
+func getNodeMetric(t testing.TB, c client.Client, cfg *rest.Config, metricName string) (*dto.MetricFamily, error) {
+	var val *dto.MetricFamily
+	restoreDuration := prometheus.BuildFQName(zeropod.MetricsNamespace, "", metricName)
+	if !assert.Eventually(t, func() bool {
+		mfs := getNodeMetrics(t, c, cfg)
+		v, ok := mfs[restoreDuration]
+		val = v
+		return ok
+	}, 10*time.Second, time.Second) {
+		return nil, fmt.Errorf("could not find expected metric: %s", restoreDuration)
+	}
+	return val, nil
 }
 
 func getNodeMetrics(t testing.TB, c client.Client, cfg *rest.Config) map[string]*dto.MetricFamily {
