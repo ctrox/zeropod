@@ -3,10 +3,10 @@ resources:
 images:
   - name: manager
     newName: ghcr.io/ctrox/zeropod-manager
-    newTag: v0.2.0
+    newTag: v0.3.0
   - name: installer
     newName: ghcr.io/ctrox/zeropod-installer
-    newTag: v0.2.0
+    newTag: v0.3.0
 patches:
   - patch: |-
       - op: add
