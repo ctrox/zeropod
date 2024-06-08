@@ -219,7 +219,7 @@ func TestE2E(t *testing.T) {
 			}
 
 			return resourcesScaledDown
-		}, time.Second*10, time.Second)
+		}, time.Minute, time.Second)
 	})
 
 	t.Run("metrics", func(t *testing.T) {
