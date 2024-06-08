@@ -74,10 +74,7 @@ spec:
                 # for attaching qdiscs/filters
                 - "NET_ADMIN"
       tolerations:
-        - key: kubernetes.io/arch
-          operator: Equal
-          value: arm64
-          effect: NoSchedule
+        - operator: Exists
       volumes:
         - name: containerd-etc
           hostPath:
