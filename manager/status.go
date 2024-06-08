@@ -9,13 +9,23 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/runc/task"
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/util/retry"
 )
+
+var connectBackoff = wait.Backoff{
+	Steps:    5,
+	Duration: 100 * time.Millisecond,
+	Factor:   1.0,
+	Jitter:   0.1,
+}
 
 type StatusHandler interface {
 	Handle(context.Context, *v1.ContainerStatus) error
@@ -51,8 +61,25 @@ func subscribe(ctx context.Context, sock string, handlers []StatusHandler) error
 	log := slog.With("sock", sock)
 	log.Info("subscribing to status events")
 
-	conn, err := net.Dial("unix", sock)
-	if err != nil {
+	var conn net.Conn
+	// the socket file might exist but it can take bit until the server is
+	// listening. We retry with a backoff.
+	if err := retry.OnError(
+		connectBackoff,
+		func(err error) bool {
+			// always retry
+			return true
+		},
+		func() error {
+			var d net.Dialer
+			c, err := d.DialContext(ctx, "unix", sock)
+			if err != nil {
+				return err
+			}
+			conn = c
+			return nil
+		},
+	); err != nil {
 		return err
 	}
 
