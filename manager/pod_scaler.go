@@ -29,22 +29,24 @@ type containerResource map[string]resource.Quantity
 
 type PodScaler struct {
 	client client.Client
+	log    *slog.Logger
 }
 
 func NewPodScaler() (*PodScaler, error) {
-	slog.Info("pod scaler init")
+	log := slog.With("component", "podscaler")
+	log.Info("init")
 	cfg, err := config.GetConfig()
 	if err != nil {
 		return nil, err
 	}
 	c, err := client.New(cfg, client.Options{})
-	return &PodScaler{client: c}, err
+	return &PodScaler{client: c, log: log}, err
 }
 
 func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus) error {
-	clog := slog.With("container", status.Name, "pod", status.PodName,
+	clog := ps.log.With("container", status.Name, "pod", status.PodName,
 		"namespace", status.PodNamespace, "phase", status.Phase)
-	clog.Info("handling pod")
+	clog.Info("status event")
 
 	pod := &corev1.Pod{}
 	podName := types.NamespacedName{Name: status.PodName, Namespace: status.PodNamespace}
