@@ -16,7 +16,7 @@ import (
 
 var (
 	metricsAddr    = flag.String("metrics-addr", ":8080", "address of the metrics server")
-	debug          = flag.Bool("debug", true, "enable debug logs")
+	debug          = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
 )
