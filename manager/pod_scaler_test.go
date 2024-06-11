@@ -81,6 +81,7 @@ func TestHandlePod(t *testing.T) {
 			client := fake.NewClientBuilder().WithScheme(scheme).Build()
 			ps := &PodScaler{
 				client: client,
+				log:    slog.Default(),
 			}
 
 			initialPod := newPod(corev1.ResourceList{corev1.ResourceCPU: runningCPU, corev1.ResourceMemory: runningMemory})
