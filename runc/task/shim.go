@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 
 	"github.com/containerd/containerd/runtime/v2/shim"
@@ -16,8 +17,8 @@ import (
 
 const ShimSocketPath = "/run/zeropod/s/"
 
-func shimSocketAddress(id string) string {
-	return fmt.Sprintf("unix://%s.sock", filepath.Join(ShimSocketPath, id))
+func shimSocketAddress(containerdSocket string) string {
+	return fmt.Sprintf("unix://%s.sock", filepath.Join(ShimSocketPath, path.Base(containerdSocket)))
 }
 
 func startShimServer(ctx context.Context, id string, events chan *v1.ContainerStatus) {
@@ -61,6 +62,7 @@ func startShimServer(ctx context.Context, id string, events chan *v1.ContainerSt
 	v1.RegisterShimService(s, &shimService{metrics: zeropod.NewRegistry(), events: events})
 
 	defer func() {
+		s.Close()
 		listener.Close()
 		os.Remove(socket)
 	}()
@@ -69,9 +71,6 @@ func startShimServer(ctx context.Context, id string, events chan *v1.ContainerSt
 	<-ctx.Done()
 
 	log.G(ctx).Info("stopping shim server")
-	listener.Close()
-	s.Close()
-	_ = os.RemoveAll(socket)
 }
 
 // shimService is an extension to the shim task service to provide

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -79,10 +78,13 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		return nil, err
 	}
 	sd.RegisterCallback(func(context.Context) error {
+		if err := shim.RemoveSocket(shimSocketAddress(address)); err != nil {
+			log.G(ctx).Errorf("removing zeropod socket: %s", err)
+		}
 		return shim.RemoveSocket(address)
 	})
 
-	go startShimServer(ctx, filepath.Base(address), w.zeropodEvents)
+	go startShimServer(ctx, address, w.zeropodEvents)
 
 	return w, nil
 }
