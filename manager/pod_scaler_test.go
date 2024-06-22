@@ -108,12 +108,20 @@ func newPod(req corev1.ResourceList) *corev1.Pod {
 			Namespace: "default",
 		},
 		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name: "first-container",
-				Resources: corev1.ResourceRequirements{
-					Requests: req,
+			Containers: []corev1.Container{
+				{
+					Name: "first-container",
+					Resources: corev1.ResourceRequirements{
+						Requests: req,
+					},
 				},
-			}},
+				{
+					Name: "second-container",
+					Resources: corev1.ResourceRequirements{
+						Requests: req,
+					},
+				},
+			},
 		},
 	}
 }

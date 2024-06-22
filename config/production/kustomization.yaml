@@ -1,8 +1,11 @@
 resources:
 - ../base
-# uncommment to enable in-place scaling
-# components:
-#  - ../in-place-scaling
+# pod-updater is required if status-labels or in-place-scaling is enabled
+components:
+- ../pod-updater
+- ../status-labels
+# uncommment to enable in-place-scaling
+# - ../in-place-scaling
 images:
 - name: installer
   newName: ghcr.io/ctrox/zeropod-installer

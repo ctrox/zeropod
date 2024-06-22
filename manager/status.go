@@ -1,3 +1,6 @@
+// Package manager contains most of the implementation of the zeropod-manager
+// node daemon. It takes care of loading eBPF programs, providing metrics and
+// monitors the shims for status updates.
 package manager
 
 import (
