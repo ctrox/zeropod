@@ -239,7 +239,7 @@ func TestE2E(t *testing.T) {
 		// exec into pod to ensure it has been restored at least once
 		require.Eventually(t, func() bool {
 			_, _, err := podExec(cfg, restoredPod, "date")
-			return err == nil
+			return err == nil && isCheckpointed(t, client, cfg, restoredPod)
 		}, time.Minute, time.Second)
 
 		mfs := getNodeMetrics(t, client, cfg)
