@@ -43,17 +43,12 @@ func main() {
 		os.Exit(1)
 	}
 
-	subscribers := []manager.StatusHandler{}
+	podHandlers := []manager.PodHandler{}
 	if *inPlaceScaling {
-		podScaler, err := manager.NewPodScaler()
-		if err != nil {
-			slog.Error("podScaler init", "err", err)
-			os.Exit(1)
-		}
-		subscribers = append(subscribers, podScaler)
+		podHandlers = append(podHandlers, manager.NewPodScaler())
 	}
 
-	if err := manager.StartSubscribers(ctx, subscribers...); err != nil {
+	if err := manager.StartSubscribers(ctx, podHandlers...); err != nil {
 		slog.Error("starting subscribers", "err", err)
 		os.Exit(1)
 	}

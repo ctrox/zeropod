@@ -8,11 +8,7 @@ import (
 
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 const (
@@ -28,33 +24,20 @@ var (
 type containerResource map[string]resource.Quantity
 
 type PodScaler struct {
-	client client.Client
-	log    *slog.Logger
+	log *slog.Logger
 }
 
-func NewPodScaler() (*PodScaler, error) {
+func NewPodScaler() *PodScaler {
 	log := slog.With("component", "podscaler")
 	log.Info("init")
-	cfg, err := config.GetConfig()
-	if err != nil {
-		return nil, err
-	}
-	c, err := client.New(cfg, client.Options{})
-	return &PodScaler{client: c, log: log}, err
+	return &PodScaler{log: log}
 }
 
-func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus) error {
+func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus, pod *corev1.Pod) error {
 	clog := ps.log.With("container", status.Name, "pod", status.PodName,
 		"namespace", status.PodNamespace, "phase", status.Phase)
 	clog.Info("status event")
 
-	pod := &corev1.Pod{}
-	podName := types.NamespacedName{Name: status.PodName, Namespace: status.PodNamespace}
-	if err := ps.client.Get(ctx, podName, pod); err != nil {
-		return err
-	}
-
-	updatePod := false
 	for i, container := range pod.Spec.Containers {
 		if container.Name != status.Name {
 			continue
@@ -85,19 +68,6 @@ func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus) err
 		new := ps.newRequests(initial, current, status)
 		pod.Spec.Containers[i].Resources.Requests = new
 		clog.Debug("container needs to be updated", "current", printResources(current), "new", printResources(new))
-		updatePod = true
-	}
-
-	if !updatePod {
-		return nil
-	}
-
-	if err := ps.updateRequests(ctx, pod); err != nil {
-		if errors.IsInvalid(err) {
-			clog.Error("in-place scaling failed, ensure InPlacePodVerticalScaling feature flag is enabled")
-			return nil
-		}
-		return err
 	}
 
 	return nil
@@ -185,10 +155,6 @@ func (ps *PodScaler) setAnnotations(pod *corev1.Pod) error {
 	}
 
 	return nil
-}
-
-func (ps *PodScaler) updateRequests(ctx context.Context, pod *corev1.Pod) error {
-	return ps.client.Update(ctx, pod)
 }
 
 func printResources(res corev1.ResourceList) string {
