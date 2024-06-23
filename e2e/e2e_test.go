@@ -12,6 +12,7 @@ import (
 	"github.com/ctrox/zeropod/manager"
 	"github.com/ctrox/zeropod/zeropod"
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -268,7 +269,12 @@ func TestE2E(t *testing.T) {
 			return checkpointed
 		}, time.Minute, time.Second)
 
-		mfs := getNodeMetrics(t, client, cfg)
+		mfs := map[string]*dto.MetricFamily{}
+		require.Eventually(t, func() bool {
+			var err error
+			mfs, err = getNodeMetrics(client, cfg)
+			return err == nil
+		}, time.Minute, time.Second)
 
 		tests := map[string]struct {
 			metric                  string
