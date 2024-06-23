@@ -483,7 +483,7 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 		}
 
 		return len(endpoints.Subsets[0].Addresses) == replicas
-	}, time.Second*30, time.Second, "waiting for service endpoints to be ready") {
+	}, time.Minute, time.Second, "waiting for service endpoints to be ready") {
 		t.Log("service did not get ready")
 	}
 
@@ -541,10 +541,10 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 	return buf.String(), errBuf.String(), nil
 }
 
-func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) int {
+func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
 	val, err := getNodeMetric(t, client, cfg, zeropod.MetricRestoreDuration)
 	if err != nil {
-		t.Fatal(err)
+		return 0, err
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -552,24 +552,25 @@ func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *cor
 		zeropod.LabelPodNamespace: pod.Namespace,
 	})
 	if !ok {
-		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
+		return 0, fmt.Errorf("could not find restore duration metric that matches pod: %s/%s: %w",
+			pod.Name, pod.Namespace, err)
 	}
 
 	if metric.Histogram == nil {
-		t.Fatalf("found metric that is not a histogram")
+		return 0, fmt.Errorf("found metric that is not a histogram")
 	}
 
 	if metric.Histogram.SampleCount == nil {
-		t.Fatalf("histogram sample count is nil")
+		return 0, fmt.Errorf("histogram sample count is nil")
 	}
 
-	return int(*metric.Histogram.SampleCount)
+	return int(*metric.Histogram.SampleCount), nil
 }
 
-func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) int {
+func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
 	val, err := getNodeMetric(t, client, cfg, zeropod.MetricCheckPointDuration)
 	if err != nil {
-		t.Fatal(err)
+		return 0, err
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -577,24 +578,25 @@ func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *
 		zeropod.LabelPodNamespace: pod.Namespace,
 	})
 	if !ok {
-		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
+		return 0, fmt.Errorf("could not find checkpoint duration metric that matches pod: %s/%s: %w",
+			pod.Name, pod.Namespace, err)
 	}
 
 	if metric.Histogram == nil {
-		t.Fatalf("found metric that is not a histogram")
+		return 0, fmt.Errorf("found metric that is not a histogram")
 	}
 
 	if metric.Histogram.SampleCount == nil {
-		t.Fatalf("histogram sample count is nil")
+		return 0, fmt.Errorf("histogram sample count is nil")
 	}
 
-	return int(*metric.Histogram.SampleCount)
+	return int(*metric.Histogram.SampleCount), nil
 }
 
-func isCheckpointed(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) bool {
+func isCheckpointed(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) (bool, error) {
 	val, err := getNodeMetric(t, client, cfg, zeropod.MetricRunning)
 	if err != nil {
-		t.Fatal(err)
+		return false, err
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
@@ -602,18 +604,24 @@ func isCheckpointed(t testing.TB, client client.Client, cfg *rest.Config, pod *c
 		zeropod.LabelPodNamespace: pod.Namespace,
 	})
 	if !ok {
-		t.Fatalf("could not find running metric that matches pod: %s/%s", pod.Name, pod.Namespace)
+		return false, fmt.Errorf("could not find running metric that matches pod: %s/%s: %w",
+			pod.Name, pod.Namespace, err)
 	}
 
 	if metric.Gauge == nil {
-		t.Fatalf("found metric that is not a gauge")
+		return false, fmt.Errorf("found metric that is not a gauge")
 	}
 
 	if metric.Gauge.Value == nil {
-		t.Fatalf("gauge value is nil")
+		return false, fmt.Errorf("gauge value is nil")
 	}
 
-	return *metric.Gauge.Value == 0 && checkpointCount(t, client, cfg, pod) >= 1
+	count, err := checkpointCount(t, client, cfg, pod)
+	if err != nil {
+		return false, err
+	}
+
+	return *metric.Gauge.Value == 0 && count >= 1, nil
 }
 
 func findMetricByLabelMatch(metrics []*dto.Metric, labels map[string]string) (*dto.Metric, bool) {
