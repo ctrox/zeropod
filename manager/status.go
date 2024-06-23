@@ -129,9 +129,11 @@ func watchForShims(ctx context.Context, handlers []StatusHandler) error {
 		case event := <-watcher.Events:
 			switch event.Op {
 			case fsnotify.Create:
-				if err := subscribe(ctx, event.Name, handlers); err != nil {
-					slog.Error("error subscribing", "sock", event.Name, "err", err)
-				}
+				go func() {
+					if err := subscribe(ctx, event.Name, handlers); err != nil {
+						slog.Error("error subscribing", "sock", event.Name, "err", err)
+					}
+				}()
 			}
 		case err := <-watcher.Errors:
 			slog.Error("watch error", "err", err)
