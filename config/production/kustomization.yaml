@@ -1,19 +1,21 @@
 resources:
-  - ../base
-images:
-  - name: manager
-    newName: ghcr.io/ctrox/zeropod-manager
-    newTag: v0.3.1
-  - name: installer
-    newName: ghcr.io/ctrox/zeropod-installer
-    newTag: v0.3.1
-patches:
-  - patch: |-
-      - op: add
-        path: /spec/template/spec/initContainers/0/args/-
-        value: -criu-image=ghcr.io/ctrox/zeropod-criu:v3.19
-    target:
-      kind: DaemonSet
+- ../base
 # uncommment to enable in-place scaling
 # components:
 #  - ../in-place-scaling
+images:
+- name: installer
+  newName: ghcr.io/ctrox/zeropod-installer
+  newTag: v0.3.1
+- name: manager
+  newName: ghcr.io/ctrox/zeropod-manager
+  newTag: v0.3.1
+patches:
+- patch: |-
+    - op: add
+      path: /spec/template/spec/initContainers/0/args/-
+      value: -criu-image=ghcr.io/ctrox/zeropod-criu:v3.19
+  target:
+    kind: DaemonSet
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
