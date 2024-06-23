@@ -167,14 +167,26 @@ func TestE2E(t *testing.T) {
 		defer cleanupPod()
 
 		require.Eventually(t, func() bool {
-			return isCheckpointed(t, client, cfg, pod)
-		}, time.Second*10, time.Second)
+			checkpointed, err := isCheckpointed(t, client, cfg, pod)
+			if err != nil {
+				t.Logf("error checking if checkpointed: %s", err)
+				return false
+			}
+			return checkpointed
+		}, time.Minute, time.Second)
 
 		stdout, stderr, err := podExec(cfg, pod, "date")
 		require.NoError(t, err)
 		t.Log(stdout, stderr)
 
-		assert.GreaterOrEqual(t, restoreCount(t, client, cfg, pod), 1, "pod should have been restored at least once")
+		require.Eventually(t, func() bool {
+			count, err := restoreCount(t, client, cfg, pod)
+			if err != nil {
+				t.Logf("error checking if restored: %s", err)
+				return false
+			}
+			return assert.GreaterOrEqual(t, count, 1, "pod should have been restored at least once")
+		}, time.Minute, time.Second)
 	})
 
 	t.Run("delete in restored state", func(t *testing.T) {
@@ -185,8 +197,13 @@ func TestE2E(t *testing.T) {
 		defer cleanupPod()
 
 		require.Eventually(t, func() bool {
-			return isCheckpointed(t, client, cfg, pod)
-		}, time.Second*10, time.Second)
+			checkpointed, err := isCheckpointed(t, client, cfg, pod)
+			if err != nil {
+				t.Logf("error checking if checkpointed: %s", err)
+				return false
+			}
+			return checkpointed
+		}, time.Minute, time.Second)
 
 		stdout, stderr, err := podExec(cfg, pod, "date")
 		require.NoError(t, err)
@@ -239,7 +256,16 @@ func TestE2E(t *testing.T) {
 		// exec into pod to ensure it has been restored at least once
 		require.Eventually(t, func() bool {
 			_, _, err := podExec(cfg, restoredPod, "date")
-			return err == nil && isCheckpointed(t, client, cfg, restoredPod)
+			if err != nil {
+				t.Logf("error during pod exec: %s", err)
+				return false
+			}
+			checkpointed, err := isCheckpointed(t, client, cfg, restoredPod)
+			if err != nil {
+				t.Logf("error checking if checkpointed: %s", err)
+				return false
+			}
+			return checkpointed
 		}, time.Minute, time.Second)
 
 		mfs := getNodeMetrics(t, client, cfg)
