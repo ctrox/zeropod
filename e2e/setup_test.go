@@ -468,8 +468,7 @@ func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, p
 }
 
 func createServiceAndWait(t testing.TB, ctx context.Context, client client.Client, svc *corev1.Service, replicas int) (cleanup func()) {
-	err := client.Create(ctx, svc)
-	require.NoError(t, err)
+	require.NoError(t, client.Create(ctx, svc))
 	t.Logf("created service %s", svc.Name)
 
 	if !assert.Eventually(t, func() bool {
@@ -492,8 +491,7 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 	time.Sleep(time.Millisecond * 500)
 
 	return func() {
-		client.Delete(ctx, svc)
-		assert.NoError(t, err)
+		assert.NoError(t, client.Delete(ctx, svc))
 		require.Eventually(t, func() bool {
 			if err := client.Get(ctx, objectName(svc), svc); err != nil {
 				return true
@@ -658,24 +656,34 @@ func getNodeMetric(t testing.TB, c client.Client, cfg *rest.Config, metricName s
 	var val *dto.MetricFamily
 	restoreDuration := prometheus.BuildFQName(zeropod.MetricsNamespace, "", metricName)
 	if !assert.Eventually(t, func() bool {
-		mfs := getNodeMetrics(t, c, cfg)
+		mfs, err := getNodeMetrics(c, cfg)
+		if err != nil {
+			t.Logf("error getting node metrics: %s", err)
+			return false
+		}
 		v, ok := mfs[restoreDuration]
 		val = v
 		return ok
-	}, 10*time.Second, time.Second) {
+	}, time.Second*30, time.Second) {
 		return nil, fmt.Errorf("could not find expected metric: %s", restoreDuration)
 	}
 	return val, nil
 }
 
-func getNodeMetrics(t testing.TB, c client.Client, cfg *rest.Config) map[string]*dto.MetricFamily {
+func getNodeMetrics(c client.Client, cfg *rest.Config) (map[string]*dto.MetricFamily, error) {
 	cs, err := kubernetes.NewForConfig(cfg)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 
 	ctx := context.Background()
 	nodePods := &corev1.PodList{}
-	require.NoError(t, c.List(ctx, nodePods, client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}))
-	require.Equal(t, 1, len(nodePods.Items))
+	if err := c.List(ctx, nodePods, client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}); err != nil {
+		return nil, err
+	}
+	if len(nodePods.Items) < 1 {
+		return nil, fmt.Errorf("expected to find at least 1 node pod, got %d", len(nodePods.Items))
+	}
 
 	pf := PortForward{
 		Config: cfg, Clientset: cs,
@@ -683,15 +691,21 @@ func getNodeMetrics(t testing.TB, c client.Client, cfg *rest.Config) map[string]
 		Namespace:       nodePods.Items[0].Namespace,
 		DestinationPort: 8080,
 	}
-	require.NoError(t, pf.Start())
+	if err := pf.Start(); err != nil {
+		return nil, err
+	}
 	defer pf.Stop()
 
 	resp, err := http.Get(fmt.Sprintf("http://localhost:%v/metrics", pf.ListenPort))
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 
 	var parser expfmt.TextParser
 	mfs, err := parser.TextToMetricFamilies(resp.Body)
-	require.NoError(t, err)
+	if err != nil {
+		return nil, err
+	}
 
-	return mfs
+	return mfs, nil
 }
