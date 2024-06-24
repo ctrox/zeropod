@@ -19,6 +19,7 @@ var (
 	debug          = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
+	statusLabels = flag.Bool("status-labels", false, "update pod labels to reflect container status")
 )
 
 func main() {
@@ -43,17 +44,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	subscribers := []manager.StatusHandler{}
+	podHandlers := []manager.PodHandler{}
+	if *statusLabels {
+		podHandlers = append(podHandlers, manager.NewPodLabeller())
+	}
 	if *inPlaceScaling {
-		podScaler, err := manager.NewPodScaler()
-		if err != nil {
-			slog.Error("podScaler init", "err", err)
-			os.Exit(1)
-		}
-		subscribers = append(subscribers, podScaler)
+		podHandlers = append(podHandlers, manager.NewPodScaler())
 	}
 
-	if err := manager.StartSubscribers(ctx, subscribers...); err != nil {
+	if err := manager.StartSubscribers(ctx, podHandlers...); err != nil {
 		slog.Error("starting subscribers", "err", err)
 		os.Exit(1)
 	}

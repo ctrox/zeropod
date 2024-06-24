@@ -1,3 +1,6 @@
+// Package manager contains most of the implementation of the zeropod-manager
+// node daemon. It takes care of loading eBPF programs, providing metrics and
+// monitors the shims for status updates.
 package manager
 
 import (
@@ -16,8 +19,13 @@ import (
 	"github.com/ctrox/zeropod/runc/task"
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/protobuf/types/known/emptypb"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 var connectBackoff = wait.Backoff{
@@ -27,11 +35,30 @@ var connectBackoff = wait.Backoff{
 	Jitter:   0.1,
 }
 
-type StatusHandler interface {
-	Handle(context.Context, *v1.ContainerStatus) error
+type PodHandler interface {
+	// Handle a status update with the associated pod. Changes made to
+	// the pod object will be applied after all handlers have been called.
+	// Pod status updates are ignored and won't be applied.
+	Handle(context.Context, *v1.ContainerStatus, *corev1.Pod) error
 }
 
-func StartSubscribers(ctx context.Context, handlers ...StatusHandler) error {
+type subscriber struct {
+	log             *slog.Logger
+	kube            client.Client
+	subscribeClient v1.Shim_SubscribeStatusClient
+	podHandlers     []PodHandler
+}
+
+func StartSubscribers(ctx context.Context, podHandlers ...PodHandler) error {
+	cfg, err := config.GetConfig()
+	if err != nil {
+		return fmt.Errorf("getting client config: %w", err)
+	}
+	kube, err := client.New(cfg, client.Options{})
+	if err != nil {
+		return fmt.Errorf("creating client: %w", err)
+	}
+
 	if _, err := os.Stat(task.ShimSocketPath); errors.Is(err, os.ErrNotExist) {
 		if err := os.Mkdir(task.ShimSocketPath, os.ModePerm); err != nil {
 			return err
@@ -46,21 +73,39 @@ func StartSubscribers(ctx context.Context, handlers ...StatusHandler) error {
 	for _, sock := range socks {
 		sock := sock
 		go func() {
-			if err := subscribe(ctx, filepath.Join(task.ShimSocketPath, sock.Name()), handlers); err != nil {
+			if err := subscribe(ctx, filepath.Join(task.ShimSocketPath, sock.Name()), kube, podHandlers); err != nil {
 				slog.Error("error subscribing", "sock", sock.Name(), "err", err)
 			}
 		}()
 	}
 
-	go watchForShims(ctx, handlers)
+	go watchForShims(ctx, kube, podHandlers)
 
 	return nil
 }
 
-func subscribe(ctx context.Context, sock string, handlers []StatusHandler) error {
-	log := slog.With("sock", sock)
-	log.Info("subscribing to status events")
+func subscribe(ctx context.Context, sock string, kube client.Client, handlers []PodHandler) error {
+	slog.With("sock", sock).Info("subscribing to status events")
+	shimClient, err := newShimClient(ctx, sock)
+	if err != nil {
+		return err
+	}
+	// not sure why but the emptypb needs to be set in order for the subscribe to be received
+	subscribeClient, err := shimClient.SubscribeStatus(ctx, &v1.SubscribeStatusRequest{Empty: &emptypb.Empty{}})
+	if err != nil {
+		return err
+	}
 
+	s := subscriber{
+		log:             slog.With("sock", sock),
+		kube:            kube,
+		subscribeClient: subscribeClient,
+		podHandlers:     handlers,
+	}
+	return s.receive(ctx)
+}
+
+func newShimClient(ctx context.Context, sock string) (v1.ShimClient, error) {
 	var conn net.Conn
 	// the socket file might exist but it can take bit until the server is
 	// listening. We retry with a backoff.
@@ -80,40 +125,67 @@ func subscribe(ctx context.Context, sock string, handlers []StatusHandler) error
 			return nil
 		},
 	); err != nil {
-		return err
+		return nil, err
 	}
 
-	shimClient := v1.NewShimClient(ttrpc.NewClient(conn))
-	// not sure why but the emptypb needs to be set in order for the subscribe
-	// to be received
-	client, err := shimClient.SubscribeStatus(ctx, &v1.SubscribeStatusRequest{Empty: &emptypb.Empty{}})
-	if err != nil {
-		return err
-	}
+	return v1.NewShimClient(ttrpc.NewClient(conn)), nil
+}
 
+func (s *subscriber) receive(ctx context.Context) error {
 	for {
-		status, err := client.Recv()
+		status, err := s.subscribeClient.Recv()
 		if err != nil {
 			if err == io.EOF || errors.Is(err, ttrpc.ErrClosed) {
-				log.Info("subscribe closed")
+				s.log.Info("subscribe closed")
 			} else {
-				log.Error("subscribe closed", "err", err)
+				s.log.Error("subscribe closed", "err", err)
 			}
 			break
 		}
 		clog := slog.With("container", status.Name, "pod", status.PodName,
 			"namespace", status.PodNamespace, "phase", status.Phase)
-		for _, h := range handlers {
-			if err := h.Handle(ctx, status); err != nil {
-				clog.Error("handling status update", "err", err)
-			}
+		if err := s.onStatus(ctx, status); err != nil {
+			clog.Error("handling status update", "err", err)
 		}
 	}
 
 	return nil
 }
 
-func watchForShims(ctx context.Context, handlers []StatusHandler) error {
+func (s *subscriber) onStatus(ctx context.Context, status *v1.ContainerStatus) error {
+	if len(s.podHandlers) > 0 {
+		if err := s.handlePod(ctx, status); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *subscriber) handlePod(ctx context.Context, status *v1.ContainerStatus) error {
+	pod := &corev1.Pod{}
+	podName := types.NamespacedName{Name: status.PodName, Namespace: status.PodNamespace}
+	if err := s.kube.Get(ctx, podName, pod); err != nil {
+		return fmt.Errorf("getting pod: %w", err)
+	}
+
+	for _, p := range s.podHandlers {
+		if err := p.Handle(ctx, status, pod); err != nil {
+			return err
+		}
+	}
+
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		return s.kube.Update(ctx, pod)
+	}); err != nil {
+		if apierrors.IsInvalid(err) {
+			s.log.Error("in-place scaling failed, ensure InPlacePodVerticalScaling feature flag is enabled")
+		}
+		return err
+	}
+	return nil
+}
+
+func watchForShims(ctx context.Context, kube client.Client, podHandlers []PodHandler) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -130,7 +202,7 @@ func watchForShims(ctx context.Context, handlers []StatusHandler) error {
 			switch event.Op {
 			case fsnotify.Create:
 				go func() {
-					if err := subscribe(ctx, event.Name, handlers); err != nil {
+					if err := subscribe(ctx, event.Name, kube, podHandlers); err != nil {
 						slog.Error("error subscribing", "sock", event.Name, "err", err)
 					}
 				}()

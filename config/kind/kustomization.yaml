@@ -2,6 +2,8 @@ resources:
   - ../base
 components:
   - ../in-place-scaling
+  - ../pod-updater
+  - ../status-labels
 images:
   - name: manager
     newName: ghcr.io/ctrox/zeropod-manager

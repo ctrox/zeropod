@@ -304,12 +304,34 @@ node driver to patch pods. To deploy this, simply uncomment the
 This will add the flag and the required permissions when building the
 kustomization.
 
+#### Status Labels
+
+To reflect the container scaling status in the k8s API, the manager can set
+status labels on a pod. This requires the flag `-status-labels=true`, which is
+set by default in the production deployment.
+
+The resulting labels have the following structure:
+
+```yaml
+status.zeropod.ctrox.dev/<container name>: <container status>
+```
+
+So if our pod has two containers, one of them running and one in scaled-down
+state, the labels would be set like this:
+
+```yaml
+labels:
+  status.zeropod.ctrox.dev/container1: RUNNING
+  status.zeropod.ctrox.dev/container2: SCALED_DOWN
+```
+
 #### Flags
 
 ```
 -metrics-addr=":8080"    sets the address of the metrics server
 -debug                   enables debug logging
 -in-place-scaling=false  enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag
+-status-labels=false     update pod labels to reflect container status
 ```
 
 ## Metrics

@@ -11,8 +11,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
 func TestHandlePod(t *testing.T) {
@@ -78,21 +76,12 @@ func TestHandlePod(t *testing.T) {
 	for name, tc := range cases {
 		tc := tc
 		t.Run(name, func(t *testing.T) {
-			client := fake.NewClientBuilder().WithScheme(scheme).Build()
-			ps := &PodScaler{
-				client: client,
-				log:    slog.Default(),
-			}
+			ps := &PodScaler{log: slog.Default()}
 
 			initialPod := newPod(corev1.ResourceList{corev1.ResourceCPU: runningCPU, corev1.ResourceMemory: runningMemory})
 			ps.setAnnotations(initialPod)
 			pod := newPod(tc.beforeEvent)
 			pod.SetAnnotations(initialPod.GetAnnotations())
-
-			ctx := context.Background()
-			if err := client.Create(ctx, pod); err != nil {
-				t.Fatal(err)
-			}
 
 			if err := ps.Handle(
 				context.Background(),
@@ -102,11 +91,8 @@ func TestHandlePod(t *testing.T) {
 					PodNamespace: pod.Namespace,
 					Phase:        tc.statusEventPhase,
 				},
+				pod,
 			); err != nil {
-				t.Fatal(err)
-			}
-
-			if err := client.Get(ctx, types.NamespacedName{Name: pod.Name, Namespace: pod.Namespace}, pod); err != nil {
 				t.Fatal(err)
 			}
 
@@ -122,12 +108,20 @@ func newPod(req corev1.ResourceList) *corev1.Pod {
 			Namespace: "default",
 		},
 		Spec: corev1.PodSpec{
-			Containers: []corev1.Container{{
-				Name: "first-container",
-				Resources: corev1.ResourceRequirements{
-					Requests: req,
+			Containers: []corev1.Container{
+				{
+					Name: "first-container",
+					Resources: corev1.ResourceRequirements{
+						Requests: req,
+					},
 				},
-			}},
+				{
+					Name: "second-container",
+					Resources: corev1.ResourceRequirements{
+						Requests: req,
+					},
+				},
+			},
 		},
 	}
 }

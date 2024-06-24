@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager"
 	"github.com/ctrox/zeropod/zeropod"
 	"github.com/prometheus/client_golang/prometheus"
@@ -237,6 +239,29 @@ func TestE2E(t *testing.T) {
 			}
 
 			return resourcesScaledDown
+		}, time.Minute, time.Second)
+	})
+
+	t.Run("status labels", func(t *testing.T) {
+		pod := testPod(scaleDownAfter(0), agnContainer("agn", 8080), agnContainer("agn2", 8081))
+
+		cleanupPod := createPodAndWait(t, ctx, client, pod)
+		defer cleanupPod()
+		require.Eventually(t, func() bool {
+			if err := client.Get(ctx, objectName(pod), pod); err != nil {
+				return false
+			}
+			labelCount := 0
+			expectedLabels := 2
+			for k, v := range pod.GetLabels() {
+				if strings.HasPrefix(k, manager.StatusLabelKeyPrefix) {
+					if v == v1.ContainerPhase_SCALED_DOWN.String() {
+						labelCount++
+					}
+				}
+			}
+
+			return labelCount == expectedLabels
 		}, time.Minute, time.Second)
 	})
 
