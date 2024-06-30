@@ -266,7 +266,9 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 
 func (w *wrapper) processExits() {
 	for e := range w.ec {
+		w.lifecycleMu.Lock()
 		cps := w.running[e.Pid]
+		w.lifecycleMu.Unlock()
 		preventExit := false
 		for _, cp := range cps {
 			if w.preventExit(cp) {
@@ -309,6 +311,12 @@ func (w *wrapper) preventExit(cp containerProcess) bool {
 	if ok {
 		if zeropodContainer.ScaledDown() {
 			log.G(w.context).Infof("not setting exited because process has scaled down: %v", cp.Process.Pid())
+			return true
+		}
+
+		if zeropodContainer.CheckpointedPID(cp.Process.Pid()) {
+			log.G(w.context).Infof("not setting exited because process has been checkpointed: %v", cp.Process.Pid())
+			zeropodContainer.DeleteCheckpointedPID(cp.Process.Pid())
 			return true
 		}
 
