@@ -31,7 +31,6 @@ type Server struct {
 	proxyTimeout   time.Duration
 	proxyCancel    context.CancelFunc
 	ns             ns.NetNS
-	firstAccept    sync.Once
 	maps           bpfMaps
 	sandboxPid     int
 	started        bool
@@ -95,7 +94,6 @@ func (s *Server) Started() bool {
 }
 
 func (s *Server) Reset() error {
-	s.firstAccept = sync.Once{}
 	for _, port := range s.ports {
 		if err := s.enableRedirect(port); err != nil {
 			return err
@@ -134,7 +132,6 @@ func (s *Server) listen(ctx context.Context, port uint16, onAccept OnAccept) (in
 
 	log.G(ctx).Debugf("listening on %s in ns %s", listener.Addr(), s.ns.Path())
 
-	s.firstAccept = sync.Once{}
 	s.onAccept = onAccept
 
 	s.wg.Add(1)
@@ -213,12 +210,10 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16
 		return
 	}
 
-	s.firstAccept.Do(func() {
-		if err := s.onAccept(); err != nil {
-			log.G(ctx).Errorf("accept function: %s", err)
-			return
-		}
-	})
+	if err := s.onAccept(); err != nil {
+		log.G(ctx).Errorf("accept function: %s", err)
+		return
+	}
 
 	backendConn, err := s.connect(ctx, port)
 	if err != nil {

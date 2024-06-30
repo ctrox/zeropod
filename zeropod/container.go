@@ -290,6 +290,10 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 		beforeRestore := time.Now()
 		restoredContainer, p, err := c.Restore(ctx)
 		if err != nil {
+			if errors.Is(err, ErrAlreadyRestored) {
+				log.G(ctx).Info("container is already restored, ignoring request")
+				return nil
+			}
 			// restore failed, this is currently unrecoverable, so we shutdown
 			// our shim and let containerd recreate it.
 			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
@@ -301,7 +305,6 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 			return fmt.Errorf("unable to track pid %d: %w", p.Pid(), err)
 		}
 
-		c.SetScaledDown(false)
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
 		return c.ScheduleScaleDown()

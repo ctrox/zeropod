@@ -197,7 +197,6 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*emp
 			os.Exit(1)
 		}
 
-		zeropodContainer.SetScaledDown(false)
 		log.G(ctx).Printf("restored process for exec: %d in %s", p.Pid(), time.Since(beforeRestore))
 	}
 

@@ -40,26 +40,28 @@ func TestActivator(t *testing.T) {
 		fmt.Fprint(w, response)
 	}))
 
+	once := sync.Once{}
 	err = s.Start(ctx, []uint16{uint16(port)}, func() error {
-		// simulate a delay until our server is started
-		time.Sleep(time.Millisecond * 200)
-		l, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))
-		require.NoError(t, err)
+		once.Do(func() {
+			// simulate a delay until our server is started
+			time.Sleep(time.Millisecond * 200)
+			l, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))
+			require.NoError(t, err)
 
-		if err := s.DisableRedirects(); err != nil {
-			return fmt.Errorf("could not disable redirects: %w", err)
-		}
+			if err := s.DisableRedirects(); err != nil {
+				t.Errorf("could not disable redirects: %s", err)
+			}
 
-		// replace listener of server
-		ts.Listener.Close()
-		ts.Listener = l
-		ts.Start()
-		t.Logf("listening on :%d", port)
+			// replace listener of server
+			ts.Listener.Close()
+			ts.Listener = l
+			ts.Start()
+			t.Logf("listening on :%d", port)
 
-		t.Cleanup(func() {
-			ts.Close()
+			t.Cleanup(func() {
+				ts.Close()
+			})
 		})
-
 		return nil
 	})
 	require.NoError(t, err)
