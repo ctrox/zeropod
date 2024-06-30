@@ -2,6 +2,7 @@ package zeropod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -19,9 +20,14 @@ import (
 	"github.com/containerd/log"
 )
 
+var ErrAlreadyRestored = errors.New("container is already restored")
+
 func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
 	c.checkpointRestore.Lock()
 	defer c.checkpointRestore.Unlock()
+	if !c.ScaledDown() {
+		return nil, nil, ErrAlreadyRestored
+	}
 
 	beforeRestore := time.Now()
 	go func() {
@@ -80,6 +86,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 
 	c.Container = container
 	c.process = p
+	c.SetScaledDown(false)
 
 	if c.postRestore != nil {
 		c.postRestore(container, handleStarted)
