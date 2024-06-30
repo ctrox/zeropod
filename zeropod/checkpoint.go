@@ -41,18 +41,29 @@ func (c *Container) scaleDown(ctx context.Context) error {
 	}
 
 	if c.cfg.DisableCheckpointing {
-		log.G(ctx).Infof("checkpointing is disabled, scaling down by killing")
-
-		c.SetScaledDown(true)
-		if err := c.process.Kill(ctx, 9, false); err != nil {
+		if err := c.kill(ctx); err != nil {
 			return err
 		}
-	} else {
-		if err := c.checkpoint(ctx); err != nil {
-			return err
-		}
+		return nil
 	}
 
+	if err := c.checkpoint(ctx); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (c *Container) kill(ctx context.Context) error {
+	c.checkpointRestore.Lock()
+	defer c.checkpointRestore.Unlock()
+	log.G(ctx).Infof("checkpointing is disabled, scaling down by killing")
+	c.AddCheckpointedPID(c.Pid())
+
+	if err := c.process.Kill(ctx, 9, false); err != nil {
+		return err
+	}
+	c.SetScaledDown(true)
 	return nil
 }
 
@@ -89,8 +100,6 @@ func (c *Container) checkpoint(ctx context.Context) error {
 
 		beforePreDump := time.Now()
 		if err := initProcess.Runtime().Checkpoint(ctx, c.ID(), opts, runcC.PreDump); err != nil {
-			c.SetScaledDown(false)
-
 			log.G(ctx).Errorf("error pre-dumping container: %s", err)
 			b, err := os.ReadFile(path.Join(workDir, "dump.log"))
 			if err != nil {
@@ -103,20 +112,17 @@ func (c *Container) checkpoint(ctx context.Context) error {
 		log.G(ctx).Infof("pre-dumping done in %s", time.Since(beforePreDump))
 	}
 
-	c.SetScaledDown(true)
-
 	if c.cfg.PreDump {
 		// ParentPath is the relative path from the ImagePath to the pre-dump dir.
 		opts.ParentPath = relativePreDumpDir()
 	}
 
+	c.AddCheckpointedPID(c.Pid())
 	// ImagePath is always the same, regardless of pre-dump
 	opts.ImagePath = containerDir(c.Bundle)
 
 	beforeCheckpoint := time.Now()
 	if err := initProcess.Runtime().Checkpoint(ctx, c.ID(), opts); err != nil {
-		c.SetScaledDown(false)
-
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
 		b, err := os.ReadFile(path.Join(workDir, "dump.log"))
 		if err != nil {
@@ -126,6 +132,7 @@ func (c *Container) checkpoint(ctx context.Context) error {
 		return err
 	}
 
+	c.SetScaledDown(true)
 	checkpointDuration.With(c.labels()).Observe(time.Since(beforeCheckpoint).Seconds())
 	log.G(ctx).Infof("checkpointing done in %s", time.Since(beforeCheckpoint))
 

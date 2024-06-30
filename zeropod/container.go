@@ -25,22 +25,23 @@ type HandleStartedFunc func(*runc.Container, process.Process, bool)
 type Container struct {
 	*runc.Container
 
-	context        context.Context
-	activator      *activator.Server
-	cfg            *Config
-	initialProcess process.Process
-	process        process.Process
-	cgroup         any
-	logPath        string
-	scaledDown     bool
-	netNS          ns.NetNS
-	scaleDownTimer *time.Timer
-	platform       stdio.Platform
-	tracker        socket.Tracker
-	preRestore     func() HandleStartedFunc
-	postRestore    func(*runc.Container, HandleStartedFunc)
-	events         chan *v1.ContainerStatus
-
+	context          context.Context
+	activator        *activator.Server
+	cfg              *Config
+	initialProcess   process.Process
+	process          process.Process
+	cgroup           any
+	logPath          string
+	scaledDown       bool
+	netNS            ns.NetNS
+	scaleDownTimer   *time.Timer
+	platform         stdio.Platform
+	tracker          socket.Tracker
+	preRestore       func() HandleStartedFunc
+	postRestore      func(*runc.Container, HandleStartedFunc)
+	events           chan *v1.ContainerStatus
+	checkpointedPIDs map[int]struct{}
+	pidsMu           sync.Mutex
 	// mutex to lock during checkpoint/restore operations since concurrent
 	// restores can cause cgroup confusion. This mutex is shared between all
 	// containers.
@@ -92,6 +93,7 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		tracker:           tracker,
 		checkpointRestore: cr,
 		events:            events,
+		checkpointedPIDs:  map[int]struct{}{},
 	}
 
 	running.With(c.labels()).Set(1)
@@ -204,6 +206,28 @@ func (c *Container) StopActivator(ctx context.Context) {
 	c.activator.Stop(ctx)
 }
 
+// CheckpointedPID indicates if the pid has been checkpointed before.
+func (c *Container) CheckpointedPID(pid int) bool {
+	c.pidsMu.Lock()
+	defer c.pidsMu.Unlock()
+	_, ok := c.checkpointedPIDs[pid]
+	return ok
+}
+
+// AddCheckpointedPID registers a new pid that should be considered checkpointed.
+func (c *Container) AddCheckpointedPID(pid int) {
+	c.pidsMu.Lock()
+	defer c.pidsMu.Unlock()
+	c.checkpointedPIDs[pid] = struct{}{}
+}
+
+// DeleteCheckpointedPID deletes a pid from the map of checkpointed pids.
+func (c *Container) DeleteCheckpointedPID(pid int) {
+	c.pidsMu.Lock()
+	defer c.pidsMu.Unlock()
+	delete(c.checkpointedPIDs, pid)
+}
+
 func (c *Container) Stop(ctx context.Context) {
 	c.CancelScaleDown()
 	if err := c.tracker.Close(); err != nil {
@@ -302,7 +326,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 		c.Container = restoredContainer
 
 		if err := c.tracker.TrackPid(uint32(p.Pid())); err != nil {
-			return fmt.Errorf("unable to track pid %d: %w", p.Pid(), err)
+			log.G(ctx).Errorf("unable to track pid %d: %s", p.Pid(), err)
 		}
 
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
