@@ -101,7 +101,7 @@ sequenceDiagram
 ## Compatibility
 
 Most programs should to just work with zeropod out of the box. The
-[examples](./examples) directory contains a variety of software that have been
+[examples](./config/examples) directory contains a variety of software that have been
 tested successfully. If something fails, the containerd logs can prove useful
 to figuring out what went wrong as it will output the CRIU log on
 checkpoint/restore failure. What has proven somewhat flaky sometimes are some
