@@ -17,6 +17,7 @@ import (
 
 	"github.com/ctrox/zeropod/activator"
 	"github.com/ctrox/zeropod/zeropod"
+	"github.com/go-logr/logr"
 	"github.com/phayes/freeport"
 	"github.com/pkg/errors"
 	"github.com/prometheus/client_golang/prometheus"
@@ -39,6 +40,7 @@ import (
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
 	"sigs.k8s.io/kind/pkg/cluster"
 	"sigs.k8s.io/kind/pkg/cluster/nodes"
@@ -86,9 +88,9 @@ func setup(t testing.TB) (*rest.Config, client.Client, int) {
 	cfg, err := startKind(t, "zeropod-e2e", port)
 	require.NoError(t, err)
 
-	client, err := client.New(cfg, client.Options{
-		WarningHandler: client.WarningHandlerOptions{SuppressWarnings: true},
-	})
+	// discard controller-runtime logs, we just use the client
+	log.SetLogger(logr.Discard())
+	client, err := client.New(cfg, client.Options{})
 	require.NoError(t, err)
 
 	t.Log("deploying zeropod-node")

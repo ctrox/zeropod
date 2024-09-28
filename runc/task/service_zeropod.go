@@ -14,7 +14,6 @@ import (
 	"github.com/containerd/cgroups"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
 	"github.com/containerd/containerd/api/types/task"
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/pkg/cri/annotations"
 	"github.com/containerd/containerd/pkg/oom"
 	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
@@ -23,6 +22,7 @@ import (
 	"github.com/containerd/containerd/runtime/v2/runc"
 	"github.com/containerd/containerd/runtime/v2/shim"
 	"github.com/containerd/containerd/sys/reaper"
+	"github.com/containerd/errdefs"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
@@ -47,20 +47,24 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	}
 	go ep.Run(ctx)
 	s := &service{
-		context:         ctx,
-		events:          make(chan interface{}, 128),
-		ec:              reaper.Default.Subscribe(),
-		ep:              ep,
-		shutdown:        sd,
-		containers:      make(map[string]*runc.Container),
-		running:         make(map[int][]containerProcess),
-		exitSubscribers: make(map[*map[int][]runcC.Exit]struct{}),
+		context:              ctx,
+		events:               make(chan interface{}, 128),
+		ec:                   make(chan runcC.Exit, 32),
+		ep:                   ep,
+		shutdown:             sd,
+		containers:           make(map[string]*runc.Container),
+		running:              make(map[int][]containerProcess),
+		runningExecs:         make(map[*runc.Container]int),
+		execCountSubscribers: make(map[*runc.Container]chan<- int),
+		containerInitExit:    make(map[*runc.Container]runcC.Exit),
+		exitSubscribers:      make(map[*map[int][]runcC.Exit]struct{}),
 	}
 	w := &wrapper{
 		service:           s,
 		checkpointRestore: sync.Mutex{},
 		zeropodContainers: make(map[string]*zeropod.Container),
 		zeropodEvents:     make(chan *v1.ContainerStatus, 128),
+		exitChan:          reaper.Default.Subscribe(),
 	}
 	go w.processExits()
 	runcC.Monitor = reaper.Default
@@ -96,6 +100,7 @@ type wrapper struct {
 	checkpointRestore sync.Mutex
 	zeropodContainers map[string]*zeropod.Container
 	zeropodEvents     chan *v1.ContainerStatus
+	exitChan          chan runcC.Exit
 }
 
 func (w *wrapper) RegisterTTRPC(server *ttrpc.Server) error {
@@ -265,7 +270,8 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 }
 
 func (w *wrapper) processExits() {
-	for e := range w.ec {
+	go w.service.processExits()
+	for e := range w.exitChan {
 		w.lifecycleMu.Lock()
 		cps := w.running[e.Pid]
 		w.lifecycleMu.Unlock()
@@ -275,33 +281,9 @@ func (w *wrapper) processExits() {
 				preventExit = true
 			}
 		}
-		if preventExit {
-			continue
-		}
-
-		// While unlikely, it is not impossible for a container process to exit
-		// and have its PID be recycled for a new container process before we
-		// have a chance to process the first exit. As we have no way to tell
-		// for sure which of the processes the exit event corresponds to (until
-		// pidfd support is implemented) there is no way for us to handle the
-		// exit correctly in that case.
-
-		w.lifecycleMu.Lock()
-		// Inform any concurrent s.Start() calls so they can handle the exit
-		// if the PID belongs to them.
-		for subscriber := range w.exitSubscribers {
-			(*subscriber)[e.Pid] = append((*subscriber)[e.Pid], e)
-		}
-		// Handle the exit for a created/started process. If there's more than
-		// one, assume they've all exited. One of them will be the correct
-		// process.
-		delete(w.running, e.Pid)
-		w.lifecycleMu.Unlock()
-
-		for _, cp := range cps {
-			w.mu.Lock()
-			w.handleProcessExit(e, cp.Container, cp.Process)
-			w.mu.Unlock()
+		if !preventExit {
+			// pass event to service exit channel
+			w.service.ec <- e
 		}
 	}
 }
@@ -350,6 +332,6 @@ func (w *wrapper) postRestore(container *runc.Container, handleStarted zeropod.H
 	w.mu.Unlock()
 
 	if handleStarted != nil {
-		handleStarted(container, p, false)
+		handleStarted(container, p)
 	}
 }

@@ -1,4 +1,4 @@
-FROM golang:1.21 as gomod
+FROM golang:1.22 as gomod
 
 WORKDIR /app
 ADD go.* /app

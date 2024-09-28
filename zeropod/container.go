@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime/v2/runc"
+	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
@@ -20,7 +20,7 @@ import (
 	"github.com/ctrox/zeropod/socket"
 )
 
-type HandleStartedFunc func(*runc.Container, process.Process, bool)
+type HandleStartedFunc func(*runc.Container, process.Process)
 
 type Container struct {
 	*runc.Container
