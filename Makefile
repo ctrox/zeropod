@@ -88,7 +88,7 @@ ttrpc:
 	cd api/shim/v1; protoc --go_out=. --go_opt=paths=source_relative \
 	--ttrpc_out=. --plugin=protoc-gen-ttrpc=`which protoc-gen-go-ttrpc` \
 	--ttrpc_opt=paths=source_relative *.proto -I. \
-	-I $(shell go env GOMODCACHE)/github.com/prometheus/client_model@v0.5.0
+	-I $(shell go env GOMODCACHE)/github.com/prometheus/client_model@v0.6.1
 
 # to improve reproducibility of the bpf builds, we dump the vmlinux.h and
 # store it compressed in git instead of dumping it during the build.

@@ -57,7 +57,7 @@ func fetchMetricsAndMerge(w io.Writer) {
 	}
 	keys := maps.Keys(mfs)
 	slices.Sort(keys)
-	enc := expfmt.NewEncoder(w, expfmt.FmtText)
+	enc := expfmt.NewEncoder(w, expfmt.NewFormat(expfmt.TypeTextPlain))
 	for _, n := range keys {
 		err := enc.Encode(mfs[n])
 		if err != nil {
