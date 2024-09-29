@@ -276,11 +276,10 @@ func (c *Container) startActivator(ctx context.Context) error {
 		log.G(ctx).Info("no ports defined in config, detecting listening ports")
 		// if no ports are specified in the config, we try to find all listening ports
 		ports, err := listeningPortsDeep(c.initialProcess.Pid())
-		if err != nil {
-			return err
-		}
-
-		if len(ports) == 0 {
+		if err != nil || len(ports) == 0 {
+			// our initialProcess might not even be running yet, so finding the listening
+			// ports might fail in various ways. We return errNoPortsDetected so the
+			// caller can retry later.
 			return errNoPortsDetected
 		}
 
