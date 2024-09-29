@@ -76,6 +76,8 @@ var images = []image{
 	},
 }
 
+var matchZeropodNodeLabels = client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}
+
 func setup(t testing.TB) (*rest.Config, client.Client, int) {
 	t.Log("building node and shim")
 	require.NoError(t, build())
@@ -282,7 +284,7 @@ func deployNode(t testing.TB, ctx context.Context, c client.Client) error {
 
 	// wait for node pod to be running
 	nodePods := &corev1.PodList{}
-	require.NoError(t, c.List(ctx, nodePods, client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}))
+	require.NoError(t, c.List(ctx, nodePods, matchZeropodNodeLabels))
 	require.Equal(t, 1, len(nodePods.Items))
 
 	pod := &nodePods.Items[0]
@@ -485,7 +487,18 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 
 		return len(endpoints.Subsets[0].Addresses) == replicas
 	}, time.Minute, time.Second, "waiting for service endpoints to be ready") {
-		t.Log("service did not get ready")
+		endpoints := &corev1.Endpoints{}
+		if err := client.Get(ctx, objectName(svc), endpoints); err == nil {
+			t.Logf("service did not get ready: expected %d addresses, got %d", replicas, len(endpoints.Subsets[0].Addresses))
+			t.Logf("endpoints: %v", endpoints)
+
+			commandArgs := []string{"exec", "zeropod-e2e-control-plane", "journalctl", "-u", "containerd"}
+			out, err := exec.Command("docker", commandArgs...).CombinedOutput()
+			if err != nil {
+				t.Logf("error getting containerd logs: %s", err)
+			}
+			t.Logf("containerd logs: %s", out)
+		}
 	}
 
 	// we give it some more time before returning just to make sure it's
@@ -541,8 +554,8 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 	return buf.String(), errBuf.String(), nil
 }
 
-func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
-	val, err := getNodeMetric(t, client, cfg, zeropod.MetricRestoreDuration)
+func restoreCount(t testing.TB, ctx context.Context, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
+	val, err := getNodeMetric(t, ctx, client, cfg, zeropod.MetricRestoreDuration)
 	if err != nil {
 		return 0, err
 	}
@@ -567,8 +580,8 @@ func restoreCount(t testing.TB, client client.Client, cfg *rest.Config, pod *cor
 	return int(*metric.Histogram.SampleCount), nil
 }
 
-func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
-	val, err := getNodeMetric(t, client, cfg, zeropod.MetricCheckPointDuration)
+func checkpointCount(t testing.TB, ctx context.Context, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
+	val, err := getNodeMetric(t, ctx, client, cfg, zeropod.MetricCheckPointDuration)
 	if err != nil {
 		return 0, err
 	}
@@ -593,8 +606,8 @@ func checkpointCount(t testing.TB, client client.Client, cfg *rest.Config, pod *
 	return int(*metric.Histogram.SampleCount), nil
 }
 
-func isCheckpointed(t testing.TB, client client.Client, cfg *rest.Config, pod *corev1.Pod) (bool, error) {
-	val, err := getNodeMetric(t, client, cfg, zeropod.MetricRunning)
+func isCheckpointed(t testing.TB, ctx context.Context, client client.Client, cfg *rest.Config, pod *corev1.Pod) (bool, error) {
+	val, err := getNodeMetric(t, ctx, client, cfg, zeropod.MetricRunning)
 	if err != nil {
 		return false, err
 	}
@@ -616,7 +629,7 @@ func isCheckpointed(t testing.TB, client client.Client, cfg *rest.Config, pod *c
 		return false, fmt.Errorf("gauge value is nil")
 	}
 
-	count, err := checkpointCount(t, client, cfg, pod)
+	count, err := checkpointCount(t, ctx, client, cfg, pod)
 	if err != nil {
 		return false, err
 	}
@@ -654,43 +667,41 @@ func metricMatchesLabel(metric *dto.Metric, key, value string) bool {
 	return false
 }
 
-func getNodeMetric(t testing.TB, c client.Client, cfg *rest.Config, metricName string) (*dto.MetricFamily, error) {
+func getNodeMetric(t testing.TB, ctx context.Context, c client.Client, cfg *rest.Config, metricName string) (*dto.MetricFamily, error) {
 	var val *dto.MetricFamily
-	restoreDuration := prometheus.BuildFQName(zeropod.MetricsNamespace, "", metricName)
+	metric := prometheus.BuildFQName(zeropod.MetricsNamespace, "", metricName)
 	if !assert.Eventually(t, func() bool {
-		mfs, err := getNodeMetrics(c, cfg)
+		mfs, err := getNodeMetrics(ctx, c, cfg)
 		if err != nil {
 			t.Logf("error getting node metrics: %s", err)
 			return false
 		}
-		v, ok := mfs[restoreDuration]
+		v, ok := mfs[metric]
 		val = v
 		return ok
 	}, time.Second*30, time.Second) {
-		return nil, fmt.Errorf("could not find expected metric: %s", restoreDuration)
+		if err := printNodeLogs(t, ctx, c, cfg); err != nil {
+			t.Logf("error printing node logs: %s", err)
+		}
+		return nil, fmt.Errorf("could not find expected metric: %s", metric)
 	}
 	return val, nil
 }
 
-func getNodeMetrics(c client.Client, cfg *rest.Config) (map[string]*dto.MetricFamily, error) {
+func getNodeMetrics(ctx context.Context, c client.Client, cfg *rest.Config) (map[string]*dto.MetricFamily, error) {
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
-
-	ctx := context.Background()
-	nodePods := &corev1.PodList{}
-	if err := c.List(ctx, nodePods, client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}); err != nil {
+	nodePod, err := getNodePod(ctx, c)
+	if err != nil {
 		return nil, err
-	}
-	if len(nodePods.Items) < 1 {
-		return nil, fmt.Errorf("expected to find at least 1 node pod, got %d", len(nodePods.Items))
 	}
 
 	pf := PortForward{
 		Config: cfg, Clientset: cs,
-		Name:            nodePods.Items[0].Name,
-		Namespace:       nodePods.Items[0].Namespace,
+		Name:            nodePod.Name,
+		Namespace:       nodePod.Namespace,
 		DestinationPort: 8080,
 	}
 	if err := pf.Start(); err != nil {
@@ -710,4 +721,49 @@ func getNodeMetrics(c client.Client, cfg *rest.Config) (map[string]*dto.MetricFa
 	}
 
 	return mfs, nil
+}
+
+func getNodePod(ctx context.Context, c client.Client) (*corev1.Pod, error) {
+	nodePods := &corev1.PodList{}
+	if err := c.List(ctx, nodePods, matchZeropodNodeLabels); err != nil {
+		return nil, err
+	}
+	if len(nodePods.Items) < 1 {
+		return nil, fmt.Errorf("expected to find at least 1 node pod, got %d", len(nodePods.Items))
+	}
+
+	return &nodePods.Items[0], nil
+}
+
+func printNodeLogs(t testing.TB, ctx context.Context, c client.Client, cfg *rest.Config) error {
+	nodePod, err := getNodePod(ctx, c)
+	if err != nil {
+		return err
+	}
+
+	logs, err := getPodLogs(ctx, cfg, *nodePod)
+	if err != nil {
+		return err
+	}
+	t.Log(logs)
+	return nil
+}
+
+func getPodLogs(ctx context.Context, cfg *rest.Config, pod corev1.Pod) (string, error) {
+	clientset, err := kubernetes.NewForConfig(cfg)
+	if err != nil {
+		return "", fmt.Errorf("creating client: %w", err)
+	}
+	req := clientset.CoreV1().Pods(pod.Namespace).GetLogs(pod.Name, &corev1.PodLogOptions{})
+	podLogs, err := req.Stream(ctx)
+	if err != nil {
+		return "", fmt.Errorf("opening log stream: %w", err)
+	}
+	defer podLogs.Close()
+
+	buf := new(bytes.Buffer)
+	if _, err := io.Copy(buf, podLogs); err != nil {
+		return "", fmt.Errorf("copying pod logs: %w", err)
+	}
+	return buf.String(), nil
 }

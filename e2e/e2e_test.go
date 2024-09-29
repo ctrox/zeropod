@@ -170,7 +170,7 @@ func TestE2E(t *testing.T) {
 		defer cleanupPod()
 
 		require.Eventually(t, func() bool {
-			checkpointed, err := isCheckpointed(t, client, cfg, pod)
+			checkpointed, err := isCheckpointed(t, ctx, client, cfg, pod)
 			if err != nil {
 				t.Logf("error checking if checkpointed: %s", err)
 				return false
@@ -183,7 +183,7 @@ func TestE2E(t *testing.T) {
 		t.Log(stdout, stderr)
 
 		require.Eventually(t, func() bool {
-			count, err := restoreCount(t, client, cfg, pod)
+			count, err := restoreCount(t, ctx, client, cfg, pod)
 			if err != nil {
 				t.Logf("error checking if restored: %s", err)
 				return false
@@ -200,7 +200,7 @@ func TestE2E(t *testing.T) {
 		defer cleanupPod()
 
 		require.Eventually(t, func() bool {
-			checkpointed, err := isCheckpointed(t, client, cfg, pod)
+			checkpointed, err := isCheckpointed(t, ctx, client, cfg, pod)
 			if err != nil {
 				t.Logf("error checking if checkpointed: %s", err)
 				return false
@@ -286,7 +286,7 @@ func TestE2E(t *testing.T) {
 				t.Logf("error during pod exec: %s", err)
 				return false
 			}
-			checkpointed, err := isCheckpointed(t, client, cfg, restoredPod)
+			checkpointed, err := isCheckpointed(t, ctx, client, cfg, restoredPod)
 			if err != nil {
 				t.Logf("error checking if checkpointed: %s", err)
 				return false
@@ -297,7 +297,7 @@ func TestE2E(t *testing.T) {
 		mfs := map[string]*dto.MetricFamily{}
 		require.Eventually(t, func() bool {
 			var err error
-			mfs, err = getNodeMetrics(client, cfg)
+			mfs, err = getNodeMetrics(ctx, client, cfg)
 			return err == nil
 		}, time.Minute, time.Second)
 
