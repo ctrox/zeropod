@@ -138,10 +138,10 @@ func (c *Container) scheduleScaleDownIn(in time.Duration) error {
 		log.G(c.context).Info("scaling down after scale down duration is up")
 
 		if err := c.scaleDown(c.context); err != nil {
-			// checkpointing failed, this is currently unrecoverable, so we
-			// shutdown our shim and let containerd recreate it.
-			log.G(c.context).Fatalf("scale down failed: %s", err)
-			os.Exit(1)
+			// checkpointing failed, this is currently unrecoverable. We set our
+			// initialProcess as exited to make sure it's restarted
+			log.G(c.context).Errorf("scale down failed: %s", err)
+			c.initialProcess.SetExited(1)
 		}
 
 	})
