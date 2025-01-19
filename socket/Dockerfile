@@ -1,4 +1,4 @@
-FROM golang:1.22 as gomod
+FROM golang:1.23 as gomod
 
 WORKDIR /app
 ADD go.* /app
@@ -7,7 +7,7 @@ ADD go.* /app
 RUN go mod download
 
 # we use fedora since it has a recent version of bpftool
-FROM fedora:39
+FROM fedora:41
 RUN dnf install -y llvm clang bpftool libbpf-devel golang
 
 RUN mkdir /headers
