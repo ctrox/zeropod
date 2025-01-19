@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -31,7 +32,7 @@ func TestActivator(t *testing.T) {
 	s, err := NewServer(ctx, nn)
 	require.NoError(t, err)
 
-	bpf, err := InitBPF(os.Getpid())
+	bpf, err := InitBPF(os.Getpid(), slog.Default())
 	require.NoError(t, err)
 	require.NoError(t, bpf.AttachRedirector("lo"))
 

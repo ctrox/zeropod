@@ -27,8 +27,8 @@ type PodScaler struct {
 	log *slog.Logger
 }
 
-func NewPodScaler() *PodScaler {
-	log := slog.With("component", "podscaler")
+func NewPodScaler(log *slog.Logger) *PodScaler {
+	log = log.With("component", "podscaler")
 	log.Info("init")
 	return &PodScaler{log: log}
 }

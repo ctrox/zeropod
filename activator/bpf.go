@@ -25,9 +25,10 @@ type BPF struct {
 	objs    *bpfObjects
 	qdiscs  []*netlink.GenericQdisc
 	filters []*netlink.BpfFilter
+	log     *slog.Logger
 }
 
-func InitBPF(pid int) (*BPF, error) {
+func InitBPF(pid int, log *slog.Logger) (*BPF, error) {
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, err
@@ -49,7 +50,7 @@ func InitBPF(pid int) (*BPF, error) {
 		return nil, fmt.Errorf("loading objects: %w", err)
 	}
 
-	return &BPF{pid: pid, objs: &objs}, nil
+	return &BPF{pid: pid, log: log, objs: &objs}, nil
 }
 
 func (bpf *BPF) Cleanup() error {
@@ -68,7 +69,7 @@ func (bpf *BPF) Cleanup() error {
 		}
 	}
 
-	slog.Info("deleting", "path", PinPath(bpf.pid))
+	bpf.log.Info("deleting", "path", PinPath(bpf.pid))
 	return os.RemoveAll(PinPath(bpf.pid))
 }
 
