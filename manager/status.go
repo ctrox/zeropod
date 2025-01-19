@@ -164,18 +164,40 @@ func (s *subscriber) onStatus(ctx context.Context, status *v1.ContainerStatus) e
 func (s *subscriber) handlePod(ctx context.Context, status *v1.ContainerStatus) error {
 	pod := &corev1.Pod{}
 	podName := types.NamespacedName{Name: status.PodName, Namespace: status.PodNamespace}
-	if err := s.kube.Get(ctx, podName, pod); err != nil {
-		return fmt.Errorf("getting pod: %w", err)
-	}
-
-	for _, p := range s.podHandlers {
-		if err := p.Handle(ctx, status, pod); err != nil {
-			return err
-		}
-	}
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		return s.kube.Update(ctx, pod)
+		if err := s.kube.Get(ctx, podName, pod); err != nil {
+			return fmt.Errorf("getting pod: %w", err)
+		}
+		// as a pod handler might want to resize the pod resources, we store all
+		// containers before calling the handlers
+		containersBefore := pod.DeepCopy().Spec.Containers
+		for _, p := range s.podHandlers {
+			if err := p.Handle(ctx, status, pod); err != nil {
+				return err
+			}
+		}
+		// store containers after and revert the pod spec so we can call the
+		// update for all other fields
+		containersAfter := pod.DeepCopy().Spec.Containers
+		pod.Spec.Containers = containersBefore
+
+		if err := s.kube.Update(ctx, pod); err != nil {
+			return fmt.Errorf("updating pod: %w", err)
+		}
+		// now that other field updates succeeded, we apply the containers again
+		// and try to resize
+		pod.Spec.Containers = containersAfter
+		if err := s.kube.SubResource("resize").Update(ctx, pod); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+			s.log.Info("updating pod resources using resize failed, falling back to update")
+			if err := s.kube.Update(ctx, pod); err != nil {
+				return fmt.Errorf("updating pod: %w", err)
+			}
+		}
+		return nil
 	}); err != nil {
 		if apierrors.IsInvalid(err) {
 			s.log.Error("in-place scaling failed, ensure InPlacePodVerticalScaling feature flag is enabled")

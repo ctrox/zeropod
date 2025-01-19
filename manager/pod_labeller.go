@@ -18,7 +18,7 @@ type PodLabeller struct {
 }
 
 func NewPodLabeller(log *slog.Logger) *PodLabeller {
-	log = log.With("component", "podupdater")
+	log = log.With("component", "podlabeller")
 	log.Info("init")
 	return &PodLabeller{log: log}
 }

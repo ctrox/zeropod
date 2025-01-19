@@ -48,7 +48,7 @@ jobs:
 
       - name: Install protoc-gen-go
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.31
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.3
           go install github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc@v1.2.4
 
       - uses: awalsh128/cache-apt-pkgs-action@v1

@@ -8,6 +8,7 @@ rules:
       - ""
     resources:
       - pods
+      - pods/resize
     verbs:
       - get
       - update

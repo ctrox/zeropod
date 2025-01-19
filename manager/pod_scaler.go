@@ -38,6 +38,10 @@ func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus, pod
 		"namespace", status.PodNamespace, "phase", status.Phase)
 	clog.Info("status event")
 
+	if err := ps.setAnnotations(pod); err != nil {
+		return err
+	}
+
 	for i, container := range pod.Spec.Containers {
 		if container.Name != status.Name {
 			continue
@@ -61,11 +65,7 @@ func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus, pod
 			continue
 		}
 
-		if err := ps.setAnnotations(pod); err != nil {
-			return err
-		}
-
-		new := ps.newRequests(initial, current, status)
+		new := ps.newRequests(initial, current.DeepCopy(), status)
 		pod.Spec.Containers[i].Resources.Requests = new
 		clog.Debug("container needs to be updated", "current", printResources(current), "new", printResources(new))
 	}
