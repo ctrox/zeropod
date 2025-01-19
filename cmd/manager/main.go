@@ -25,16 +25,18 @@ var (
 func main() {
 	flag.Parse()
 
+	opts := &slog.HandlerOptions{}
 	if *debug {
-		slog.SetLogLoggerLevel(slog.LevelDebug)
+		opts.Level = slog.LevelDebug
 	}
-	slog.Info("starting manager", "metrics-addr", *metricsAddr)
+	log := slog.New(slog.NewJSONHandler(os.Stdout, opts))
+	log.Info("starting manager", "metrics-addr", *metricsAddr)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := manager.AttachRedirectors(ctx); err != nil {
-		slog.Error("attaching redirectors", "err", err)
+	if err := manager.AttachRedirectors(ctx, log); err != nil {
+		log.Error("attaching redirectors", "err", err)
 		os.Exit(1)
 	}
 
@@ -46,13 +48,13 @@ func main() {
 
 	podHandlers := []manager.PodHandler{}
 	if *statusLabels {
-		podHandlers = append(podHandlers, manager.NewPodLabeller())
+		podHandlers = append(podHandlers, manager.NewPodLabeller(log))
 	}
 	if *inPlaceScaling {
-		podHandlers = append(podHandlers, manager.NewPodScaler())
+		podHandlers = append(podHandlers, manager.NewPodScaler(log))
 	}
 
-	if err := manager.StartSubscribers(ctx, podHandlers...); err != nil {
+	if err := manager.StartSubscribers(ctx, log, podHandlers...); err != nil {
 		slog.Error("starting subscribers", "err", err)
 		os.Exit(1)
 	}

@@ -126,7 +126,8 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 		cluster.CreateWithV1Alpha4Config(&v1alpha4.Cluster{
 			Name: name,
 			FeatureGates: map[string]bool{
-				"InPlacePodVerticalScaling": true,
+				"InPlacePodVerticalScaling":                true,
+				"InPlacePodVerticalScalingAllocatedStatus": true,
 			},
 			Nodes: []v1alpha4.Node{{
 				Labels: map[string]string{zeropod.NodeLabel: "true"},
@@ -150,7 +151,7 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 				},
 			}},
 		}),
-		cluster.CreateWithNodeImage("kindest/node:v1.29.2"),
+		cluster.CreateWithNodeImage("kindest/node:v1.32.0@sha256:c48c62eac5da28cdadcf560d1d8616cfa6783b58f0d94cf63ad1bf49600cb027"),
 		cluster.CreateWithRetain(false),
 		cluster.CreateWithKubeconfigPath(f.Name()),
 		cluster.CreateWithWaitForReady(time.Minute*2),

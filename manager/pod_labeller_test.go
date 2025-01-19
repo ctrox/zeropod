@@ -55,7 +55,7 @@ func TestPodLabeller(t *testing.T) {
 			pod := newPod(nil)
 			pod.SetLabels(tc.beforeEvent)
 
-			if err := NewPodLabeller().Handle(
+			if err := NewPodLabeller(slog.Default()).Handle(
 				context.Background(),
 				&v1.ContainerStatus{
 					Name:         pod.Spec.Containers[0].Name,

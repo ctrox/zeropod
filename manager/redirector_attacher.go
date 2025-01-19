@@ -19,6 +19,7 @@ import (
 type Redirector struct {
 	sync.Mutex
 	activators map[int]*activator.BPF
+	log        *slog.Logger
 }
 
 // AttachRedirectors scans the zeropod maps path in the bpf file system for
@@ -28,30 +29,31 @@ type Redirector struct {
 // can be found it attaches the redirector BPF programs to the network
 // interfaces of the sandbox. The directories are expected to be created by
 // the zeropod shim on startup.
-func AttachRedirectors(ctx context.Context) error {
+func AttachRedirectors(ctx context.Context, log *slog.Logger) error {
 	r := &Redirector{
 		activators: make(map[int]*activator.BPF),
+		log:        log,
 	}
 
 	if _, err := os.Stat(activator.MapsPath()); os.IsNotExist(err) {
-		slog.Info("maps path not found, creating", "path", activator.MapsPath())
+		r.log.Info("maps path not found, creating", "path", activator.MapsPath())
 		if err := os.Mkdir(activator.MapsPath(), os.ModePerm); err != nil {
 			return err
 		}
 	}
 
-	pids, err := getSandboxPids()
+	pids, err := r.getSandboxPids()
 	if err != nil {
 		return err
 	}
 
 	if len(pids) == 0 {
-		slog.Info("no sandbox pids found")
+		r.log.Info("no sandbox pids found")
 	}
 
 	for _, pid := range pids {
 		if _, err := os.Stat(netNSPath(pid)); os.IsNotExist(err) {
-			slog.Info("net ns not found, removing leftover pid", "path", netNSPath(pid))
+			r.log.Info("net ns not found, removing leftover pid", "path", netNSPath(pid))
 			os.RemoveAll(activator.PinPath(pid))
 			continue
 		}
@@ -87,27 +89,27 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 
 			pid, err := strconv.Atoi(filepath.Base(event.Name))
 			if err != nil {
-				slog.Warn("unable to parse pid from added name", "name", filepath.Base(event.Name))
+				r.log.Warn("unable to parse pid from added name", "name", filepath.Base(event.Name))
 				break
 			}
 
 			switch event.Op {
 			case fsnotify.Create:
 				if err := r.attachRedirector(pid); err != nil {
-					slog.Error("unable to attach redirector", "pid", pid)
+					r.log.Error("unable to attach redirector", "pid", pid)
 				}
 			case fsnotify.Remove:
 				r.Lock()
 				if act, ok := r.activators[pid]; ok {
-					slog.Info("cleaning up activator", "pid", pid)
+					r.log.Info("cleaning up activator", "pid", pid)
 					if err := act.Cleanup(); err != nil {
-						slog.Error("error cleaning up redirector", "err", err)
+						r.log.Error("error cleaning up redirector", "err", err)
 					}
 				}
 				r.Unlock()
 			}
 		case err := <-watcher.Errors:
-			slog.Error("watch error", "err", err)
+			r.log.Error("watch error", "err", err)
 		case <-ctx.Done():
 			return nil
 		}
@@ -115,7 +117,7 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 }
 
 func (r *Redirector) attachRedirector(pid int) error {
-	bpf, err := activator.InitBPF(pid)
+	bpf, err := activator.InitBPF(pid, r.log)
 	if err != nil {
 		return fmt.Errorf("unable to initialize BPF: %w", err)
 	}
@@ -132,7 +134,7 @@ func (r *Redirector) attachRedirector(pid int) error {
 		//  TODO: is this really always eth0?
 		// as for loopback, this is required for port-forwarding to work
 		ifaces := []string{"eth0", "lo"}
-		slog.Info("attaching redirector for sandbox", "pid", pid, "links", ifaces)
+		r.log.Info("attaching redirector for sandbox", "pid", pid, "links", ifaces)
 		return bpf.AttachRedirector(ifaces...)
 	}); err != nil {
 		return err
@@ -145,7 +147,7 @@ func netNSPath(pid int) string {
 	return fmt.Sprintf("/hostproc/%d/ns/net", pid)
 }
 
-func getSandboxPids() ([]int, error) {
+func (r *Redirector) getSandboxPids() ([]int, error) {
 	f, err := os.Open(activator.MapsPath())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -167,7 +169,7 @@ func getSandboxPids() ([]int, error) {
 
 		intPid, err := strconv.Atoi(dir)
 		if err != nil {
-			slog.Warn("unable to parse pid from dir name", "name", dir)
+			r.log.Warn("unable to parse pid from dir name", "name", dir)
 			continue
 		}
 		intPids = append(intPids, intPid)
