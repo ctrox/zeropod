@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"time"
@@ -17,10 +18,18 @@ import (
 	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/runtime/v2/runc"
+	"github.com/containerd/containerd/runtime/v2/runc/options"
 	"github.com/containerd/log"
+	"github.com/containerd/ttrpc"
+	v1 "github.com/ctrox/zeropod/api/node/v1"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-var ErrAlreadyRestored = errors.New("container is already restored")
+var (
+	ErrAlreadyRestored      = errors.New("container is already restored")
+	ErrRestoreRequestFailed = errors.New("restore request failed")
+)
 
 func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
 	c.checkpointRestore.Lock()
@@ -173,4 +182,106 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 		stderr = crio.NewDiscardLogger()
 	}
 	return
+}
+
+// CreateLazyRestore requests a restore request on the node. If a matching
+// migration is found, it sets the Checkpoint path in the CreateTaskRequest.
+func CreateLazyRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *Config) error {
+	conn, err := net.Dial("unix", v1.SocketPath)
+	if err != nil {
+		return fmt.Errorf("dialing node service: %w", err)
+	}
+	log.G(ctx).Infof("creating restore request for container: %s", cfg.ContainerName)
+
+	restoreReq := &v1.RestoreRequest{
+		PodInfo: &v1.PodInfo{
+			Name:          cfg.PodName,
+			Namespace:     cfg.PodNamespace,
+			ContainerName: cfg.ContainerName,
+		},
+	}
+	nodeClient := v1.NewNodeClient(ttrpc.NewClient(conn))
+	defer conn.Close()
+	resp, err := nodeClient.Restore(ctx, restoreReq)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrRestoreRequestFailed, err)
+	}
+
+	log.G(ctx).Infof("restore response: %v", resp.MigrationInfo)
+	// TODO: validate that path is valid and contains image
+	r.Checkpoint = v1.SnapshotPath(resp.MigrationInfo.ImageId)
+
+	// wait for the lazy pages socket file to exist to ensure the pages
+	// server is up and running.
+	if err := waitForLazyPagesSocket(ctx, r.Checkpoint, time.Second); err != nil {
+		log.G(ctx).Errorf("aborting restore: %s", err)
+		r.Checkpoint = ""
+		return nil
+	}
+
+	if err := setCriuWorkPath(r, r.Checkpoint); err != nil {
+		return err
+	}
+
+	log.G(ctx).Infof("setting checkpoint dir for restore: %s", v1.SnapshotPath(resp.MigrationInfo.ImageId))
+
+	return nil
+}
+
+func FinishRestore(ctx context.Context, cfg *Config) error {
+	conn, err := net.Dial("unix", v1.SocketPath)
+	if err != nil {
+		return fmt.Errorf("dialing node service: %w", err)
+	}
+	defer conn.Close()
+
+	restoreReq := &v1.RestoreRequest{
+		PodInfo: &v1.PodInfo{
+			Name:          cfg.PodName,
+			Namespace:     cfg.PodNamespace,
+			ContainerName: cfg.ContainerName,
+		},
+		MigrationInfo: &v1.MigrationInfo{RestoredAt: timestamppb.Now()},
+	}
+	nodeClient := v1.NewNodeClient(ttrpc.NewClient(conn))
+	if _, err := nodeClient.FinishRestore(ctx, restoreReq); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// waitForLazyPagesSocket waits until the lazy-pages.socket file exists in the
+// supplied checkpointPath.
+func waitForLazyPagesSocket(ctx context.Context, checkpointPath string, timeout time.Duration) error {
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for lazy-pages.socket")
+		default:
+			log.G(ctx).Info("waiting for lazy-pages.socket")
+			_, err := os.Stat(filepath.Join(checkpointPath, "lazy-pages.socket"))
+			if err == nil {
+				return nil
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+}
+
+func setCriuWorkPath(r *task.CreateTaskRequest, path string) error {
+	m := new(options.Options)
+	if err := r.Options.UnmarshalTo(m); err != nil {
+		return err
+	}
+	m.CriuWorkPath = path
+	any, err := anypb.New(m)
+	if err != nil {
+		return err
+	}
+	r.Options = any
+	return nil
 }

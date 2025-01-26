@@ -1,0 +1,39 @@
+# the manager needs to CRUD migrations
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: zeropod:migration-manager
+rules:
+  - apiGroups:
+      - runtime.zeropod.ctrox.dev
+    resources:
+      - migrations
+      - migrations/status
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - delete
+  - apiGroups:
+      - ""
+    resources:
+      - pods
+    verbs:
+      - get
+      - list
+      - watch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: zeropod:migration-manager
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: zeropod:migration-manager
+subjects:
+  - kind: ServiceAccount
+    name: zeropod-node
+    namespace: zeropod-system

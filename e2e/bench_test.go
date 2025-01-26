@@ -12,7 +12,9 @@ import (
 )
 
 func BenchmarkRestore(b *testing.B) {
-	_, client, port := setup(b)
+	e2e := setup(b)
+	client := e2e.client
+	port := e2e.port
 	ctx := context.Background()
 
 	c := &http.Client{

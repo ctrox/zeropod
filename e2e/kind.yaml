@@ -11,3 +11,15 @@ nodes:
         containerPath: /host/proc
     labels:
       zeropod.ctrox.dev/node: "true"
+  - role: worker
+    extraMounts:
+      - hostPath: /proc
+        containerPath: /host/proc
+    labels:
+      zeropod.ctrox.dev/node: "true"
+  - role: worker
+    extraMounts:
+      - hostPath: /proc
+        containerPath: /host/proc
+    labels:
+      zeropod.ctrox.dev/node: "true"

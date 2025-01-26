@@ -2,16 +2,13 @@ package task
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
 	"time"
 
-	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/zeropod"
-	"google.golang.org/protobuf/types/known/emptypb"
-
-	"github.com/containerd/cgroups"
+	"github.com/containerd/cgroups/v3"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/pkg/cri/annotations"
@@ -26,6 +23,9 @@ import (
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/ctrox/zeropod/zeropod"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var (
@@ -98,6 +98,7 @@ type wrapper struct {
 
 	mut               sync.Mutex
 	checkpointRestore sync.Mutex
+	migrate           sync.Mutex
 	zeropodContainers map[string]*zeropod.Container
 	zeropodEvents     chan *v1.ContainerStatus
 	exitChan          chan runcC.Exit
@@ -108,13 +109,34 @@ func (w *wrapper) RegisterTTRPC(server *ttrpc.Server) error {
 	return nil
 }
 
-func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
-	log.G(ctx).Infof("start called in zeropod service %s, %s", r.ID, r.ExecID)
-
-	resp, err := w.service.Start(ctx, r)
+func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
+	spec, err := zeropod.GetSpec(r.Bundle)
 	if err != nil {
 		return nil, err
 	}
+
+	cfg, err := zeropod.NewConfig(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.MigrationEnabled() {
+		if err := zeropod.CreateLazyRestore(ctx, r, cfg); err != nil {
+			if !errors.Is(err, zeropod.ErrRestoreRequestFailed) {
+				return nil, err
+			}
+			// if the restore fails with ErrRestoreRequestFailed it's very
+			// likely it simply did not find a matching migration. We log it and
+			// create the container from scratch.
+			log.G(ctx).Errorf("restore request failed: %s", err)
+		}
+	}
+
+	return w.service.Create(ctx, r)
+}
+
+func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
+	log.G(ctx).Infof("start called in zeropod service %s, %s", r.ID, r.ExecID)
 
 	container, err := w.getContainer(r.ID)
 	if err != nil {
@@ -129,6 +151,24 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	cfg, err := zeropod.NewConfig(ctx, spec)
 	if err != nil {
 		return nil, err
+	}
+
+	startCtx := ctx
+	if cfg.MigrationEnabled() {
+		restoreCtx, cancel := context.WithTimeout(ctx, time.Second*15)
+		defer cancel()
+		startCtx = restoreCtx
+	}
+
+	resp, err := w.service.Start(startCtx, r)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.MigrationEnabled() {
+		if err := zeropod.FinishRestore(ctx, cfg); err != nil {
+			log.G(ctx).Errorf("error finishing restore: %s", err)
+		}
 	}
 
 	w.mut.Lock()
@@ -221,10 +261,12 @@ func (w *wrapper) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 }
 
 func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAPI.DeleteResponse, error) {
+	log.G(ctx).Info("delete called")
 	zeropodContainer, ok := w.getZeropodContainer(r.ID)
 	if !ok {
 		return w.service.Delete(ctx, r)
 	}
+	log.G(ctx).Infof("delete called in zeropod: %s", zeropodContainer.ID())
 
 	if len(r.ExecID) != 0 {
 		// on delete of an exec container we want to schedule scaling down again.
@@ -245,6 +287,7 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 	if !ok {
 		return w.service.Kill(ctx, r)
 	}
+	log.G(ctx).Infof("kill called in zeropod: %s", zeropodContainer.ID())
 
 	if len(r.ExecID) == 0 && zeropodContainer.ScaledDown() {
 		log.G(ctx).Infof("requested scaled down process %d to be killed", zeropodContainer.Process().Pid())
@@ -256,6 +299,15 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 	}
 
 	if len(r.ExecID) == 0 {
+		if zeropodContainer.MigrationEnabled() {
+			log.G(ctx).Info("migrating instead of killing process")
+			if err := zeropodContainer.Evac(ctx); err != nil {
+				log.G(ctx).WithError(err).Error("evac failed, exiting normally")
+				return w.service.Kill(ctx, r)
+			}
+			return empty, nil
+		}
+
 		log.G(ctx).Infof("requested container %s to be killed", r.ID)
 		zeropodContainer.Stop(ctx)
 

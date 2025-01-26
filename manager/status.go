@@ -25,7 +25,6 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
 var connectBackoff = wait.Backoff{
@@ -42,6 +41,11 @@ type PodHandler interface {
 	Handle(context.Context, *v1.ContainerStatus, *corev1.Pod) error
 }
 
+type PodHandlerWithClient interface {
+	PodHandler
+	InjectClient(v1.ShimClient)
+}
+
 type subscriber struct {
 	log             *slog.Logger
 	kube            client.Client
@@ -49,16 +53,7 @@ type subscriber struct {
 	podHandlers     []PodHandler
 }
 
-func StartSubscribers(ctx context.Context, log *slog.Logger, podHandlers ...PodHandler) error {
-	cfg, err := config.GetConfig()
-	if err != nil {
-		return fmt.Errorf("getting client config: %w", err)
-	}
-	kube, err := client.New(cfg, client.Options{})
-	if err != nil {
-		return fmt.Errorf("creating client: %w", err)
-	}
-
+func StartSubscribers(ctx context.Context, log *slog.Logger, kube client.Client, podHandlers ...PodHandler) error {
 	if _, err := os.Stat(task.ShimSocketPath); errors.Is(err, os.ErrNotExist) {
 		if err := os.Mkdir(task.ShimSocketPath, os.ModePerm); err != nil {
 			return err
@@ -94,6 +89,12 @@ func subscribe(ctx context.Context, log *slog.Logger, sock string, kube client.C
 	subscribeClient, err := shimClient.SubscribeStatus(ctx, &v1.SubscribeStatusRequest{Empty: &emptypb.Empty{}})
 	if err != nil {
 		return err
+	}
+
+	for _, handler := range handlers {
+		if ph, ok := handler.(PodHandlerWithClient); ok {
+			ph.InjectClient(shimClient)
+		}
 	}
 
 	s := subscriber{

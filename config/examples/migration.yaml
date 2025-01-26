@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: freezer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: freezer
+  template:
+    metadata:
+      labels:
+        app: freezer
+      annotations:
+        zeropod.ctrox.dev/scaledown-duration: 1h
+        zeropod.ctrox.dev/migrate: "freezer"
+    spec:
+      runtimeClassName: zeropod
+      containers:
+        - image: ctrox/freezer:latest
+          name: freezer
+          args: ["-memory", "128"]
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            initialDelaySeconds: 0
+            periodSeconds: 1
+            httpGet:
+              path: /get
+              port: 8080
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi

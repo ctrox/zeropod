@@ -21,6 +21,7 @@ const (
 	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledown-duration"
 	DisableCheckpoiningAnnotationKey = "zeropod.ctrox.dev/disable-checkpointing"
 	PreDumpAnnotationKey             = "zeropod.ctrox.dev/pre-dump"
+	MigrateAnnotationKey             = "zeropod.ctrox.dev/migrate"
 	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
 	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
 
@@ -38,6 +39,7 @@ type annotationConfig struct {
 	ScaledownDuration     string `mapstructure:"zeropod.ctrox.dev/scaledown-duration"`
 	DisableCheckpointing  string `mapstructure:"zeropod.ctrox.dev/disable-checkpointing"`
 	PreDump               string `mapstructure:"zeropod.ctrox.dev/pre-dump"`
+	Migrate               string `mapstructure:"zeropod.ctrox.dev/migrate"`
 	ContainerName         string `mapstructure:"io.kubernetes.cri.container-name"`
 	ContainerType         string `mapstructure:"io.kubernetes.cri.container-type"`
 	PodName               string `mapstructure:"io.kubernetes.cri.sandbox-name"`
@@ -51,6 +53,7 @@ type Config struct {
 	ScaleDownDuration     time.Duration
 	DisableCheckpointing  bool
 	PreDump               bool
+	Migrate               string
 	ContainerName         string
 	ContainerType         string
 	PodName               string
@@ -138,6 +141,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ScaleDownDuration:     dur,
 		DisableCheckpointing:  disableCheckpointing,
 		PreDump:               preDump,
+		Migrate:               cfg.Migrate,
 		ZeropodContainerNames: containerNames,
 		ContainerName:         cfg.ContainerName,
 		ContainerType:         cfg.ContainerType,
@@ -158,4 +162,8 @@ func (cfg Config) IsZeropodContainer() bool {
 
 	// if there is none specified, every one of them is considered.
 	return len(cfg.ZeropodContainerNames) == 0
+}
+
+func (cfg Config) MigrationEnabled() bool {
+	return cfg.Migrate == cfg.ContainerName
 }

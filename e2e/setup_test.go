@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,10 +13,12 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/ctrox/zeropod/activator"
+	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/zeropod"
 	"github.com/go-logr/logr"
 	"github.com/phayes/freeport"
@@ -25,10 +28,12 @@ import (
 	"github.com/prometheus/common/expfmt"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	nodev1 "k8s.io/api/node/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -65,6 +70,22 @@ type image struct {
 	dockerfile string
 }
 
+type e2eConfig struct {
+	cfg            *rest.Config
+	client         client.Client
+	port           int
+	clusterName    string
+	kubeconfigName string
+}
+
+func (e2e *e2eConfig) cleanup() error {
+	defer os.RemoveAll(e2e.kubeconfigName)
+	if err := stopKind(e2e.clusterName, e2e.kubeconfigName); err != nil {
+		return err
+	}
+	return os.RemoveAll(e2e.kubeconfigName)
+}
+
 var images = []image{
 	{
 		tag:        installerImage,
@@ -76,9 +97,25 @@ var images = []image{
 	},
 }
 
-var matchZeropodNodeLabels = client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}
+var (
+	once sync.Once
+	e2e  *e2eConfig
+	wg   sync.WaitGroup
 
-func setup(t testing.TB) (*rest.Config, client.Client, int) {
+	matchZeropodNodeLabels = client.MatchingLabels{"app.kubernetes.io/name": "zeropod-node"}
+)
+
+func setupOnce(t testing.TB) *e2eConfig {
+	once.Do(func() {
+		wg.Add(1)
+		defer wg.Done()
+		e2e = setup(t)
+	})
+	wg.Wait()
+	return e2e
+}
+
+func setup(t testing.TB) *e2eConfig {
 	t.Log("building node and shim")
 	require.NoError(t, build())
 
@@ -87,12 +124,20 @@ func setup(t testing.TB) (*rest.Config, client.Client, int) {
 	port, err := freeport.GetFreePort()
 	require.NoError(t, err)
 
-	cfg, err := startKind(t, "zeropod-e2e", port)
+	name := "zeropod-e2e"
+	f, err := os.CreateTemp("", name+"-*")
+	require.NoError(t, err)
+	cfg, err := startKind(t, "zeropod-e2e", f.Name(), port)
 	require.NoError(t, err)
 
 	// discard controller-runtime logs, we just use the client
 	log.SetLogger(logr.Discard())
-	client, err := client.New(cfg, client.Options{})
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, nodev1.AddToScheme(scheme))
+	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, v1.AddToScheme(scheme))
+	client, err := client.New(cfg, client.Options{Scheme: scheme})
 	require.NoError(t, err)
 
 	t.Log("deploying zeropod-node")
@@ -100,28 +145,26 @@ func setup(t testing.TB) (*rest.Config, client.Client, int) {
 		t.Fatal(err)
 	}
 
-	return cfg, client, port
+	return &e2eConfig{cfg, client, port, name, f.Name()}
 }
 
-func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) {
-	f, err := os.CreateTemp("", name+"-*")
-	if err != nil {
-		return nil, err
-	}
-	t.Cleanup(func() {
-		os.RemoveAll(f.Name())
-	})
-
+func startKind(t testing.TB, name, kubeconfig string, port int) (c *rest.Config, err error) {
 	// For now only docker is supported as podman does not seem to work
 	// well with criu (rootless).
 	provider := cluster.NewProvider(cluster.ProviderWithDocker())
 
-	t.Cleanup(func() {
-		if err := stopKind(name, f.Name()); err != nil {
-			t.Fatal(err)
-		}
-	})
-
+	// setup mounts for ebpf tcp tracking (it needs to map host pids to
+	// container pids)
+	extraMounts := []v1alpha4.Mount{
+		{
+			HostPath:      "/proc",
+			ContainerPath: "/host/proc",
+		},
+		{
+			HostPath:      activator.BPFFSPath,
+			ContainerPath: activator.BPFFSPath,
+		},
+	}
 	if err := provider.Create(name,
 		cluster.CreateWithV1Alpha4Config(&v1alpha4.Cluster{
 			Name: name,
@@ -129,37 +172,39 @@ func startKind(t testing.TB, name string, port int) (c *rest.Config, err error) 
 				"InPlacePodVerticalScaling":                true,
 				"InPlacePodVerticalScalingAllocatedStatus": true,
 			},
-			Nodes: []v1alpha4.Node{{
-				Labels: map[string]string{zeropod.NodeLabel: "true"},
-				// setup port map for our node port
-				ExtraPortMappings: []v1alpha4.PortMapping{{
-					ContainerPort: nodePort,
-					HostPort:      int32(port),
-					ListenAddress: "0.0.0.0",
-					Protocol:      v1alpha4.PortMappingProtocolTCP,
-				}},
-				// setup mounts for ebpf tcp tracking (it needs to map host pids to container pids)
-				ExtraMounts: []v1alpha4.Mount{
-					{
-						HostPath:      "/proc",
-						ContainerPath: "/host/proc",
-					},
-					{
-						HostPath:      activator.BPFFSPath,
-						ContainerPath: activator.BPFFSPath,
-					},
+			Nodes: []v1alpha4.Node{
+				{
+					Role:        v1alpha4.ControlPlaneRole,
+					ExtraMounts: extraMounts,
+					// setup port map for our node port
+					ExtraPortMappings: []v1alpha4.PortMapping{{
+						ContainerPort: nodePort,
+						HostPort:      int32(port),
+						ListenAddress: "0.0.0.0",
+						Protocol:      v1alpha4.PortMappingProtocolTCP,
+					}},
 				},
-			}},
+				{
+					Role:        v1alpha4.WorkerRole,
+					Labels:      map[string]string{zeropod.NodeLabel: "true"},
+					ExtraMounts: extraMounts,
+				},
+				{
+					Role:        v1alpha4.WorkerRole,
+					Labels:      map[string]string{zeropod.NodeLabel: "true"},
+					ExtraMounts: extraMounts,
+				},
+			},
 		}),
 		cluster.CreateWithNodeImage("kindest/node:v1.32.0@sha256:c48c62eac5da28cdadcf560d1d8616cfa6783b58f0d94cf63ad1bf49600cb027"),
 		cluster.CreateWithRetain(false),
-		cluster.CreateWithKubeconfigPath(f.Name()),
+		cluster.CreateWithKubeconfigPath(kubeconfig),
 		cluster.CreateWithWaitForReady(time.Minute*2),
 	); err != nil {
 		return nil, fmt.Errorf("unable to create kind cluster: %w", err)
 	}
 
-	config, err := clientcmd.BuildConfigFromFlags("", f.Name())
+	config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
 	if err != nil {
 		return nil, err
 	}
@@ -275,7 +320,7 @@ func deployNode(t testing.TB, ctx context.Context, c client.Client) error {
 	if ok := assert.Eventually(t, func() bool {
 		runtimeClass := &nodev1.RuntimeClass{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: runtimeClassName,
+				Name: v1.RuntimeClassName,
 			},
 		}
 		return c.Get(ctx, objectName(runtimeClass), runtimeClass) == nil
@@ -286,16 +331,17 @@ func deployNode(t testing.TB, ctx context.Context, c client.Client) error {
 	// wait for node pod to be running
 	nodePods := &corev1.PodList{}
 	require.NoError(t, c.List(ctx, nodePods, matchZeropodNodeLabels))
-	require.Equal(t, 1, len(nodePods.Items))
+	require.Equal(t, 2, len(nodePods.Items))
 
-	pod := &nodePods.Items[0]
-	require.Eventually(t, func() bool {
-		if err := c.Get(ctx, objectName(pod), pod); err != nil {
-			return false
-		}
+	for _, pod := range nodePods.Items {
+		require.Eventually(t, func() bool {
+			if err := c.Get(ctx, objectName(&pod), &pod); err != nil {
+				return false
+			}
 
-		return pod.Status.Phase == corev1.PodRunning
-	}, time.Minute, time.Second, "waiting for node pod to be running")
+			return pod.Status.Phase == corev1.PodRunning
+		}, time.Minute, time.Second, "waiting for node pod to be running")
+	}
 
 	return nil
 }
@@ -409,7 +455,7 @@ func testPod(opts ...podOption) *corev1.Pod {
 			Labels:       map[string]string{"app": "zeropod-e2e"},
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: ptr.To(runtimeClassName),
+			RuntimeClassName: ptr.To(v1.RuntimeClassName),
 		},
 	}
 
@@ -472,10 +518,105 @@ func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, p
 	}
 }
 
+func freezerDeployment(name, namespace string, memoryGiB int) *appsv1.Deployment {
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"app": "zeropod-e2e"},
+			},
+			Replicas: ptr.To(int32(1)),
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{"app": "zeropod-e2e"},
+					Annotations: map[string]string{
+						zeropod.MigrateAnnotationKey:           "freezer",
+						zeropod.ScaleDownDurationAnnotationKey: time.Hour.String(),
+					},
+				},
+				Spec: corev1.PodSpec{
+					RuntimeClassName: ptr.To(v1.RuntimeClassName),
+					Containers: []corev1.Container{{
+						Name:            "freezer",
+						Image:           "ctrox/freezer",
+						ImagePullPolicy: corev1.PullIfNotPresent,
+						Command:         []string{"/freezer"},
+						Args:            []string{"-memory", strconv.Itoa(memoryGiB)},
+						Ports: []corev1.ContainerPort{{
+							Name:          "freezer",
+							ContainerPort: 8080,
+						}},
+					}},
+				},
+			},
+		},
+	}
+}
+
+func createDeployAndWait(t testing.TB, ctx context.Context, c client.Client, deploy *appsv1.Deployment) (cleanup func()) {
+	err := c.Create(ctx, deploy)
+	assert.NoError(t, err)
+	t.Logf("created deployment %s", deploy.Name)
+
+	require.Eventually(t, func() bool {
+		podList := &corev1.PodList{}
+		if err := c.List(ctx, podList, client.MatchingLabels(deploy.Spec.Selector.MatchLabels)); err != nil {
+			return false
+		}
+		running, ready := false, false
+		for _, pod := range podList.Items {
+			running = pod.Status.Phase == corev1.PodRunning
+			if len(pod.Status.ContainerStatuses) < 1 {
+				return false
+			}
+			ready = pod.Status.ContainerStatuses[0].Ready
+		}
+		return running && ready
+	}, time.Minute, time.Second, "waiting for pods of deployment to be running")
+
+	return func() {
+		c.Delete(ctx, deploy)
+		assert.NoError(t, err)
+		require.Eventually(t, func() bool {
+			if err := c.Get(ctx, objectName(deploy), deploy); err != nil {
+				return true
+			}
+			return false
+		}, time.Minute*2, time.Second, "waiting for deployment to be deleted")
+	}
+}
+
+func podsOfDeployment(t testing.TB, ctx context.Context, c client.Client, deploy *appsv1.Deployment) []corev1.Pod {
+	podList := &corev1.PodList{}
+	if err := c.List(ctx, podList, client.MatchingLabels(deploy.Spec.Selector.MatchLabels)); err != nil {
+		t.Error(err)
+	}
+
+	return podList.Items
+}
+
 func createServiceAndWait(t testing.TB, ctx context.Context, client client.Client, svc *corev1.Service, replicas int) (cleanup func()) {
 	require.NoError(t, client.Create(ctx, svc))
 	t.Logf("created service %s", svc.Name)
 
+	waitForService(t, ctx, client, svc, replicas)
+
+	return func() {
+		assert.NoError(t, client.Delete(ctx, svc))
+		require.Eventually(t, func() bool {
+			if err := client.Get(ctx, objectName(svc), svc); err != nil {
+				return true
+			}
+
+			return false
+		}, time.Minute, time.Second, "waiting for service to be deleted")
+	}
+}
+
+func waitForService(t testing.TB, ctx context.Context, client client.Client, svc *corev1.Service, replicas int) {
 	if !assert.Eventually(t, func() bool {
 		endpoints := &corev1.Endpoints{}
 		if err := client.Get(ctx, objectName(svc), endpoints); err != nil {
@@ -490,7 +631,9 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 	}, time.Minute, time.Second, "waiting for service endpoints to be ready") {
 		endpoints := &corev1.Endpoints{}
 		if err := client.Get(ctx, objectName(svc), endpoints); err == nil {
-			t.Logf("service did not get ready: expected %d addresses, got %d", replicas, len(endpoints.Subsets[0].Addresses))
+			if len(endpoints.Subsets) > 0 {
+				t.Logf("service did not get ready: expected %d addresses, got %d", replicas, len(endpoints.Subsets[0].Addresses))
+			}
 			t.Logf("endpoints: %v", endpoints)
 
 			commandArgs := []string{"exec", "zeropod-e2e-control-plane", "journalctl", "-u", "containerd"}
@@ -501,20 +644,47 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 			t.Logf("containerd logs: %s", out)
 		}
 	}
-
 	// we give it some more time before returning just to make sure it's
 	// really ready to receive requests.
 	time.Sleep(time.Millisecond * 500)
+}
+
+func cordonNode(t testing.TB, ctx context.Context, client client.Client, name string) (uncordon func()) {
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	require.NoError(t, client.Get(ctx, objectName(node), node))
+	node.Spec.Unschedulable = true
+	require.NoError(t, client.Update(ctx, node))
+	return func() {
+		uncordonNode(t, ctx, client, node)
+	}
+}
+
+func uncordonNode(t testing.TB, ctx context.Context, client client.Client, node *corev1.Node) {
+	require.NoError(t, client.Get(ctx, objectName(node), node))
+	node.Spec.Unschedulable = false
+	require.NoError(t, client.Update(ctx, node))
+}
+
+func cordonOtherNodes(t testing.TB, ctx context.Context, client client.Client, name string) (uncordon func()) {
+	nodeList := &corev1.NodeList{}
+	require.NoError(t, client.List(ctx, nodeList))
+	uncordonFuncs := []func(){}
+	for _, node := range nodeList.Items {
+		if node.Name == name {
+			continue
+		}
+		require.NoError(t, client.Get(ctx, objectName(&node), &node))
+		node.Spec.Unschedulable = true
+		require.NoError(t, client.Update(ctx, &node))
+		uncordonFuncs = append(uncordonFuncs, func() {
+			uncordonNode(t, ctx, client, &node)
+		})
+	}
 
 	return func() {
-		assert.NoError(t, client.Delete(ctx, svc))
-		require.Eventually(t, func() bool {
-			if err := client.Get(ctx, objectName(svc), svc); err != nil {
-				return true
-			}
-
-			return false
-		}, time.Minute, time.Second, "waiting for service to be deleted")
+		for _, f := range uncordonFuncs {
+			f()
+		}
 	}
 }
 
@@ -694,37 +864,47 @@ func getNodeMetrics(ctx context.Context, c client.Client, cfg *rest.Config) (map
 	if err != nil {
 		return nil, err
 	}
-	nodePod, err := getNodePod(ctx, c)
+	nodePods, err := getNodePods(ctx, c)
 	if err != nil {
 		return nil, err
 	}
 
-	pf := PortForward{
-		Config: cfg, Clientset: cs,
-		Name:            nodePod.Name,
-		Namespace:       nodePod.Namespace,
-		DestinationPort: 8080,
-	}
-	if err := pf.Start(); err != nil {
-		return nil, err
-	}
-	defer pf.Stop()
+	mfs := make(map[string]*dto.MetricFamily)
+	for _, nodePod := range nodePods {
+		pf := PortForward{
+			Config: cfg, Clientset: cs,
+			Name:            nodePod.Name,
+			Namespace:       nodePod.Namespace,
+			DestinationPort: 8080,
+		}
+		if err := pf.Start(); err != nil {
+			return nil, err
+		}
+		defer pf.Stop()
 
-	resp, err := http.Get(fmt.Sprintf("http://localhost:%v/metrics", pf.ListenPort))
-	if err != nil {
-		return nil, err
-	}
+		resp, err := http.Get(fmt.Sprintf("http://localhost:%v/metrics", pf.ListenPort))
+		if err != nil {
+			return nil, err
+		}
 
-	var parser expfmt.TextParser
-	mfs, err := parser.TextToMetricFamilies(resp.Body)
-	if err != nil {
-		return nil, err
+		var parser expfmt.TextParser
+		m, err := parser.TextToMetricFamilies(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range m {
+			if _, ok := mfs[k]; ok {
+				mfs[k].Metric = append(mfs[k].Metric, v.Metric...)
+				continue
+			}
+			mfs[k] = v
+		}
 	}
 
 	return mfs, nil
 }
 
-func getNodePod(ctx context.Context, c client.Client) (*corev1.Pod, error) {
+func getNodePods(ctx context.Context, c client.Client) ([]corev1.Pod, error) {
 	nodePods := &corev1.PodList{}
 	if err := c.List(ctx, nodePods, matchZeropodNodeLabels); err != nil {
 		return nil, err
@@ -733,20 +913,22 @@ func getNodePod(ctx context.Context, c client.Client) (*corev1.Pod, error) {
 		return nil, fmt.Errorf("expected to find at least 1 node pod, got %d", len(nodePods.Items))
 	}
 
-	return &nodePods.Items[0], nil
+	return nodePods.Items, nil
 }
 
 func printNodeLogs(t testing.TB, ctx context.Context, c client.Client, cfg *rest.Config) error {
-	nodePod, err := getNodePod(ctx, c)
+	nodePods, err := getNodePods(ctx, c)
 	if err != nil {
 		return err
 	}
 
-	logs, err := getPodLogs(ctx, cfg, *nodePod)
-	if err != nil {
-		return err
+	for _, nodePod := range nodePods {
+		logs, err := getPodLogs(ctx, cfg, nodePod)
+		if err != nil {
+			return err
+		}
+		t.Log(logs)
 	}
-	t.Log(logs)
 	return nil
 }
 
@@ -767,4 +949,59 @@ func getPodLogs(ctx context.Context, cfg *rest.Config, pod corev1.Pod) (string, 
 		return "", fmt.Errorf("copying pod logs: %w", err)
 	}
 	return buf.String(), nil
+}
+
+type freeze struct {
+	Last               time.Time
+	LastFreezeDuration time.Duration
+	Data               string
+}
+
+func freezerWrite(data string, port int) error {
+	f := freeze{Data: data}
+	b, err := json.Marshal(f)
+	if err != nil {
+		return err
+	}
+	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/set", port), "", bytes.NewBuffer(b))
+	if err != nil {
+		return err
+	}
+	return resp.Body.Close()
+}
+
+func freezerRead(port int) (*freeze, error) {
+	f := &freeze{}
+	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/get", port))
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return f, json.Unmarshal(body, f)
+}
+
+func availabilityCheck(ctx context.Context, port int) time.Duration {
+	var downtime time.Duration
+	for {
+		lowTimeoutClient := &http.Client{Timeout: time.Millisecond * 50}
+		beforeReq := time.Now()
+		resp, err := lowTimeoutClient.Get(fmt.Sprintf("http://localhost:%d/get", port))
+		if err != nil {
+			downtime += time.Since(beforeReq)
+			continue
+		}
+		resp.Body.Close()
+		select {
+		case <-ctx.Done():
+			return downtime
+		default:
+			time.Sleep(lowTimeoutClient.Timeout)
+			continue
+		}
+	}
 }

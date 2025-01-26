@@ -4,6 +4,7 @@ components:
   - ../in-place-scaling
   - ../pod-updater
   - ../status-labels
+  - ../migration-manager
 images:
   - name: manager
     newName: ghcr.io/ctrox/zeropod-manager

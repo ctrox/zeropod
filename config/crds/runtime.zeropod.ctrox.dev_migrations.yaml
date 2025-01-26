@@ -1,0 +1,151 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.17.1
+  name: migrations.runtime.zeropod.ctrox.dev
+spec:
+  group: runtime.zeropod.ctrox.dev
+  names:
+    kind: Migration
+    listKind: MigrationList
+    plural: migrations
+    singular: migration
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .status.containers[*].condition.phase
+      name: Phase
+      type: string
+    - jsonPath: .status.containers[*].migrationDuration
+      name: Duration
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Migration tracks container live migrations done by zeropod.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            properties:
+              containers:
+                description: Containers to be migrated
+                items:
+                  properties:
+                    id:
+                      type: string
+                    imageServer:
+                      description: ImageServer to pull the CRIU checkpoint image from.
+                      properties:
+                        host:
+                          type: string
+                        port:
+                          type: integer
+                      required:
+                      - host
+                      - port
+                      type: object
+                    name:
+                      type: string
+                    pageServer:
+                      description: PageServer to pull the memory pages from during
+                        lazy migration.
+                      properties:
+                        host:
+                          type: string
+                        port:
+                          type: integer
+                      required:
+                      - host
+                      - port
+                      type: object
+                  required:
+                  - id
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+              podTemplateHash:
+                description: |-
+                  PodTemplateHash of the source pod. This is used to find a suitable target
+                  pod.
+                type: string
+              sourceNode:
+                description: SourceNode of the pod to be migrated
+                type: string
+              sourcePod:
+                description: SourcePod of the migration
+                type: string
+              targetNode:
+                description: TargetNode of the pod to be migrated
+                type: string
+              targetPod:
+                description: TargetPod of the migration
+                type: string
+            required:
+            - containers
+            - podTemplateHash
+            - sourceNode
+            type: object
+          status:
+            properties:
+              containers:
+                description: Containers indicates the status of the individual container
+                  migrations.
+                items:
+                  properties:
+                    condition:
+                      properties:
+                        phase:
+                          type: string
+                        reason:
+                          type: string
+                      type: object
+                    migrationDuration:
+                      type: string
+                    name:
+                      type: string
+                    pausedAt:
+                      format: date-time
+                      type: string
+                    restoredAt:
+                      format: date-time
+                      type: string
+                  required:
+                  - condition
+                  - name
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - name
+                x-kubernetes-list-type: map
+            required:
+            - containers
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

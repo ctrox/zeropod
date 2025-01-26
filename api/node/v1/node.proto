@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+package zeropod.node.v1;
+option go_package = "github.com/ctrox/zeropod/api/node/v1/;v1";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+service Node {
+	rpc Evac(EvacRequest) returns (EvacResponse);
+	rpc PrepareEvac(EvacRequest) returns (EvacResponse);
+	rpc Restore(RestoreRequest) returns (RestoreResponse);
+	rpc FinishRestore(RestoreRequest) returns (RestoreResponse);
+    rpc NewCriuLazyPages(CriuLazyPagesRequest) returns (google.protobuf.Empty);
+    rpc PullImage(PullImageRequest) returns (stream Image);
+}
+
+message EvacRequest {
+    PodInfo pod_info = 1;
+    MigrationInfo migration_info = 2;
+}
+
+message EvacResponse {
+	google.protobuf.Empty empty = 1;
+}
+
+message RestoreRequest {
+    PodInfo pod_info = 1;
+    MigrationInfo migration_info = 2;
+}
+
+message RestoreResponse {
+    MigrationInfo migration_info = 1;
+}
+
+message PodInfo {
+    string name = 1;
+    string namespace = 2;
+    string container_name = 3;
+}
+
+message MigrationInfo {
+    string image_id = 1;
+    google.protobuf.Timestamp paused_at = 2;
+    google.protobuf.Timestamp restored_at = 3;
+}
+
+message Image {
+  bytes imageData = 1;
+}
+
+message CriuLazyPagesRequest {
+  string checkpoint_path = 1;
+  string address = 2;
+  int32 port = 3;
+  bool tls = 4;
+}
+
+message PullImageRequest { string image_id = 1; }

@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,10 +19,13 @@ import (
 	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/services/server/config"
 	"github.com/coreos/go-systemd/v22/dbus"
+	v1 "github.com/ctrox/zeropod/api/runtime/v1"
+	"github.com/ctrox/zeropod/manager/node"
 	"github.com/ctrox/zeropod/zeropod"
-	nodev1 "k8s.io/api/node/v1"
+	corev1 "k8s.io/api/core/v1"
+	knodev1 "k8s.io/api/node/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -39,7 +45,6 @@ const (
 	runtimeRKE2       containerRuntime = "rke2"
 	runtimeK3S        containerRuntime = "k3s"
 
-	optPath            = "/opt/zeropod"
 	binPath            = "bin/"
 	criuConfigFile     = "/etc/criu/default.conf"
 	shimBinaryName     = "containerd-shim-zeropod-v2"
@@ -47,8 +52,7 @@ const (
 	containerdConfig   = "/etc/containerd/config.toml"
 	configBackupSuffix = ".original"
 	templateSuffix     = ".tmpl"
-	runtimeClassName   = "zeropod"
-	runtimeHandler     = "zeropod"
+	caSecretName       = "ca-cert"
 	defaultCriuBin     = "criu"
 	criuIPTablesBin    = "criu-iptables"
 	criuConfig         = `tcp-close
@@ -72,8 +76,12 @@ network-lock skip
     "zeropod.ctrox.dev/scaledown-duration",
     "zeropod.ctrox.dev/disable-checkpointing",
     "zeropod.ctrox.dev/pre-dump",
+    "zeropod.ctrox.dev/migrate",
     "io.containerd.runc.v2.group"
   ]
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod.options]
+    # use systemd cgroup by default
+    SystemdCgroup = true
 `
 )
 
@@ -101,7 +109,7 @@ func main() {
 		log.Fatalf("error installing criu: %s", err)
 	}
 
-	log.Println("installed criu binaries")
+	log.Printf("installed criu binaries from %s", *criuImage)
 
 	if err := installRuntime(ctx, containerRuntime(*runtime)); err != nil {
 		log.Fatalf("error installing runtime: %s", err)
@@ -114,6 +122,12 @@ func main() {
 	}
 
 	log.Println("installed runtimeClass")
+
+	if err := loadTLSCA(ctx, client); err != nil {
+		log.Fatalf("error loading TLS CA certificate: %s", err)
+	}
+
+	log.Println("installed ca cert")
 
 	log.Println("installer completed")
 }
@@ -132,7 +146,7 @@ func installCriu(ctx context.Context) error {
 	if err := client.Install(
 		ctx, image, containerd.WithInstallLibs,
 		containerd.WithInstallReplace,
-		containerd.WithInstallPath(optPath),
+		containerd.WithInstallPath(node.OptPath),
 	); err != nil {
 		return err
 	}
@@ -160,7 +174,7 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 	// note that if the shim binary already exists, we simply switch it out with
 	// the new one but existing zeropods will have to be deleted to use the
 	// updated shim.
-	shimDest := filepath.Join(optPath, binPath, shimBinaryName)
+	shimDest := filepath.Join(node.OptPath, binPath, shimBinaryName)
 	if err := os.Remove(shimDest); err != nil {
 		log.Printf("unable to remove shim binary, continuing with install: %s", err)
 	}
@@ -324,13 +338,13 @@ func optConfigured(containerdConfig string) (bool, string, error) {
 }
 
 func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
-	runtimeClass := &nodev1.RuntimeClass{
-		ObjectMeta: v1.ObjectMeta{Name: runtimeClassName},
-		Handler:    runtimeHandler,
-		Scheduling: &nodev1.Scheduling{NodeSelector: map[string]string{zeropod.NodeLabel: "true"}},
+	runtimeClass := &knodev1.RuntimeClass{
+		ObjectMeta: metav1.ObjectMeta{Name: v1.RuntimeClassName},
+		Handler:    v1.RuntimeClassName,
+		Scheduling: &knodev1.Scheduling{NodeSelector: map[string]string{zeropod.NodeLabel: "true"}},
 	}
 
-	if _, err := client.NodeV1().RuntimeClasses().Create(ctx, runtimeClass, v1.CreateOptions{}); err != nil {
+	if _, err := client.NodeV1().RuntimeClasses().Create(ctx, runtimeClass, metav1.CreateOptions{}); err != nil {
 		if !kerrors.IsAlreadyExists(err) {
 			return err
 		}
@@ -340,7 +354,7 @@ func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error
 }
 
 func removeRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
-	if err := client.NodeV1().RuntimeClasses().Delete(ctx, runtimeClassName, v1.DeleteOptions{}); err != nil {
+	if err := client.NodeV1().RuntimeClasses().Delete(ctx, v1.RuntimeClassName, metav1.DeleteOptions{}); err != nil {
 		if !kerrors.IsNotFound(err) {
 			return err
 		}
@@ -364,7 +378,7 @@ func runUninstall(ctx context.Context, client kubernetes.Interface) error {
 		return err
 	}
 
-	if err := os.RemoveAll(optPath); err != nil {
+	if err := os.RemoveAll(node.OptPath); err != nil {
 		return fmt.Errorf("removing opt path: %w", err)
 	}
 
@@ -373,4 +387,66 @@ func runUninstall(ctx context.Context, client kubernetes.Interface) error {
 	}
 
 	return nil
+}
+
+func loadTLSCA(ctx context.Context, client kubernetes.Interface) error {
+	// TODO: do not hardcode
+	namespace := "zeropod-system"
+	secret, err := client.CoreV1().Secrets(namespace).Get(ctx, caSecretName, metav1.GetOptions{})
+	if err != nil {
+		if kerrors.IsNotFound(err) {
+			secret, err = generateTLSCA(ctx, client, namespace)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if err := os.WriteFile("/tls/ca.crt", secret.Data[corev1.TLSCertKey], 0600); err != nil {
+		return err
+	}
+	if err := os.WriteFile("/tls/ca.key", secret.Data[corev1.TLSPrivateKeyKey], 0600); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func generateTLSCA(ctx context.Context, client kubernetes.Interface, namespace string) (*corev1.Secret, error) {
+	ca, err := node.GenCert(nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	certOut := new(bytes.Buffer)
+	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: ca.Certificate[0]}); err != nil {
+		return nil, fmt.Errorf("failed to write data to cert: %w", err)
+	}
+
+	privBytes, err := x509.MarshalPKCS8PrivateKey(ca.PrivateKey)
+	if err != nil {
+		return nil, fmt.Errorf("unable to marshal private key: %w", err)
+	}
+
+	keyOut := new(bytes.Buffer)
+	if err := pem.Encode(keyOut, &pem.Block{Type: "PRIVATE KEY", Bytes: privBytes}); err != nil {
+		return nil, fmt.Errorf("failed to write data to key: %w", err)
+	}
+
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      caSecretName,
+			Namespace: namespace,
+		},
+		Data: map[string][]byte{
+			corev1.TLSCertKey:       certOut.Bytes(),
+			corev1.TLSPrivateKeyKey: keyOut.Bytes(),
+		},
+		Type: corev1.SecretTypeTLS,
+	}
+	secret, err = client.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	if kerrors.IsAlreadyExists(err) {
+		return client.CoreV1().Secrets(namespace).Get(ctx, caSecretName, metav1.GetOptions{})
+	}
+
+	return secret, err
 }

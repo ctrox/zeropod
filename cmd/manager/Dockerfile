@@ -13,7 +13,7 @@ COPY . .
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o zeropod-manager cmd/manager/main.go
 
-FROM gcr.io/distroless/static-debian12
+FROM debian:latest
 
 COPY --from=builder /workspace/zeropod-manager /
 CMD ["/zeropod-manager"]

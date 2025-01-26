@@ -5,3 +5,5 @@ resources:
   - namespace.yaml
   - node-daemonset.yaml
   - rbac.yaml
+components:
+  - ../crds

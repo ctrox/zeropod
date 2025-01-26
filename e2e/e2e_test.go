@@ -22,14 +22,11 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-const runtimeClassName = "zeropod"
-
 func TestE2E(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping e2e test")
 	}
-
-	cfg, client, port := setup(t)
+	e2e := setupOnce(t)
 	ctx := context.Background()
 
 	c := &http.Client{
@@ -131,8 +128,8 @@ func TestE2E(t *testing.T) {
 				tc.svc = testService(defaultTargetPort)
 			}
 
-			cleanupPod := createPodAndWait(t, ctx, client, tc.pod)
-			cleanupService := createServiceAndWait(t, ctx, client, tc.svc, 1)
+			cleanupPod := createPodAndWait(t, ctx, e2e.client, tc.pod)
+			cleanupService := createServiceAndWait(t, ctx, e2e.client, tc.svc, 1)
 			defer cleanupPod()
 			defer cleanupService()
 
@@ -146,7 +143,7 @@ func TestE2E(t *testing.T) {
 						c.Transport = &http.Transport{DisableKeepAlives: !tc.keepAlive}
 
 						before := time.Now()
-						resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
+						resp, err := c.Get(fmt.Sprintf("http://localhost:%d", e2e.port))
 						if err != nil {
 							t.Error(err)
 							return
@@ -166,11 +163,11 @@ func TestE2E(t *testing.T) {
 
 	t.Run("exec", func(t *testing.T) {
 		pod := testPod(scaleDownAfter(0))
-		cleanupPod := createPodAndWait(t, ctx, client, pod)
+		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
 
 		require.Eventually(t, func() bool {
-			checkpointed, err := isCheckpointed(t, ctx, client, cfg, pod)
+			checkpointed, err := isCheckpointed(t, ctx, e2e.client, e2e.cfg, pod)
 			if err != nil {
 				t.Logf("error checking if checkpointed: %s", err)
 				return false
@@ -178,12 +175,12 @@ func TestE2E(t *testing.T) {
 			return checkpointed
 		}, time.Minute, time.Second)
 
-		stdout, stderr, err := podExec(cfg, pod, "date")
+		stdout, stderr, err := podExec(e2e.cfg, pod, "date")
 		require.NoError(t, err)
 		t.Log(stdout, stderr)
 
 		require.Eventually(t, func() bool {
-			count, err := restoreCount(t, ctx, client, cfg, pod)
+			count, err := restoreCount(t, ctx, e2e.client, e2e.cfg, pod)
 			if err != nil {
 				t.Logf("error checking if restored: %s", err)
 				return false
@@ -196,11 +193,11 @@ func TestE2E(t *testing.T) {
 		// as we want to delete the pod when it is in a restored state, we
 		// first need to make sure it has checkpointed at least once.
 		pod := testPod(scaleDownAfter(0))
-		cleanupPod := createPodAndWait(t, ctx, client, pod)
+		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
 
 		require.Eventually(t, func() bool {
-			checkpointed, err := isCheckpointed(t, ctx, client, cfg, pod)
+			checkpointed, err := isCheckpointed(t, ctx, e2e.client, e2e.cfg, pod)
 			if err != nil {
 				t.Logf("error checking if checkpointed: %s", err)
 				return false
@@ -208,7 +205,7 @@ func TestE2E(t *testing.T) {
 			return checkpointed
 		}, time.Minute, time.Second)
 
-		stdout, stderr, err := podExec(cfg, pod, "date")
+		stdout, stderr, err := podExec(e2e.cfg, pod, "date")
 		require.NoError(t, err)
 		t.Log(stdout, stderr)
 		// since the cleanup has been deferred it's called right after the
@@ -223,10 +220,10 @@ func TestE2E(t *testing.T) {
 			},
 		}))
 
-		cleanupPod := createPodAndWait(t, ctx, client, pod)
+		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
 		require.Eventually(t, func() bool {
-			if err := client.Get(ctx, objectName(pod), pod); err != nil {
+			if err := e2e.client.Get(ctx, objectName(pod), pod); err != nil {
 				return false
 			}
 
@@ -245,10 +242,10 @@ func TestE2E(t *testing.T) {
 	t.Run("status labels", func(t *testing.T) {
 		pod := testPod(scaleDownAfter(0), agnContainer("agn", 8080), agnContainer("agn2", 8081))
 
-		cleanupPod := createPodAndWait(t, ctx, client, pod)
+		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
 		require.Eventually(t, func() bool {
-			if err := client.Get(ctx, objectName(pod), pod); err != nil {
+			if err := e2e.client.Get(ctx, objectName(pod), pod); err != nil {
 				return false
 			}
 			labelCount := 0
@@ -268,25 +265,25 @@ func TestE2E(t *testing.T) {
 	t.Run("metrics", func(t *testing.T) {
 		// create two pods to test metric merging
 		runningPod := testPod(scaleDownAfter(time.Hour))
-		cleanupRunningPod := createPodAndWait(t, ctx, client, runningPod)
+		cleanupRunningPod := createPodAndWait(t, ctx, e2e.client, runningPod)
 		defer cleanupRunningPod()
 
 		checkpointedPod := testPod(scaleDownAfter(0))
-		cleanupCheckpointedPod := createPodAndWait(t, ctx, client, checkpointedPod)
+		cleanupCheckpointedPod := createPodAndWait(t, ctx, e2e.client, checkpointedPod)
 		defer cleanupCheckpointedPod()
 
 		restoredPod := testPod(scaleDownAfter(0))
-		cleanupRestoredPod := createPodAndWait(t, ctx, client, restoredPod)
+		cleanupRestoredPod := createPodAndWait(t, ctx, e2e.client, restoredPod)
 		defer cleanupRestoredPod()
 
 		// exec into pod to ensure it has been restored at least once
 		require.Eventually(t, func() bool {
-			_, _, err := podExec(cfg, restoredPod, "date")
+			_, _, err := podExec(e2e.cfg, restoredPod, "date")
 			if err != nil {
 				t.Logf("error during pod exec: %s", err)
 				return false
 			}
-			checkpointed, err := isCheckpointed(t, ctx, client, cfg, restoredPod)
+			checkpointed, err := isCheckpointed(t, ctx, e2e.client, e2e.cfg, restoredPod)
 			if err != nil {
 				t.Logf("error checking if checkpointed: %s", err)
 				return false
@@ -297,7 +294,7 @@ func TestE2E(t *testing.T) {
 		mfs := map[string]*dto.MetricFamily{}
 		require.Eventually(t, func() bool {
 			var err error
-			mfs, err = getNodeMetrics(ctx, client, cfg)
+			mfs, err = getNodeMetrics(ctx, e2e.client, e2e.cfg)
 			return err == nil
 		}, time.Minute, time.Second)
 

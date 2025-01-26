@@ -46,6 +46,7 @@ type Container struct {
 	// restores can cause cgroup confusion. This mutex is shared between all
 	// containers.
 	checkpointRestore *sync.Mutex
+	evacuation        sync.Once
 }
 
 func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Container, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {

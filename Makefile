@@ -21,11 +21,17 @@ GOARCH ?= $(shell go env GOARCH)
 # of the new shim.
 build-kind: build
 	docker cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin/
+	docker cp containerd-shim-zeropod-v2 kind-worker:/opt/zeropod/bin/
+	docker cp containerd-shim-zeropod-v2 kind-worker2:/opt/zeropod/bin/
 
 install-kind: build-installer build-manager
 	kind load docker-image $(INSTALLER_IMAGE)
 	kind load docker-image $(MANAGER_IMAGE)
-	kubectl apply -k config/kind
+	kubectl apply --context kind-kind -k config/kind
+
+install-manager: build-manager
+	kind load docker-image $(MANAGER_IMAGE)
+	kubectl --context kind-kind -n zeropod-system delete pods -l app.kubernetes.io/name=zeropod-node
 
 build:
 	CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -ldflags '${SHIM_LDFLAGS}' -o containerd-shim-zeropod-v2 cmd/shim/main.go
@@ -81,6 +87,7 @@ CFLAGS := -O2 -g -Wall -Werror
 generate: export BPF_CLANG := $(CLANG)
 generate: export BPF_CFLAGS := $(CFLAGS)
 generate: ttrpc
+	go generate ./api/...
 	docker run --rm -v $(PWD):/app:Z --user $(shell id -u):$(shell id -g) --env=BPF_CLANG="$(CLANG)" --env=BPF_CFLAGS="$(CFLAGS)" $(EBPF_IMAGE)
 
 ttrpc:
@@ -89,6 +96,9 @@ ttrpc:
 	--ttrpc_out=. --plugin=protoc-gen-ttrpc=`which protoc-gen-go-ttrpc` \
 	--ttrpc_opt=paths=source_relative *.proto -I. \
 	-I $(shell go env GOMODCACHE)/github.com/prometheus/client_model@v0.6.1
+	cd api/node/v1; protoc --go_out=. --go_opt=paths=source_relative \
+	--ttrpc_out=. --plugin=protoc-gen-ttrpc=`which protoc-gen-go-ttrpc` \
+	--ttrpc_opt=paths=source_relative *.proto -I.
 
 # to improve reproducibility of the bpf builds, we dump the vmlinux.h and
 # store it compressed in git instead of dumping it during the build.
