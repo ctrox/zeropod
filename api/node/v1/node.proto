@@ -42,7 +42,8 @@ message PodInfo {
 message MigrationInfo {
     string image_id = 1;
     google.protobuf.Timestamp paused_at = 2;
-    google.protobuf.Timestamp restored_at = 3;
+    google.protobuf.Timestamp restore_start = 3;
+    google.protobuf.Timestamp restore_end = 4;
 }
 
 message Image {

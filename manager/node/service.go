@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/checkpoint-restore/go-criu/v7/stats"
 	"github.com/containerd/containerd/runtime/v2/shim"
 	"github.com/containerd/ttrpc"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
@@ -291,12 +292,39 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 		return nil, fmt.Errorf("unable to find matching migration for pod %s", req.PodInfo.Name)
 	}
 
-	setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
-		cms.RestoredAt = metav1.NewMicroTime(req.MigrationInfo.RestoredAt.AsTime())
-		cms.MigrationDuration = metav1.Duration{
-			Duration: cms.RestoredAt.Sub(cms.PausedAt.Time),
+	var restoreDur time.Duration
+	phase := v1.MigrationPhaseCompleted
+	if len(migration.Spec.Containers) > 0 {
+		imgDir, err := os.Open(nodev1.SnapshotPath(migration.Spec.Containers[0].ID))
+		if err != nil {
+			// TODO: is there a better way to tell a restore has failed?
+			ns.log.Error("unable to criu open restore stats", "error", err)
+			phase = v1.MigrationPhaseFailed
+		} else {
+			restoreStats, err := stats.CriuGetRestoreStats(imgDir)
+			if err != nil {
+				ns.log.Error("unable to criu read restore stats", "error", err)
+				return nil, err
+			}
+			if restoreStats.RestoreTime != nil {
+				restoreDur = time.Microsecond * time.Duration(*restoreStats.RestoreTime)
+			}
+			ns.log.Info("restore stats", "restore_dur", restoreDur, "pages_restored", restoreStats.PagesRestored)
 		}
-		cms.Condition.Phase = v1.MigrationPhaseCompleted
+	}
+
+	setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
+		if restoreDur != 0 {
+			cms.RestoredAt = metav1.NewMicroTime(req.MigrationInfo.RestoreEnd.AsTime())
+			// this is an approximation as we just use the time before calling
+			// checkpoint and subtract it from when start of the container
+			// returns. The process will be started a few milliseconds before
+			// start returns. Using the Criu reported RestoreTime also seems
+			// somewhat inaccurate as that results in lower freeze durations
+			// than measeured by the actual process.
+			cms.MigrationDuration = metav1.Duration{Duration: cms.RestoredAt.Sub(cms.PausedAt.Time)}
+		}
+		cms.Condition.Phase = phase
 	})
 	if err := ns.kube.Status().Update(ctx, migration); err != nil {
 		return nil, err

@@ -160,13 +160,14 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		startCtx = restoreCtx
 	}
 
+	beforeStart := time.Now()
 	resp, err := w.service.Start(startCtx, r)
 	if err != nil {
 		return nil, err
 	}
 
 	if cfg.MigrationEnabled() {
-		if err := zeropod.FinishRestore(ctx, cfg); err != nil {
+		if err := zeropod.FinishRestore(ctx, cfg, beforeStart); err != nil {
 			log.G(ctx).Errorf("error finishing restore: %s", err)
 		}
 	}

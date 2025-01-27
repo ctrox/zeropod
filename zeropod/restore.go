@@ -228,29 +228,6 @@ func CreateLazyRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *Conf
 	return nil
 }
 
-func FinishRestore(ctx context.Context, cfg *Config) error {
-	conn, err := net.Dial("unix", v1.SocketPath)
-	if err != nil {
-		return fmt.Errorf("dialing node service: %w", err)
-	}
-	defer conn.Close()
-
-	restoreReq := &v1.RestoreRequest{
-		PodInfo: &v1.PodInfo{
-			Name:          cfg.PodName,
-			Namespace:     cfg.PodNamespace,
-			ContainerName: cfg.ContainerName,
-		},
-		MigrationInfo: &v1.MigrationInfo{RestoredAt: timestamppb.Now()},
-	}
-	nodeClient := v1.NewNodeClient(ttrpc.NewClient(conn))
-	if _, err := nodeClient.FinishRestore(ctx, restoreReq); err != nil {
-		return err
-	}
-
-	return nil
-}
-
 // waitForLazyPagesSocket waits until the lazy-pages.socket file exists in the
 // supplied checkpointPath.
 func waitForLazyPagesSocket(ctx context.Context, checkpointPath string, timeout time.Duration) error {
@@ -283,5 +260,31 @@ func setCriuWorkPath(r *task.CreateTaskRequest, path string) error {
 		return err
 	}
 	r.Options = any
+	return nil
+}
+
+func FinishRestore(ctx context.Context, cfg *Config, startTime time.Time) error {
+	conn, err := net.Dial("unix", v1.SocketPath)
+	if err != nil {
+		return fmt.Errorf("dialing node service: %w", err)
+	}
+	defer conn.Close()
+
+	restoreReq := &v1.RestoreRequest{
+		PodInfo: &v1.PodInfo{
+			Name:          cfg.PodName,
+			Namespace:     cfg.PodNamespace,
+			ContainerName: cfg.ContainerName,
+		},
+		MigrationInfo: &v1.MigrationInfo{
+			RestoreStart: timestamppb.New(startTime),
+			RestoreEnd:   timestamppb.Now(),
+		},
+	}
+	nodeClient := v1.NewNodeClient(ttrpc.NewClient(conn))
+	if _, err := nodeClient.FinishRestore(ctx, restoreReq); err != nil {
+		return err
+	}
+
 	return nil
 }
