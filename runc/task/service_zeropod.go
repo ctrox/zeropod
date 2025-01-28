@@ -278,6 +278,17 @@ func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	return w.service.Delete(ctx, r)
 }
 
+// Update a running container
+func (w *wrapper) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*emptypb.Empty, error) {
+	zeropodContainer, ok := w.getZeropodContainer(r.ID)
+	if !ok || !zeropodContainer.ScaledDown() {
+		return w.service.Update(ctx, r)
+	}
+
+	log.G(ctx).Infof("ignoring update for scaled down zeropod: %s", zeropodContainer.ID())
+	return &emptypb.Empty{}, nil
+}
+
 func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Empty, error) {
 	// our container might be just in the process of checkpoint/restore, so we
 	// ensure that has finished.
