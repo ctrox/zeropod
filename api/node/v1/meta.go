@@ -4,27 +4,37 @@ import "path/filepath"
 
 const (
 	runPath              = "/run/zeropod/"
+	varPath              = "/var/lib/zeropod/"
 	SocketPath           = runPath + "node.sock"
-	ImagesPath           = runPath + "i/"
+	imagesPath           = varPath + "i/"
 	SnapshotSuffix       = "snapshot"
 	WorkDirSuffix        = "work"
 	MigrateAnnotationKey = "zeropod.ctrox.dev/migrate"
 	NodeNameEnvKey       = "NODE_NAME"
 	PodIPEnvKey          = "POD_IP"
+	preDumpDirName       = "pre-dump"
 )
 
 func ImagePath(id string) string {
-	return filepath.Join(ImagesPath, id)
+	return filepath.Join(imagesPath, id)
 }
 
 func WorkDirPath(id string) string {
-	return filepath.Join(ImagesPath, id, WorkDirSuffix)
+	return filepath.Join(ImagePath(id), WorkDirSuffix)
 }
 
 func SnapshotPath(id string) string {
-	return filepath.Join(ImagesPath, id, SnapshotSuffix)
+	return filepath.Join(ImagePath(id), SnapshotSuffix)
 }
 
 func LazyPagesSocket(id string) string {
 	return filepath.Join(runPath, id+".sock")
+}
+
+func PreDumpDir(id string) string {
+	return filepath.Join(SnapshotPath(id), preDumpDirName)
+}
+
+func RelativePreDumpDir() string {
+	return filepath.Join("..", SnapshotSuffix, preDumpDirName)
 }

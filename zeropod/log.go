@@ -1,7 +1,6 @@
 package zeropod
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,7 +13,7 @@ import (
 // containerd only passes that to the sandbox container (pause). One possible
 // solution would be to implement log restoring in the sandbox container
 // instead of the zeropod.
-func getLogPath(ctx context.Context, cfg *Config) (string, error) {
+func getLogPath(cfg *Config) (string, error) {
 	logDir := fmt.Sprintf("/var/log/pods/%s_%s_%s/%s", cfg.PodNamespace, cfg.PodName, cfg.PodUID, cfg.ContainerName)
 
 	dir, err := os.Open(logDir)

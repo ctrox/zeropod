@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path"
 	"sync"
 	"time"
 
@@ -26,6 +25,7 @@ type Container struct {
 	*runc.Container
 
 	context          context.Context
+	id               string
 	activator        *activator.Server
 	cfg              *Config
 	initialProcess   process.Process
@@ -33,6 +33,7 @@ type Container struct {
 	cgroup           any
 	logPath          string
 	scaledDown       bool
+	skipStart        bool
 	netNS            ns.NetNS
 	scaleDownTimer   *time.Timer
 	platform         stdio.Platform
@@ -49,12 +50,7 @@ type Container struct {
 	evacuation        sync.Once
 }
 
-func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Container, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
-	p, err := container.Process("")
-	if err != nil {
-		return nil, errdefs.ToGRPC(err)
-	}
-
+func New(ctx context.Context, cfg *Config, id string, cr *sync.Mutex, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
 	// get network ns of our container and store it for later use
 	netNSPath, err := GetNetworkNS(cfg.spec)
 	if err != nil {
@@ -66,41 +62,64 @@ func New(ctx context.Context, cfg *Config, cr *sync.Mutex, container *runc.Conta
 		return nil, err
 	}
 
-	logPath, err := getLogPath(ctx, cfg)
+	logPath, err := getLogPath(cfg)
 	if err != nil {
 		return nil, fmt.Errorf("unable to get log path: %w", err)
 	}
 
-	tracker, err := socket.NewEBPFTracker()
-	if err != nil {
-		log.G(ctx).Warnf("creating ebpf tracker failed, falling back to noop tracker: %s", err)
-		tracker = socket.NewNoopTracker(cfg.ScaleDownDuration)
-	}
-
-	if err := tracker.TrackPid(uint32(p.Pid())); err != nil {
-		return nil, err
-	}
-
 	c := &Container{
-		Container:         container,
+		id:                id,
 		context:           ctx,
 		platform:          pt,
 		cfg:               cfg,
-		cgroup:            container.Cgroup(),
-		process:           p,
-		initialProcess:    p,
 		logPath:           logPath,
 		netNS:             targetNS,
-		tracker:           tracker,
 		checkpointRestore: cr,
 		events:            events,
 		checkpointedPIDs:  map[int]struct{}{},
 	}
+	return c, nil
+}
 
-	running.With(c.labels()).Set(1)
+func (c *Container) Register(ctx context.Context, container *runc.Container) error {
+	c.Container = container
+	c.cgroup = container.Cgroup()
+
+	p, err := container.Process("")
+	if err != nil {
+		return errdefs.ToGRPC(err)
+	}
+	c.process = p
+	c.initialProcess = p
+
+	tracker, err := socket.NewEBPFTracker()
+	if err != nil {
+		log.G(ctx).Warnf("creating ebpf tracker failed, falling back to noop tracker: %s", err)
+		tracker = socket.NewNoopTracker(c.cfg.ScaleDownDuration)
+	}
+	c.tracker = tracker
+
+	if err := tracker.TrackPid(uint32(p.Pid())); err != nil {
+		return err
+	}
+	if err := c.initActivator(ctx); err != nil {
+		return err
+	}
+	if c.SkipStart() {
+		c.scaledDown = true
+		running.With(c.labels()).Set(0)
+		if err := c.scaleDown(ctx); err != nil {
+			return err
+		}
+	} else {
+		running.With(c.labels()).Set(1)
+	}
 	c.sendEvent(c.Status())
+	return nil
+}
 
-	return c, c.initActivator(ctx)
+func (c *Container) Config() *Config {
+	return c.cfg
 }
 
 func (c *Container) ScheduleScaleDown() error {
@@ -169,6 +188,14 @@ func (c *Container) SetScaledDown(scaledDown bool) {
 	c.sendEvent(c.Status())
 }
 
+func (c *Container) SetSkipStart(skip bool) {
+	c.skipStart = skip
+}
+
+func (c *Container) SkipStart() bool {
+	return c.skipStart
+}
+
 func (c *Container) Status() *v1.ContainerStatus {
 	phase := v1.ContainerPhase_RUNNING
 	if c.ScaledDown() {
@@ -196,7 +223,7 @@ func (c *Container) ScaledDown() bool {
 }
 
 func (c *Container) ID() string {
-	return c.Container.ID
+	return c.id
 }
 
 func (c *Container) InitialProcess() process.Process {
@@ -333,22 +360,4 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 
 		return c.ScheduleScaleDown()
 	}
-}
-
-func snapshotDir(bundle string) string {
-	return path.Join(bundle, "work", "snapshots")
-}
-
-func containerDir(bundle string) string {
-	return path.Join(snapshotDir(bundle), "container")
-}
-
-const preDumpDirName = "pre-dump"
-
-func preDumpDir(bundle string) string {
-	return path.Join(snapshotDir(bundle), preDumpDirName)
-}
-
-func relativePreDumpDir() string {
-	return "../" + preDumpDirName
 }

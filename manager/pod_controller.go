@@ -27,6 +27,9 @@ func NewPodController(ctx context.Context, mgr manager.Manager, log *slog.Logger
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 
 	pr, err := newPodReconciler(mgr.GetClient(), log)
+	if err != nil {
+		return err
+	}
 	c, err := controller.New("pod-controller", mgr, controller.Options{
 		Reconciler: pr,
 	})

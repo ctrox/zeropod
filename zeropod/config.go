@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -53,7 +54,7 @@ type Config struct {
 	ScaleDownDuration     time.Duration
 	DisableCheckpointing  bool
 	PreDump               bool
-	Migrate               string
+	Migrate               []string
 	ContainerName         string
 	ContainerType         string
 	PodName               string
@@ -131,6 +132,11 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		containerNames = strings.Split(cfg.ZeropodContainerNames, containersDelim)
 	}
 
+	migrate := []string{}
+	if len(cfg.Migrate) != 0 {
+		migrate = strings.Split(cfg.Migrate, containersDelim)
+	}
+
 	ns, ok := namespaces.Namespace(ctx)
 	if !ok {
 		ns = defaultContainerdNS
@@ -141,7 +147,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ScaleDownDuration:     dur,
 		DisableCheckpointing:  disableCheckpointing,
 		PreDump:               preDump,
-		Migrate:               cfg.Migrate,
+		Migrate:               migrate,
 		ZeropodContainerNames: containerNames,
 		ContainerName:         cfg.ContainerName,
 		ContainerType:         cfg.ContainerType,
@@ -165,5 +171,5 @@ func (cfg Config) IsZeropodContainer() bool {
 }
 
 func (cfg Config) MigrationEnabled() bool {
-	return cfg.Migrate == cfg.ContainerName
+	return slices.Contains(cfg.Migrate, cfg.ContainerName)
 }

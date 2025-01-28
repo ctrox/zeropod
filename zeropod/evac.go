@@ -23,9 +23,14 @@ func (c *Container) MigrationEnabled() bool {
 	return c.cfg.MigrationEnabled()
 }
 
-func (c *Container) Evac(ctx context.Context) error {
+func (c *Container) Evac(ctx context.Context, scaledDown bool) error {
 	var err error
 	c.evacuation.Do(func() {
+		if scaledDown {
+			err = c.evacScaledDown(ctx)
+			return
+		}
+
 		err = c.evac(ctx)
 		if err != nil {
 			b, err := os.ReadFile(filepath.Join(nodev1.WorkDirPath(c.ID()), "dump.log"))
@@ -52,7 +57,8 @@ func (c *Container) evac(ctx context.Context) error {
 			ContainerName: c.cfg.ContainerName,
 		},
 		MigrationInfo: &nodev1.MigrationInfo{
-			ImageId: c.ID(),
+			LiveMigration: true,
+			ImageId:       c.ID(),
 		},
 	}
 	log.G(ctx).Info("making evac preparation request")
@@ -155,16 +161,38 @@ func waitForStatus(ctx context.Context, done chan bool, errChan chan error, stat
 	done <- true
 }
 
-func getFreePort() (int, error) {
-	addr, err := net.ResolveTCPAddr("tcp", "localhost:0")
+func (c *Container) evacScaledDown(ctx context.Context) error {
+	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
-		return 0, err
+		return fmt.Errorf("dialing node service: %w", err)
+	}
+	defer conn.Close()
+
+	ports := []int32{}
+	for _, p := range c.cfg.Ports {
+		ports = append(ports, int32(p))
+	}
+	evacReq := &nodev1.EvacRequest{
+		PodInfo: &nodev1.PodInfo{
+			Name:          c.cfg.PodName,
+			Namespace:     c.cfg.PodNamespace,
+			ContainerName: c.cfg.ContainerName,
+			Ports:         ports,
+		},
+		MigrationInfo: &nodev1.MigrationInfo{
+			LiveMigration: false,
+			ImageId:       c.ID(),
+			PausedAt:      timestamppb.Now(),
+		},
+	}
+	log.G(ctx).Info("making evac preparation request")
+	nodeClient := nodev1.NewNodeClient(ttrpc.NewClient(conn))
+	if _, err := nodeClient.PrepareEvac(ctx, evacReq); err != nil {
+		return fmt.Errorf("requesting evac: %w", err)
 	}
 
-	l, err := net.ListenTCP("tcp", addr)
-	if err != nil {
-		return 0, err
+	if _, err := nodeClient.Evac(ctx, evacReq); err != nil {
+		return fmt.Errorf("requesting evac: %w", err)
 	}
-	defer l.Close()
-	return l.Addr().(*net.TCPAddr).Port, nil
+	return nil
 }

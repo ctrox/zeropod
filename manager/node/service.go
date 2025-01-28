@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -171,20 +172,6 @@ type nodeService struct {
 	pageServerTLS bool
 }
 
-var evacBackoff = wait.Backoff{
-	Steps:    100,
-	Duration: 10 * time.Millisecond,
-	Factor:   1.0,
-	Jitter:   0.1,
-}
-
-var restoreBackoff = wait.Backoff{
-	Steps:    100,
-	Duration: 10 * time.Millisecond,
-	Factor:   1.0,
-	Jitter:   0.1,
-}
-
 var findMigrationBackoff = wait.Backoff{
 	Steps:    10,
 	Duration: 50 * time.Millisecond,
@@ -225,8 +212,9 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		}
 		for _, ctr := range migration.Spec.Containers {
 			if ctr.Name == req.PodInfo.ContainerName {
-				container = ctr
-				if ctr.PageServer != nil && ctr.ImageServer != nil {
+				if (migration.Spec.LiveMigration && ctr.PageServer != nil && ctr.ImageServer != nil) ||
+					ctr.ImageServer != nil {
+					container = ctr
 					done = true
 				}
 			}
@@ -253,20 +241,28 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		}
 	}
 
-	ns.log.Info("starting page server for migration", "name", migration.Name, "namespace", migration.Namespace)
+	if err := os.Rename(nodev1.ImagePath(container.ID), nodev1.ImagePath(req.MigrationInfo.ImageId)); err != nil {
+		ns.log.Error("renaming image path", "error", err)
+		return nil, err
+	}
+	if migration.Spec.LiveMigration {
+		ns.log.Info("starting page server for migration", "name", migration.Name, "namespace", migration.Namespace)
 
-	if _, err := ns.NewCriuLazyPages(ctx, &nodev1.CriuLazyPagesRequest{
-		Address:        container.PageServer.Host,
-		Port:           int32(container.PageServer.Port),
-		CheckpointPath: nodev1.SnapshotPath(container.ID),
-		Tls:            ns.pageServerTLS,
-	}); err != nil {
-		return nil, fmt.Errorf("unable to start lazy pages daemon: %w", err)
+		if _, err := ns.NewCriuLazyPages(ctx, &nodev1.CriuLazyPagesRequest{
+			Address:        container.PageServer.Host,
+			Port:           int32(container.PageServer.Port),
+			CheckpointPath: nodev1.SnapshotPath(req.MigrationInfo.ImageId),
+			Tls:            ns.pageServerTLS,
+		}); err != nil {
+			return nil, fmt.Errorf("unable to start lazy pages daemon: %w", err)
+		}
 	}
 
 	return &nodev1.RestoreResponse{
 		MigrationInfo: &nodev1.MigrationInfo{
-			ImageId: container.ID,
+			ImageId:       req.MigrationInfo.ImageId,
+			LiveMigration: migration.Spec.LiveMigration,
+			Ports:         container.Ports,
 		},
 	}, nil
 }
@@ -294,18 +290,17 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 
 	var restoreDur time.Duration
 	phase := v1.MigrationPhaseCompleted
-	if len(migration.Spec.Containers) > 0 {
-		imgDir, err := os.Open(nodev1.SnapshotPath(migration.Spec.Containers[0].ID))
+	if len(migration.Spec.Containers) > 0 && migration.Spec.LiveMigration {
+		defer func() {
+			if err := os.RemoveAll(nodev1.ImagePath(req.MigrationInfo.ImageId)); err != nil {
+				ns.log.Error("cleaning up image path", "error", err)
+			}
+		}()
+		restoreStats, err := getRestoreStats(req.MigrationInfo.ImageId)
 		if err != nil {
-			// TODO: is there a better way to tell a restore has failed?
-			ns.log.Error("unable to criu open restore stats", "error", err)
+			ns.log.Error("unable to read criu restore stats", "error", err)
 			phase = v1.MigrationPhaseFailed
 		} else {
-			restoreStats, err := stats.CriuGetRestoreStats(imgDir)
-			if err != nil {
-				ns.log.Error("unable to criu read restore stats", "error", err)
-				return nil, err
-			}
 			if restoreStats.RestoreTime != nil {
 				restoreDur = time.Microsecond * time.Duration(*restoreStats.RestoreTime)
 			}
@@ -331,6 +326,16 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 	}
 
 	return &nodev1.RestoreResponse{}, nil
+}
+
+func getRestoreStats(imageID string) (*stats.RestoreStatsEntry, error) {
+	imgDir, err := os.Open(nodev1.SnapshotPath(imageID))
+	if err != nil {
+		return nil, err
+	}
+
+	return stats.CriuGetRestoreStats(imgDir)
+
 }
 
 func (ns *nodeService) findMatchingMigration(ctx context.Context, pod *corev1.Pod) (*v1.Migration, error) {
@@ -458,8 +463,7 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 			"name", migration.Name, "namespace", migration.Namespace, "error", err)
 
 		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
-			cms.Condition.Phase = v1.MigrationPhaseFailed
-			cms.Condition.Reason = v1.MigrationFailedUnclaimed
+			cms.Condition.Phase = v1.MigrationPhaseUnclaimed
 		})
 
 		if err := ns.kube.Status().Update(ctx, migration); err != nil {
@@ -468,6 +472,7 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 		}
 		return nil, err
 	}
+
 	ns.log.Info("evac prepare done")
 
 	return &nodev1.EvacResponse{}, nil
@@ -489,23 +494,29 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 		return nil, err
 	}
 
-	tlsConfig := ns.tlsConfig
-	if !ns.pageServerTLS {
-		tlsConfig = nil
-	}
-	psp := newPageServerProxy("0.0.0.0:0", nodev1.LazyPagesSocket(req.MigrationInfo.ImageId), tlsConfig, ns.log)
-	pspContext, cancel := context.WithTimeout(context.Background(), time.Minute)
-	if err := psp.Start(pspContext); err != nil {
-		ns.log.Error("page server proxy", "error", err)
-	}
-	ns.log.Info("started page server proxy", "port", psp.Port(), "tls", ns.pageServerTLS)
-	go func() {
-		if err := psp.Wait(); err != nil {
+	var pageServer *v1.MigrationServer
+	if req.MigrationInfo.LiveMigration {
+		tlsConfig := ns.tlsConfig
+		if !ns.pageServerTLS {
+			tlsConfig = nil
+		}
+		psp := newPageServerProxy("0.0.0.0:0", nodev1.LazyPagesSocket(req.MigrationInfo.ImageId), tlsConfig, ns.log)
+		pspContext, cancel := context.WithTimeout(context.Background(), time.Minute)
+		if err := psp.Start(pspContext); err != nil {
 			ns.log.Error("page server proxy", "error", err)
 		}
-		cancel()
-		ns.log.Info("page server proxy closed")
-	}()
+		pageServer = &v1.MigrationServer{
+			Host: ns.host, Port: psp.Port(),
+		}
+		ns.log.Info("started page server proxy", "port", psp.Port(), "tls", ns.pageServerTLS)
+		go func() {
+			if err := psp.Wait(); err != nil {
+				ns.log.Error("page server proxy", "error", err)
+			}
+			cancel()
+			ns.log.Info("page server proxy closed")
+		}()
+	}
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		migration := &v1.Migration{}
@@ -518,13 +529,13 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 				Host: ns.host,
 				Port: ns.port,
 			}
-			mc.PageServer = &v1.MigrationServer{
-				Host: ns.host, Port: psp.Port(),
-			}
+			mc.PageServer = pageServer
+			mc.Ports = req.PodInfo.Ports
 			ns.log.Debug("found our container, setting migration servers")
 		}); !found {
 			return fmt.Errorf("migration does not have image for requested container %s", req.PodInfo.ContainerName)
 		}
+		migration.Spec.LiveMigration = req.MigrationInfo.LiveMigration
 		if err := ns.kube.Update(ctx, migration); err != nil {
 			ns.log.Error("migration update to set page server failed", "error", err)
 			return err
@@ -541,7 +552,9 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 	}); err != nil {
 		return nil, err
 	}
-	ns.log.Info("set page server in evac", "host", ns.host, "port", psp.Port())
+	if pageServer != nil {
+		ns.log.Info("set page server in evac", "host", ns.host, "port", pageServer.Port)
+	}
 
 	return &nodev1.EvacResponse{}, nil
 }
@@ -566,16 +579,23 @@ func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyP
 	cmd.Stderr = execLogger
 	cmd.Stdout = execLogger
 	if err := cmd.Start(); err != nil {
-		return &emptypb.Empty{}, fmt.Errorf("Error running lazy-pages daemon: %s", err)
+		return &emptypb.Empty{}, fmt.Errorf("error running lazy-pages daemon: %s", err)
 	}
 	go cmd.Wait()
 	return &emptypb.Empty{}, nil
 }
 
+var imageIDRegexp = regexp.MustCompile("^[A-Fa-f0-9]{64}$")
+
 // PullImage allows the caller to pull a compressed image from the server
 // TODO: transmit image in chunks, not all in one message
 func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageRequest, imageStream nodev1.Node_PullImageServer) error {
 	ns.log.Info("got pull image request", "image_id", req.ImageId)
+	if !imageIDRegexp.MatchString(req.ImageId) {
+		ns.log.Error("requested image_id is invalid", "image_id", req.ImageId)
+		return fmt.Errorf("invalid image_id requested: %s", req.ImageId)
+	}
+
 	arch, err := archives.FilesFromDisk(ctx, nil, map[string]string{nodev1.SnapshotPath(req.ImageId): ""})
 	if err != nil {
 		return fmt.Errorf("unable to archive checkpoint: %w", err)

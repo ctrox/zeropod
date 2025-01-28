@@ -17,6 +17,12 @@ func (ms MigrationServer) Address() string {
 
 // +kubebuilder:object:generate:=true
 type MigrationSpec struct {
+	// LiveMigration indicates if this migration is done live (lazy) or not. If
+	// set, the source node will setup a page server to serve memory pages
+	// during live migration. If false, the image copy will include all memory
+	// pages, which might result in a slower migration.
+	// +optional
+	LiveMigration bool `json:"liveMigration"`
 	// SourceNode of the pod to be migrated
 	SourceNode string `json:"sourceNode"`
 	// TargetNode of the pod to be migrated
@@ -47,6 +53,8 @@ type MigrationContainer struct {
 	// PageServer to pull the memory pages from during lazy migration.
 	// +optional
 	PageServer *MigrationServer `json:"pageServer,omitempty"`
+
+	Ports []int32 `json:"ports,omitempty"`
 }
 
 // +kubebuilder:object:generate:=true
@@ -73,23 +81,18 @@ const (
 	MigrationPhaseRunning   MigrationPhase = "Running"
 	MigrationPhaseCompleted MigrationPhase = "Completed"
 	MigrationPhaseFailed    MigrationPhase = "Failed"
-)
-
-type MigrationFailureReason string
-
-const (
-	MigrationFailedUnclaimed MigrationFailureReason = "Unclaimed"
+	MigrationPhaseUnclaimed MigrationPhase = "Unclaimed"
 )
 
 type MigrationCondition struct {
-	Phase  MigrationPhase         `json:"phase,omitempty"`
-	Reason MigrationFailureReason `json:"reason,omitempty"`
+	Phase MigrationPhase `json:"phase,omitempty"`
 }
 
 // +kubebuilder:object:root=true
 // +kubebuilder:storageversion
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.containers[*].condition.phase"
+// +kubebuilder:printcolumn:name="Live",type="boolean",JSONPath=".spec.liveMigration"
 // +kubebuilder:printcolumn:name="Duration",type="string",JSONPath=".status.containers[*].migrationDuration"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 // +kubebuilder:resource:scope=Namespaced

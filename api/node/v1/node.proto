@@ -37,13 +37,17 @@ message PodInfo {
     string name = 1;
     string namespace = 2;
     string container_name = 3;
+    repeated int32 ports = 4;
 }
 
 message MigrationInfo {
     string image_id = 1;
-    google.protobuf.Timestamp paused_at = 2;
-    google.protobuf.Timestamp restore_start = 3;
-    google.protobuf.Timestamp restore_end = 4;
+    string bundle_dir = 2;
+    bool live_migration = 3;
+    google.protobuf.Timestamp paused_at = 4;
+    google.protobuf.Timestamp restore_start = 5;
+    google.protobuf.Timestamp restore_end = 6;
+    repeated int32 ports = 7;
 }
 
 message Image {
@@ -57,4 +61,6 @@ message CriuLazyPagesRequest {
   bool tls = 4;
 }
 
-message PullImageRequest { string image_id = 1; }
+message PullImageRequest {
+    string image_id = 1;
+}

@@ -112,6 +112,9 @@ func setupOnce(t testing.TB) *e2eConfig {
 		e2e = setup(t)
 	})
 	wg.Wait()
+	if e2e == nil {
+		t.Fatal("e2e setup failed")
+	}
 	return e2e
 }
 
@@ -363,18 +366,19 @@ func loadManifests() ([]byte, error) {
 }
 
 type pod struct {
-	*corev1.Pod
+	meta *metav1.ObjectMeta
+	spec *corev1.PodSpec
 }
 
 type podOption func(p *pod)
 
 func annotations(annotations map[string]string) podOption {
 	return func(p *pod) {
-		if p.Annotations == nil {
-			p.SetAnnotations(annotations)
+		if p.meta.Annotations == nil {
+			p.meta.SetAnnotations(annotations)
 		}
 		for k, v := range annotations {
-			p.Annotations[k] = v
+			p.meta.Annotations[k] = v
 		}
 	}
 }
@@ -403,10 +407,16 @@ func portsAnnotation(portsMap string) podOption {
 	})
 }
 
+func migrateAnnotation(container string) podOption {
+	return annotations(map[string]string{
+		zeropod.MigrateAnnotationKey: container,
+	})
+}
+
 func resources(res corev1.ResourceRequirements) podOption {
 	return func(p *pod) {
-		for i := range p.Spec.Containers {
-			p.Spec.Containers[i].Resources = res
+		for i := range p.spec.Containers {
+			p.spec.Containers[i].Resources = res
 		}
 	}
 }
@@ -443,7 +453,7 @@ func addContainer(name, image string, args []string, ports ...int) podOption {
 			container.Ports = append(container.Ports, corev1.ContainerPort{ContainerPort: int32(port)})
 		}
 
-		p.Spec.Containers = append(p.Spec.Containers, container)
+		p.spec.Containers = append(p.spec.Containers, container)
 	}
 }
 
@@ -460,11 +470,11 @@ func testPod(opts ...podOption) *corev1.Pod {
 	}
 
 	for _, opt := range opts {
-		opt(&pod{p})
+		opt(&pod{meta: &p.ObjectMeta, spec: &p.Spec})
 	}
 
 	if len(p.Spec.Containers) == 0 {
-		addContainer("nginx", "nginx", nil, 80)(&pod{p})
+		addContainer("nginx", "nginx", nil, 80)(&pod{meta: &p.ObjectMeta, spec: &p.Spec})
 	}
 
 	return p
@@ -518,8 +528,8 @@ func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, p
 	}
 }
 
-func freezerDeployment(name, namespace string, memoryGiB int) *appsv1.Deployment {
-	return &appsv1.Deployment{
+func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption) *appsv1.Deployment {
+	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
@@ -532,10 +542,6 @@ func freezerDeployment(name, namespace string, memoryGiB int) *appsv1.Deployment
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{"app": "zeropod-e2e"},
-					Annotations: map[string]string{
-						zeropod.MigrateAnnotationKey:           "freezer",
-						zeropod.ScaleDownDurationAnnotationKey: time.Hour.String(),
-					},
 				},
 				Spec: corev1.PodSpec{
 					RuntimeClassName: ptr.To(v1.RuntimeClassName),
@@ -554,6 +560,10 @@ func freezerDeployment(name, namespace string, memoryGiB int) *appsv1.Deployment
 			},
 		},
 	}
+	for _, opt := range opts {
+		opt(&pod{meta: &deploy.Spec.Template.ObjectMeta, spec: &deploy.Spec.Template.Spec})
+	}
+	return deploy
 }
 
 func createDeployAndWait(t testing.TB, ctx context.Context, c client.Client, deploy *appsv1.Deployment) (cleanup func()) {

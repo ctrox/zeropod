@@ -76,6 +76,8 @@ spec:
               name: zeropod-opt
             - mountPath: /run/zeropod
               name: zeropod-run
+            - mountPath: /var/lib/zeropod
+              name: zeropod-var
             - mountPath: /hostproc
               name: hostproc
             - mountPath: /sys/fs/bpf
@@ -99,6 +101,9 @@ spec:
         - name: containerd-run
           hostPath:
             path: /run/containerd
+        - name: zeropod-var
+          hostPath:
+            path: /var/lib/zeropod
         - name: zeropod-opt
           hostPath:
             path: /opt/zeropod
