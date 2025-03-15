@@ -31,7 +31,7 @@ import (
 )
 
 var (
-	criuImage      = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v4.0", "criu image to use.")
+	criuImage      = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:8d5cef546a035c4dda3a1be28ff1202c3b1b4c72", "criu image to use.")
 	runtime        = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
 	hostOptPath    = flag.String("host-opt-path", "/opt/zeropod", "path where zeropod binaries are stored on the host")
 	uninstall      = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
