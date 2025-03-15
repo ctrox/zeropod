@@ -11,23 +11,27 @@ import (
 )
 
 type pageServerProxy struct {
-	tlsConfig   *tls.Config
-	log         *slog.Logger
-	port        int
-	backendAddr string
-	listenAddr  string
-	done        chan struct{}
-	err         error
-	listener    net.Listener
+	tlsListen, tlsBackend *tls.Config
+	log                   *slog.Logger
+	port                  int
+	backendAddr           string
+	listenAddr            string
+	done                  chan struct{}
+	err                   error
+	listener              net.Listener
 }
 
 // newPageServerProxy returns a TCP proxy for use with a criu page server
 // listening on a local unix socket. As the page server is one-shot, the proxy
-// will automatically stop after the client has disconnected.
-func newPageServerProxy(addr, backendAddr string, tlsConfig *tls.Config, log *slog.Logger) *pageServerProxy {
+// will automatically stop after the client has disconnected. Depending on the
+// passed in tlsListen/tlsBackend it will respectively listen for TLS or connect
+// to a TLS backend. A nil config means it will listen on plain TCP and connect
+// to a unix socket.
+func newPageServerProxy(addr, backendAddr string, tlsListen, tlsBackend *tls.Config, log *slog.Logger) *pageServerProxy {
 	psp := &pageServerProxy{
 		log:         log.WithGroup("page-server-proxy"),
-		tlsConfig:   tlsConfig,
+		tlsListen:   tlsListen,
+		tlsBackend:  tlsBackend,
 		listenAddr:  addr,
 		backendAddr: backendAddr,
 		done:        make(chan struct{}),
@@ -38,9 +42,11 @@ func newPageServerProxy(addr, backendAddr string, tlsConfig *tls.Config, log *sl
 func (p *pageServerProxy) listen(network, laddr string) (net.Listener, error) {
 	var listener net.Listener
 	var err error
-	if p.tlsConfig != nil {
-		listener, err = tls.Listen(network, laddr, p.tlsConfig)
+	if p.tlsListen != nil {
+		p.log.Info("listening tls", "addr", p.listenAddr)
+		listener, err = tls.Listen(network, laddr, p.tlsListen)
 	} else {
+		p.log.Info("listening tcp", "addr", p.listenAddr)
 		listener, err = net.Listen(network, laddr)
 	}
 	if err != nil {
@@ -62,12 +68,6 @@ func (p *pageServerProxy) Start(ctx context.Context) error {
 		return err
 	}
 	p.listener = listener
-
-	addr, ok := listener.Addr().(*net.TCPAddr)
-	if !ok {
-		return fmt.Errorf("addr is not a net.TCPAddr: %T", listener.Addr())
-	}
-	p.port = addr.Port
 
 	go p.accept(ctx)
 	go func() {
@@ -103,20 +103,28 @@ func (p *pageServerProxy) accept(ctx context.Context) {
 }
 
 func (p *pageServerProxy) HandleConn(ctx context.Context, src net.Conn) error {
-	target, err := net.Dial("unix", p.backendAddr)
-	if err != nil {
-		return fmt.Errorf("dialing target: %w", err)
+	var target net.Conn
+	var err error
+	if p.tlsBackend != nil {
+		target, err = tls.Dial("tcp", p.backendAddr, p.tlsBackend)
+		if err != nil {
+			return fmt.Errorf("dialing target: %w", err)
+		}
+	} else {
+		target, err = net.Dial("unix", p.backendAddr)
+		if err != nil {
+			return fmt.Errorf("dialing target: %w", err)
+		}
 	}
 	p.log.Info("handling page server proxy connection", "remote_addr", src.RemoteAddr())
 	conn, ok := src.(*tls.Conn)
-	if !ok {
-		return fmt.Errorf("expected a *tls.Conn, got %T", conn)
+	if ok {
+		if err := conn.HandshakeContext(ctx); err != nil {
+			return fmt.Errorf("error during handshake: %w", err)
+		}
+		p.log.Info("handshake complete", "tls_version", tls.VersionName(conn.ConnectionState().Version))
 	}
 
-	if err := conn.HandshakeContext(ctx); err != nil {
-		return fmt.Errorf("error during handshake: %w", err)
-	}
-	p.log.Info("handshake complete", "tls_version", tls.VersionName(conn.ConnectionState().Version))
 	if err := proxy(ctx, src, target); err != nil {
 		return fmt.Errorf("proxy error: %w", err)
 	}
@@ -163,15 +171,28 @@ func copy(errs chan error, conn1, conn2 net.Conn) {
 		if _, err := io.Copy(conn1, conn2); err != nil {
 			errs <- err
 		}
-		conn1.(*tls.Conn).CloseWrite()
+		closeWrite(conn1)
 	}()
 	go func() {
 		defer wg.Done()
 		if _, err := io.Copy(conn2, conn1); err != nil {
 			errs <- err
 		}
-		conn2.(*net.UnixConn).CloseWrite()
+		closeWrite(conn2)
 	}()
 
 	wg.Wait()
+}
+
+func closeWrite(conn net.Conn) {
+	switch c := conn.(type) {
+	case *tls.Conn:
+		_ = c.CloseWrite()
+	case *net.TCPConn:
+		_ = c.CloseWrite()
+	case *net.UnixConn:
+		_ = c.CloseWrite()
+	default:
+		_ = c.Close()
+	}
 }

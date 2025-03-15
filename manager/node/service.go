@@ -43,10 +43,11 @@ const (
 	PageServerPortKey  = "page_server_port"
 	OptPath            = "/opt/zeropod"
 
-	caCertFile  = "/tls/ca.crt"
-	caKeyFile   = "/tls/ca.key"
-	tlsKeyFile  = "/run/tls.crt"
-	tlsCertFile = "/run/tls.key"
+	pagesTransferTimeout = time.Minute * 5
+	caCertFile           = "/tls/ca.crt"
+	caKeyFile            = "/tls/ca.key"
+	// tlsKeyFile  = "/run/tls.crt"
+	// tlsCertFile = "/run/tls.key"
 )
 
 func nodeSocketAddress() string {
@@ -500,21 +501,21 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 		if !ns.pageServerTLS {
 			tlsConfig = nil
 		}
-		psp := newPageServerProxy("0.0.0.0:0", nodev1.LazyPagesSocket(req.MigrationInfo.ImageId), tlsConfig, ns.log)
-		pspContext, cancel := context.WithTimeout(context.Background(), time.Minute)
+		psp := newPageServerProxy("0.0.0.0:0", nodev1.LazyPagesSocket(req.MigrationInfo.ImageId), tlsConfig, nil, ns.log)
+		pspContext, cancel := context.WithTimeout(context.Background(), pagesTransferTimeout)
 		if err := psp.Start(pspContext); err != nil {
-			ns.log.Error("page server proxy", "error", err)
+			ns.log.Error("page server src proxy", "error", err)
 		}
 		pageServer = &v1.MigrationServer{
 			Host: ns.host, Port: psp.Port(),
 		}
-		ns.log.Info("started page server proxy", "port", psp.Port(), "tls", ns.pageServerTLS)
+		ns.log.Info("started page server src proxy", "port", psp.Port(), "tls", ns.pageServerTLS)
 		go func() {
 			if err := psp.Wait(); err != nil {
-				ns.log.Error("page server proxy", "error", err)
+				ns.log.Error("page server src proxy", "error", err)
 			}
 			cancel()
-			ns.log.Info("page server proxy closed")
+			ns.log.Info("page server src proxy closed")
 		}()
 	}
 
@@ -560,17 +561,33 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 }
 
 func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyPagesRequest) (*emptypb.Empty, error) {
+	// the criu lazy-pages daemon would be able to connect directly to the page
+	// server via TLS but in testing this has been proven to work very
+	// unreliably. The root cause is unclear (gnutls?) but on arm64, TLS1.2
+	// worked fine while TLS1.3 simply broke sometimes. On amd64 both are just
+	// failing. The TLS handshake is successful but then CRIU fails with errors
+	// like: CRIU fails with: Error (criu/page-xfer.c:1635): page-xfer: BUG
+	//
+	// so instead, we now also spawn a proxy on the dst side, which takes care
+	// of TLS in Go and provides a plain local TCP socket for the lazy-pages
+	// daemon to connect to.
+	psp := newPageServerProxy(
+		"127.0.0.1:0",
+		fmt.Sprintf("%s:%d", r.Address, r.Port),
+		nil,
+		ns.tlsConfig,
+		ns.log,
+	)
+	pspContext, cancel := context.WithTimeout(context.Background(), pagesTransferTimeout)
+	if err := psp.Start(pspContext); err != nil {
+		cancel()
+		ns.log.Error("starting page server dst proxy", "error", err)
+		return nil, fmt.Errorf("starting page server dst proxy: %w", err)
+	}
 	args := []string{
 		"-o", "/dev/stdout", "-v", "lazy-pages", "--images-dir",
 		r.CheckpointPath, "--work-dir", r.CheckpointPath, "--page-server",
-		"--address", r.Address, "--port", strconv.Itoa(int(r.Port)),
-	}
-	if r.Tls {
-		args = append(args,
-			"--tls", "--tls-cert", tlsKeyFile,
-			"--tls-key", tlsCertFile,
-			"--tls-cacert", caCertFile,
-		)
+		"--address", "127.0.0.1", "--port", strconv.Itoa(psp.Port()),
 	}
 	cmd := exec.Command(filepath.Join(OptPath, "bin/criu"), args...)
 	ns.log.Info("starting lazy pages daemon", "cmd", cmd.Args)
@@ -579,9 +596,17 @@ func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyP
 	cmd.Stderr = execLogger
 	cmd.Stdout = execLogger
 	if err := cmd.Start(); err != nil {
+		cancel()
 		return &emptypb.Empty{}, fmt.Errorf("error running lazy-pages daemon: %s", err)
 	}
-	go cmd.Wait()
+	go func() {
+		cmd.Wait()
+		cancel()
+		if err := psp.Wait(); err != nil {
+			ns.log.Error("page server dst proxy", "error", err)
+		}
+		ns.log.Info("page server dst proxy closed")
+	}()
 	return &emptypb.Empty{}, nil
 }
 

@@ -28,7 +28,7 @@ func TestPageServerProxy(t *testing.T) {
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   tls.VersionTLS13,
 	}
-	psp := newPageServerProxy("localhost:0", socket, tlsConfig, slog.Default())
+	psp := newPageServerProxy("localhost:0", socket, tlsConfig, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()
