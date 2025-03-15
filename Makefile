@@ -1,12 +1,13 @@
 REGISTRY := ghcr.io
 NAMESPACE := ctrox
-INSTALLER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-installer:dev
-MANAGER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-manager:dev
-TEST_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-test:dev
+TAG := dev
+INSTALLER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-installer:$(TAG)
+MANAGER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-manager:$(TAG)
+TEST_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-test:$(TAG)
 CRIU_VERSION := v4.0
 CRIU_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-criu:$(CRIU_VERSION)
 DOCKER_SOCK := /var/run/docker.sock
-EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:dev
+EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:$(TAG)
 # versioning
 PKG=github.com/ctrox/zeropod
 CONTAINERD_PKG=github.com/containerd/containerd
@@ -53,6 +54,10 @@ build-test:
 
 build-ebpf:
 	docker build --load -t $(EBPF_IMAGE) -f socket/Dockerfile .
+
+push-dev: build-installer build-manager
+	docker push $(INSTALLER_IMAGE)
+	docker push $(MANAGER_IMAGE)
 
 test-e2e:
 	go test -v ./e2e/
