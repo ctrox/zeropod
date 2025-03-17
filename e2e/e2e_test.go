@@ -43,24 +43,27 @@ func TestE2E(t *testing.T) {
 		ignoreFirstReq bool
 		keepAlive      bool
 		preDump        bool
+		waitScaledDown bool
 	}{
 		// note: some of these max request durations are really
 		// system-dependent. It has been tested on a few systems so far and
 		// they should leave enough headroom but the tests could be flaky
 		// because of that.
 		"without pre-dump": {
-			pod:            testPod(scaleDownAfter(0)),
+			pod:            testPod(scaleDownAfter(time.Second)),
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			preDump:        false,
 			maxReqDuration: time.Second,
+			waitScaledDown: true,
 		},
 		"with pre-dump": {
-			pod:            testPod(preDump(true), scaleDownAfter(0)),
+			pod:            testPod(preDump(true), scaleDownAfter(time.Second)),
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			preDump:        true,
 			maxReqDuration: time.Second,
+			waitScaledDown: true,
 		},
 		// this is a blackbox test for the socket tracking. We know that
 		// restoring a snapshot of the test pod takes at least 50ms, even on
@@ -75,6 +78,7 @@ func TestE2E(t *testing.T) {
 			sequentialWait: time.Millisecond * 200,
 			maxReqDuration: time.Millisecond * 50,
 			ignoreFirstReq: true,
+			waitScaledDown: true,
 		},
 		"pod without configuration": {
 			pod:            testPod(),
@@ -83,11 +87,12 @@ func TestE2E(t *testing.T) {
 			maxReqDuration: time.Second,
 		},
 		"pod with multiple containers": {
-			pod:            testPod(agnContainer("c1", 8080), agnContainer("c2", 8081), scaleDownAfter(0)),
+			pod:            testPod(agnContainer("c1", 8080), agnContainer("c2", 8081), scaleDownAfter(time.Second)),
 			svc:            testService(8081),
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			maxReqDuration: time.Second,
+			waitScaledDown: true,
 		},
 		"pod selecting specific containers": {
 			pod: testPod(
@@ -107,6 +112,7 @@ func TestE2E(t *testing.T) {
 			parallelReqs:   10,
 			sequentialReqs: 5,
 			maxReqDuration: time.Second,
+			waitScaledDown: true,
 		},
 		"parallel requests with keepalive": {
 			pod:            testPod(scaleDownAfter(time.Second)),
@@ -114,6 +120,7 @@ func TestE2E(t *testing.T) {
 			sequentialReqs: 5,
 			keepAlive:      true,
 			maxReqDuration: time.Second,
+			waitScaledDown: true,
 		},
 	}
 
@@ -132,6 +139,10 @@ func TestE2E(t *testing.T) {
 			cleanupService := createServiceAndWait(t, ctx, e2e.client, tc.svc, 1)
 			defer cleanupPod()
 			defer cleanupService()
+
+			if tc.waitScaledDown {
+				waitUntilScaledDown(t, ctx, e2e.client, tc.pod)
+			}
 
 			wg := sync.WaitGroup{}
 			wg.Add(tc.parallelReqs)
@@ -165,15 +176,7 @@ func TestE2E(t *testing.T) {
 		pod := testPod(scaleDownAfter(0))
 		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
-
-		require.Eventually(t, func() bool {
-			checkpointed, err := isCheckpointed(t, ctx, e2e.client, e2e.cfg, pod)
-			if err != nil {
-				t.Logf("error checking if checkpointed: %s", err)
-				return false
-			}
-			return checkpointed
-		}, time.Minute, time.Second)
+		waitUntilScaledDown(t, ctx, e2e.client, pod)
 
 		stdout, stderr, err := podExec(e2e.cfg, pod, "date")
 		require.NoError(t, err)
@@ -195,15 +198,7 @@ func TestE2E(t *testing.T) {
 		pod := testPod(scaleDownAfter(0))
 		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
-
-		require.Eventually(t, func() bool {
-			checkpointed, err := isCheckpointed(t, ctx, e2e.client, e2e.cfg, pod)
-			if err != nil {
-				t.Logf("error checking if checkpointed: %s", err)
-				return false
-			}
-			return checkpointed
-		}, time.Minute, time.Second)
+		waitUntilScaledDown(t, ctx, e2e.client, pod)
 
 		stdout, stderr, err := podExec(e2e.cfg, pod, "date")
 		require.NoError(t, err)
@@ -275,6 +270,7 @@ func TestE2E(t *testing.T) {
 		restoredPod := testPod(scaleDownAfter(0))
 		cleanupRestoredPod := createPodAndWait(t, ctx, e2e.client, restoredPod)
 		defer cleanupRestoredPod()
+		waitUntilScaledDown(t, ctx, e2e.client, restoredPod)
 
 		// exec into pod to ensure it has been restored at least once
 		require.Eventually(t, func() bool {
@@ -283,13 +279,9 @@ func TestE2E(t *testing.T) {
 				t.Logf("error during pod exec: %s", err)
 				return false
 			}
-			checkpointed, err := isCheckpointed(t, ctx, e2e.client, e2e.cfg, restoredPod)
-			if err != nil {
-				t.Logf("error checking if checkpointed: %s", err)
-				return false
-			}
-			return checkpointed
+			return true
 		}, time.Minute, time.Second)
+		waitUntilScaledDown(t, ctx, e2e.client, restoredPod)
 
 		mfs := map[string]*dto.MetricFamily{}
 		require.Eventually(t, func() bool {

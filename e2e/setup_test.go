@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -19,6 +20,8 @@ import (
 
 	"github.com/ctrox/zeropod/activator"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
+	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/ctrox/zeropod/manager"
 	"github.com/ctrox/zeropod/zeropod"
 	"github.com/go-logr/logr"
 	"github.com/phayes/freeport"
@@ -434,17 +437,6 @@ func agnContainer(name string, port int) podOption {
 func addContainer(name, image string, args []string, ports ...int) podOption {
 	return func(p *pod) {
 		container := corev1.Container{
-			StartupProbe: &corev1.Probe{
-				ProbeHandler: corev1.ProbeHandler{
-					HTTPGet: &corev1.HTTPGetAction{
-						Path: "/",
-						Port: intstr.FromInt(ports[0]),
-					},
-				},
-				TimeoutSeconds:   2,
-				PeriodSeconds:    1,
-				FailureThreshold: 10,
-			},
 			Name:  name,
 			Image: image,
 			Args:  args,
@@ -761,61 +753,22 @@ func restoreCount(t testing.TB, ctx context.Context, client client.Client, cfg *
 	return int(*metric.Histogram.SampleCount), nil
 }
 
-func checkpointCount(t testing.TB, ctx context.Context, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
-	val, err := getNodeMetric(t, ctx, client, cfg, zeropod.MetricCheckPointDuration)
-	if err != nil {
-		return 0, err
+func waitUntilScaledDown(t testing.TB, ctx context.Context, c client.Client, pod *corev1.Pod) {
+	for _, container := range pod.Spec.Containers {
+		require.Eventually(t, func() bool {
+			ok, err := isScaledDown(ctx, c, pod, container.Name)
+			t.Logf("scaled down: %v: %s", ok, pod.GetLabels()[path.Join(manager.StatusLabelKeyPrefix, container.Name)])
+			return err == nil && ok
+		}, time.Second*15, time.Second)
 	}
-
-	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
-		zeropod.LabelPodName:      pod.Name,
-		zeropod.LabelPodNamespace: pod.Namespace,
-	})
-	if !ok {
-		return 0, fmt.Errorf("could not find checkpoint duration metric that matches pod: %s/%s: %w",
-			pod.Name, pod.Namespace, err)
-	}
-
-	if metric.Histogram == nil {
-		return 0, fmt.Errorf("found metric that is not a histogram")
-	}
-
-	if metric.Histogram.SampleCount == nil {
-		return 0, fmt.Errorf("histogram sample count is nil")
-	}
-
-	return int(*metric.Histogram.SampleCount), nil
 }
 
-func isCheckpointed(t testing.TB, ctx context.Context, client client.Client, cfg *rest.Config, pod *corev1.Pod) (bool, error) {
-	val, err := getNodeMetric(t, ctx, client, cfg, zeropod.MetricRunning)
-	if err != nil {
+func isScaledDown(ctx context.Context, c client.Client, pod *corev1.Pod, containerName string) (bool, error) {
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pod), pod); err != nil {
 		return false, err
 	}
-
-	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
-		zeropod.LabelPodName:      pod.Name,
-		zeropod.LabelPodNamespace: pod.Namespace,
-	})
-	if !ok {
-		return false, fmt.Errorf("could not find running metric that matches pod: %s/%s: %w",
-			pod.Name, pod.Namespace, err)
-	}
-
-	if metric.Gauge == nil {
-		return false, fmt.Errorf("found metric that is not a gauge")
-	}
-
-	if metric.Gauge.Value == nil {
-		return false, fmt.Errorf("gauge value is nil")
-	}
-
-	count, err := checkpointCount(t, ctx, client, cfg, pod)
-	if err != nil {
-		return false, err
-	}
-
-	return *metric.Gauge.Value == 0 && count >= 1, nil
+	v, ok := pod.GetLabels()[path.Join(manager.StatusLabelKeyPrefix, containerName)]
+	return ok && v == shimv1.ContainerPhase_SCALED_DOWN.String(), nil
 }
 
 func findMetricByLabelMatch(metrics []*dto.Metric, labels map[string]string) (*dto.Metric, bool) {
