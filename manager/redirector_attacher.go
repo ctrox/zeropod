@@ -52,7 +52,7 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger) error {
 	}
 
 	for _, pid := range pids {
-		if _, err := os.Stat(netNSPath(pid)); os.IsNotExist(err) {
+		if err := statNetNS(pid); os.IsNotExist(err) {
 			r.log.Info("net ns not found, removing leftover pid", "path", netNSPath(pid))
 			os.RemoveAll(activator.PinPath(pid))
 			continue
@@ -90,13 +90,18 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 			pid, err := strconv.Atoi(filepath.Base(event.Name))
 			if err != nil {
 				r.log.Warn("unable to parse pid from added name", "name", filepath.Base(event.Name))
-				break
+				continue
+			}
+
+			if err := statNetNS(pid); err != nil {
+				r.log.Warn("ignoring pid as net ns was not found", "pid", pid)
+				continue
 			}
 
 			switch event.Op {
 			case fsnotify.Create:
 				if err := r.attachRedirector(pid); err != nil {
-					r.log.Error("unable to attach redirector", "pid", pid)
+					r.log.Error("unable to attach redirector", "pid", pid, "err", err)
 				}
 			case fsnotify.Remove:
 				r.Lock()
@@ -143,6 +148,11 @@ func (r *Redirector) attachRedirector(pid int) error {
 	return nil
 }
 
+func statNetNS(pid int) error {
+	_, err := os.Stat(netNSPath(pid))
+	return err
+}
+
 func netNSPath(pid int) string {
 	return fmt.Sprintf("/hostproc/%d/ns/net", pid)
 }
@@ -172,7 +182,13 @@ func (r *Redirector) getSandboxPids() ([]int, error) {
 			r.log.Warn("unable to parse pid from dir name", "name", dir)
 			continue
 		}
-		intPids = append(intPids, intPid)
+
+		// before adding this pid, check if the corresponding network ns
+		// actually exists. This is important when running in a kind environment
+		// where the bpffs is shared between different "nodes".
+		if err := statNetNS(intPid); err == nil {
+			intPids = append(intPids, intPid)
+		}
 	}
 
 	return intPids, nil
