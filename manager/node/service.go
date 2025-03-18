@@ -207,7 +207,7 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 	pCtx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
 	if err := wait.PollUntilContextCancel(pCtx, time.Millisecond*10, true, func(ctx context.Context) (done bool, perr error) {
-		if err := ns.kube.Get(ctx, objectName(migration), migration); err != nil {
+		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
 			perr = err
 			return
 		}
@@ -309,20 +309,22 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 		}
 	}
 
-	setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
-		if restoreDur != 0 {
-			cms.RestoredAt = metav1.NewMicroTime(req.MigrationInfo.RestoreEnd.AsTime())
-			// this is an approximation as we just use the time before calling
-			// checkpoint and subtract it from when start of the container
-			// returns. The process will be started a few milliseconds before
-			// start returns. Using the Criu reported RestoreTime also seems
-			// somewhat inaccurate as that results in lower freeze durations
-			// than measeured by the actual process.
-			cms.MigrationDuration = metav1.Duration{Duration: cms.RestoredAt.Sub(cms.PausedAt.Time)}
-		}
-		cms.Condition.Phase = phase
-	})
-	if err := ns.kube.Status().Update(ctx, migration); err != nil {
+	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(migration *v1.Migration) error {
+		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
+			if restoreDur != 0 {
+				cms.RestoredAt = metav1.NewMicroTime(req.MigrationInfo.RestoreEnd.AsTime())
+				// this is an approximation as we just use the time before calling
+				// checkpoint and subtract it from when start of the container
+				// returns. The process will be started a few milliseconds before
+				// start returns. Using the Criu reported RestoreTime also seems
+				// somewhat inaccurate as that results in lower freeze durations
+				// than measeured by the actual process.
+				cms.MigrationDuration = metav1.Duration{Duration: cms.RestoredAt.Sub(cms.PausedAt.Time)}
+			}
+			cms.Condition.Phase = phase
+		})
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 
@@ -462,12 +464,12 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 	}); err != nil {
 		ns.log.Error("prepare evac request failed",
 			"name", migration.Name, "namespace", migration.Namespace, "error", err)
-
-		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
-			cms.Condition.Phase = v1.MigrationPhaseUnclaimed
-		})
-
-		if err := ns.kube.Status().Update(ctx, migration); err != nil {
+		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) error {
+			setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
+				cms.Condition.Phase = v1.MigrationPhaseUnclaimed
+			})
+			return nil
+		}); err != nil {
 			ns.log.Error("failed to update migration status",
 				"name", migration.Name, "namespace", migration.Namespace, "error", err)
 		}
@@ -519,12 +521,7 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 		}()
 	}
 
-	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		migration := &v1.Migration{}
-		if err := ns.kube.Get(ctx, nsName, migration); err != nil {
-			return err
-		}
-
+	if err := ns.updateMigration(ctx, nsName, func(migration *v1.Migration) error {
 		if found := updateContainerSpec(migration, req.PodInfo.ContainerName, func(mc *v1.MigrationContainer) {
 			mc.ImageServer = &v1.MigrationServer{
 				Host: ns.host,
@@ -537,24 +534,22 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 			return fmt.Errorf("migration does not have image for requested container %s", req.PodInfo.ContainerName)
 		}
 		migration.Spec.LiveMigration = req.MigrationInfo.LiveMigration
-		if err := ns.kube.Update(ctx, migration); err != nil {
-			ns.log.Error("migration update to set page server failed", "error", err)
-			return err
-		}
-		ns.log.Debug("updated migration", "containers", migration.Spec.Containers)
-		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
-			cms.PausedAt = metav1.NewMicroTime(req.MigrationInfo.PausedAt.AsTime())
-			cms.Condition.Phase = v1.MigrationPhaseRunning
-		})
-		if err := ns.kube.Status().Update(ctx, migration); err != nil {
-			return err
-		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 	if pageServer != nil {
 		ns.log.Info("set page server in evac", "host", ns.host, "port", pageServer.Port)
+	}
+
+	if err := ns.updateMigrationStatus(ctx, nsName, func(migration *v1.Migration) error {
+		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
+			cms.PausedAt = metav1.NewMicroTime(req.MigrationInfo.PausedAt.AsTime())
+			cms.Condition.Phase = v1.MigrationPhaseRunning
+		})
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	return &nodev1.EvacResponse{}, nil
@@ -647,8 +642,32 @@ func (ns *nodeService) local(host string) bool {
 	return ns.host == host
 }
 
-func objectName(obj client.Object) types.NamespacedName {
-	return types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
+type updateFunc func(*v1.Migration) error
+
+func (ns *nodeService) updateMigration(ctx context.Context, nsName types.NamespacedName, update updateFunc) error {
+	migration := &v1.Migration{}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := ns.kube.Get(ctx, nsName, migration); err != nil {
+			return err
+		}
+		if err := update(migration); err != nil {
+			return err
+		}
+		return ns.kube.Update(ctx, migration)
+	})
+}
+
+func (ns *nodeService) updateMigrationStatus(ctx context.Context, nsName types.NamespacedName, update updateFunc) error {
+	migration := &v1.Migration{}
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		if err := ns.kube.Get(ctx, nsName, migration); err != nil {
+			return err
+		}
+		if err := update(migration); err != nil {
+			return err
+		}
+		return ns.kube.Status().Update(ctx, migration)
+	})
 }
 
 func updateContainerSpec(migration *v1.Migration, containerName string, updateFunc func(*v1.MigrationContainer)) (found bool) {
