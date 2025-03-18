@@ -539,7 +539,7 @@ func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption)
 					RuntimeClassName: ptr.To(v1.RuntimeClassName),
 					Containers: []corev1.Container{{
 						Name:            "freezer",
-						Image:           "ctrox/freezer",
+						Image:           "ghcr.io/ctrox/zeropod-freezer",
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"/freezer"},
 						Args:            []string{"-memory", strconv.Itoa(memoryGiB)},
@@ -915,9 +915,9 @@ func getPodLogs(ctx context.Context, cfg *rest.Config, pod corev1.Pod) (string, 
 }
 
 type freeze struct {
-	Last               time.Time
-	LastFreezeDuration time.Duration
-	Data               string
+	LastObservation    time.Time     `json:"lastObservation"`
+	LastFreezeDuration time.Duration `json:"lastFreezeDuration"`
+	Data               string        `json:"data"`
 }
 
 func freezerWrite(data string, port int) error {

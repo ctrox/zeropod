@@ -1,0 +1,45 @@
+name: Build and Publish freezer
+
+on:
+  push:
+    paths:
+      - cmd/freezer/**
+
+env:
+  REGISTRY: ghcr.io
+  FREEZER_IMAGE_NAME: ${{ github.repository }}-freezer
+
+jobs:
+  push_to_registry:
+    permissions: write-all
+    name: Push Docker images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@65b78e6e13532edd9afa3aa52ac7964289d1a9c1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Extract metadata for freezer
+        id: meta_freezer
+        uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.FREEZER_IMAGE_NAME }}
+
+      - name: Build and push freezer
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          file: ./cmd/freezer/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.REGISTRY }}/${{ env.FREEZER_IMAGE_NAME }}:latest
+          labels: ${{ steps.meta_freezer.outputs.labels }}
