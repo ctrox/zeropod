@@ -25,10 +25,13 @@ func GenCert(caCert *x509.Certificate, caKey ed25519.PrivateKey, ipAddresses ...
 			Organization: []string{"ctrox.dev"},
 			Country:      []string{"CH"},
 		},
-		NotBefore:   time.Now(),
-		NotAfter:    time.Now().Add(time.Hour * 87600),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		NotBefore: time.Now(),
+		NotAfter:  time.Now().Add(time.Hour * 87600),
+		KeyUsage:  x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{
+			x509.ExtKeyUsageClientAuth,
+			x509.ExtKeyUsageServerAuth,
+		},
 	}
 	if len(ipAddresses) > 0 {
 		template.IPAddresses = ipAddresses
@@ -74,9 +77,15 @@ func initTLS(host string) (*tls.Config, error) {
 
 	caCertPool := x509.NewCertPool()
 	caCertPool.AddCert(ca)
+	return serverTLSConfig(caCertPool, cert), nil
+}
+
+func serverTLSConfig(ca *x509.CertPool, cert tls.Certificate) *tls.Config {
 	return &tls.Config{
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ClientCAs:    ca,
 		Certificates: []tls.Certificate{cert},
-		RootCAs:      caCertPool,
+		RootCAs:      ca,
 		MinVersion:   tls.VersionTLS13,
-	}, nil
+	}
 }

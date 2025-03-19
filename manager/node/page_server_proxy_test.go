@@ -23,11 +23,10 @@ func TestPageServerProxy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ca, cert := prepareTLS(t)
-	tlsConfig := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   tls.VersionTLS13,
-	}
+	caCertPool := x509.NewCertPool()
+	ca, serverCert, clientCert := prepareTLS(t)
+	caCertPool.AddCert(ca)
+	tlsConfig := serverTLSConfig(caCertPool, serverCert)
 	psp := newPageServerProxy("localhost:0", socket, tlsConfig, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
@@ -37,11 +36,10 @@ func TestPageServerProxy(t *testing.T) {
 	}
 	t.Logf("started server on port %d", psp.Port())
 
-	caCertPool := x509.NewCertPool()
-	caCertPool.AddCert(ca)
 	dial := tls.Dialer{
 		Config: &tls.Config{
-			RootCAs: caCertPool,
+			Certificates: []tls.Certificate{clientCert},
+			RootCAs:      caCertPool,
 		},
 	}
 
@@ -81,7 +79,7 @@ func TestPageServerProxy(t *testing.T) {
 	}
 }
 
-func prepareTLS(t *testing.T) (*x509.Certificate, tls.Certificate) {
+func prepareTLS(t *testing.T) (*x509.Certificate, tls.Certificate, tls.Certificate) {
 	caCert, err := GenCert(nil, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -92,10 +90,15 @@ func prepareTLS(t *testing.T) (*x509.Certificate, tls.Certificate) {
 		t.Fatal(err)
 	}
 
-	cert, err := GenCert(ca, caCert.PrivateKey.(ed25519.PrivateKey), net.ParseIP("127.0.0.1"))
+	serverCert, err := GenCert(ca, caCert.PrivateKey.(ed25519.PrivateKey), net.ParseIP("127.0.0.1"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	return ca, cert
+	clientCert, err := GenCert(ca, caCert.PrivateKey.(ed25519.PrivateKey), net.ParseIP("127.0.0.2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return ca, serverCert, clientCert
 }
