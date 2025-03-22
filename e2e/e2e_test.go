@@ -44,6 +44,7 @@ func TestE2E(t *testing.T) {
 		keepAlive      bool
 		preDump        bool
 		waitScaledDown bool
+		expectRunning  bool
 	}{
 		// note: some of these max request durations are really
 		// system-dependent. It has been tested on a few systems so far and
@@ -85,6 +86,14 @@ func TestE2E(t *testing.T) {
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			maxReqDuration: time.Second,
+			expectRunning:  true,
+		},
+		"pod with scaledown disabled": {
+			pod:            testPod(scaleDownAfter(0)),
+			parallelReqs:   1,
+			sequentialReqs: 1,
+			maxReqDuration: time.Second,
+			expectRunning:  true,
 		},
 		"pod with multiple containers": {
 			pod:            testPod(agnContainer("c1", 8080), agnContainer("c2", 8081), scaleDownAfter(time.Second)),
@@ -144,6 +153,10 @@ func TestE2E(t *testing.T) {
 				waitUntilScaledDown(t, ctx, e2e.client, tc.pod)
 			}
 
+			if tc.expectRunning {
+				alwaysRunningFor(t, ctx, e2e.client, tc.pod, time.Second*10)
+			}
+
 			wg := sync.WaitGroup{}
 			wg.Add(tc.parallelReqs)
 			for i := 0; i < tc.parallelReqs; i++ {
@@ -173,7 +186,7 @@ func TestE2E(t *testing.T) {
 	}
 
 	t.Run("exec", func(t *testing.T) {
-		pod := testPod(scaleDownAfter(0))
+		pod := testPod(scaleDownAfter(time.Second))
 		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
 		waitUntilScaledDown(t, ctx, e2e.client, pod)
@@ -195,7 +208,7 @@ func TestE2E(t *testing.T) {
 	t.Run("delete in restored state", func(t *testing.T) {
 		// as we want to delete the pod when it is in a restored state, we
 		// first need to make sure it has checkpointed at least once.
-		pod := testPod(scaleDownAfter(0))
+		pod := testPod(scaleDownAfter(time.Second))
 		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
 		waitUntilScaledDown(t, ctx, e2e.client, pod)
@@ -208,7 +221,7 @@ func TestE2E(t *testing.T) {
 	})
 
 	t.Run("resources scaling", func(t *testing.T) {
-		pod := testPod(scaleDownAfter(0), agnContainer("agn", 8080), resources(corev1.ResourceRequirements{
+		pod := testPod(scaleDownAfter(time.Second), agnContainer("agn", 8080), resources(corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("100m"),
 				corev1.ResourceMemory: resource.MustParse("100Mi"),
@@ -235,7 +248,7 @@ func TestE2E(t *testing.T) {
 	})
 
 	t.Run("status labels", func(t *testing.T) {
-		pod := testPod(scaleDownAfter(0), agnContainer("agn", 8080), agnContainer("agn2", 8081))
+		pod := testPod(scaleDownAfter(time.Second), agnContainer("agn", 8080), agnContainer("agn2", 8081))
 
 		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
 		defer cleanupPod()
@@ -263,11 +276,11 @@ func TestE2E(t *testing.T) {
 		cleanupRunningPod := createPodAndWait(t, ctx, e2e.client, runningPod)
 		defer cleanupRunningPod()
 
-		checkpointedPod := testPod(scaleDownAfter(0))
+		checkpointedPod := testPod(scaleDownAfter(time.Second))
 		cleanupCheckpointedPod := createPodAndWait(t, ctx, e2e.client, checkpointedPod)
 		defer cleanupCheckpointedPod()
 
-		restoredPod := testPod(scaleDownAfter(0))
+		restoredPod := testPod(scaleDownAfter(time.Second))
 		cleanupRestoredPod := createPodAndWait(t, ctx, e2e.client, restoredPod)
 		defer cleanupRestoredPod()
 		waitUntilScaledDown(t, ctx, e2e.client, restoredPod)

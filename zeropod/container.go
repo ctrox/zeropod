@@ -130,6 +130,11 @@ func (c *Container) scheduleScaleDownIn(in time.Duration) error {
 	// cancel any potential pending scaledonws
 	c.CancelScaleDown()
 
+	if in == 0 {
+		log.G(c.context).Info("scale down is disabled")
+		return nil
+	}
+
 	log.G(c.context).Infof("scheduling scale down in %s", in)
 	timer := time.AfterFunc(in, func() {
 		last, err := c.tracker.LastActivity(uint32(c.process.Pid()))

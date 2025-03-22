@@ -771,6 +771,24 @@ func isScaledDown(ctx context.Context, c client.Client, pod *corev1.Pod, contain
 	return ok && v == shimv1.ContainerPhase_SCALED_DOWN.String(), nil
 }
 
+func alwaysRunningFor(t testing.TB, ctx context.Context, c client.Client, pod *corev1.Pod, dur time.Duration) {
+	for _, container := range pod.Spec.Containers {
+		require.Never(t, func() bool {
+			ok, err := isRunning(ctx, c, pod, container.Name)
+			t.Logf("running: %v: %s", ok, pod.GetLabels()[path.Join(manager.StatusLabelKeyPrefix, container.Name)])
+			return err != nil && !ok
+		}, dur, time.Second)
+	}
+}
+
+func isRunning(ctx context.Context, c client.Client, pod *corev1.Pod, containerName string) (bool, error) {
+	if err := c.Get(ctx, client.ObjectKeyFromObject(pod), pod); err != nil {
+		return false, err
+	}
+	v, ok := pod.GetLabels()[path.Join(manager.StatusLabelKeyPrefix, containerName)]
+	return ok && v == shimv1.ContainerPhase_RUNNING.String(), nil
+}
+
 func findMetricByLabelMatch(metrics []*dto.Metric, labels map[string]string) (*dto.Metric, bool) {
 	for _, metric := range metrics {
 		if metricMatchesLabels(metric, labels) {

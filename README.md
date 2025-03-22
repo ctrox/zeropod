@@ -235,11 +235,9 @@ zeropod.ctrox.dev/container-names: "nginx,sidecar"
 # use this option in case this fails for your application.
 zeropod.ctrox.dev/ports-map: "nginx=80,81;sidecar=8080"
 
-# Configures long to wait before scaling down again after the last
-# connnection. The duration is reset whenever a connection happens.
-# Setting it to 0 means the application will be checkpointed as soon
-# as possible after restore. Use with caution as this will cause lots
-# of checkpoints/restores.
+# Configures how long to wait before scaling down again after the last
+# connnection. The duration is reset whenever a connection happens. Setting it
+# to 0 disables scaling down.
 # Default is 1 minute.
 zeropod.ctrox.dev/scaledown-duration: 10s
 
