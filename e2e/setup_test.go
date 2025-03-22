@@ -416,6 +416,12 @@ func migrateAnnotation(container string) podOption {
 	})
 }
 
+func liveMigrateAnnotation(container string) podOption {
+	return annotations(map[string]string{
+		zeropod.LiveMigrateAnnotationKey: container,
+	})
+}
+
 func resources(res corev1.ResourceRequirements) podOption {
 	return func(p *pod) {
 		for i := range p.spec.Containers {

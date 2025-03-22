@@ -12,8 +12,8 @@ spec:
       labels:
         app: freezer
       annotations:
-        zeropod.ctrox.dev/scaledown-duration: 10s
-        zeropod.ctrox.dev/migrate: "freezer"
+        zeropod.ctrox.dev/scaledown-duration: 1h
+        zeropod.ctrox.dev/live-migrate: "freezer"
     spec:
       runtimeClassName: zeropod
       containers:

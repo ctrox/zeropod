@@ -77,6 +77,7 @@ network-lock skip
     "zeropod.ctrox.dev/disable-checkpointing",
     "zeropod.ctrox.dev/pre-dump",
     "zeropod.ctrox.dev/migrate",
+    "zeropod.ctrox.dev/live-migrate",
     "io.containerd.runc.v2.group"
   ]
   [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod.options]

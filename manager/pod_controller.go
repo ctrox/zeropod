@@ -6,9 +6,11 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
+	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -114,7 +116,7 @@ func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
 		return false
 	}
 
-	if _, ok := pod.Annotations[nodev1.MigrateAnnotationKey]; !ok {
+	if pod.Spec.NodeName != r.nodeName {
 		return false
 	}
 
@@ -122,9 +124,16 @@ func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
 		return false
 	}
 
-	if pod.Spec.NodeName != r.nodeName {
+	if !anyMigrationEnabled(pod) {
 		return false
 	}
+
+	if !hasScaledDownContainer(pod) && !liveMigrationEnabled(pod) {
+		r.log.Info("skipping pod with no scaled down containers and live migration disabled",
+			"pod_name", pod.Name, "pod_namespace", pod.Namespace)
+		return false
+	}
+
 	return true
 }
 
@@ -153,4 +162,26 @@ func newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 			Containers:      containers,
 		},
 	}, nil
+}
+
+func hasScaledDownContainer(pod *corev1.Pod) bool {
+	for _, container := range pod.Spec.Containers {
+		if k, ok := pod.Labels[path.Join(StatusLabelKeyPrefix, container.Name)]; ok {
+			if k == shimv1.ContainerPhase_SCALED_DOWN.String() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func anyMigrationEnabled(pod *corev1.Pod) bool {
+	_, migrate := pod.Annotations[nodev1.MigrateAnnotationKey]
+	_, liveMigrate := pod.Annotations[nodev1.LiveMigrateAnnotationKey]
+	return migrate || liveMigrate
+}
+
+func liveMigrationEnabled(pod *corev1.Pod) bool {
+	_, ok := pod.Annotations[nodev1.LiveMigrateAnnotationKey]
+	return ok
 }

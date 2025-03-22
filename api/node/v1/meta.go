@@ -3,16 +3,17 @@ package v1
 import "path/filepath"
 
 const (
-	runPath              = "/run/zeropod/"
-	varPath              = "/var/lib/zeropod/"
-	SocketPath           = runPath + "node.sock"
-	imagesPath           = varPath + "i/"
-	SnapshotSuffix       = "snapshot"
-	WorkDirSuffix        = "work"
-	MigrateAnnotationKey = "zeropod.ctrox.dev/migrate"
-	NodeNameEnvKey       = "NODE_NAME"
-	PodIPEnvKey          = "POD_IP"
-	preDumpDirName       = "pre-dump"
+	runPath                  = "/run/zeropod/"
+	varPath                  = "/var/lib/zeropod/"
+	SocketPath               = runPath + "node.sock"
+	imagesPath               = varPath + "i/"
+	SnapshotSuffix           = "snapshot"
+	WorkDirSuffix            = "work"
+	MigrateAnnotationKey     = "zeropod.ctrox.dev/migrate"
+	LiveMigrateAnnotationKey = "zeropod.ctrox.dev/live-migrate"
+	NodeNameEnvKey           = "NODE_NAME"
+	PodIPEnvKey              = "POD_IP"
+	preDumpDirName           = "pre-dump"
 )
 
 func ImagePath(id string) string {

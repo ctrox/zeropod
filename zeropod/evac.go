@@ -20,7 +20,7 @@ import (
 const evacTimeout = time.Second * 10
 
 func (c *Container) MigrationEnabled() bool {
-	return c.cfg.MigrationEnabled()
+	return c.cfg.AnyMigrationEnabled()
 }
 
 func (c *Container) Evac(ctx context.Context, scaledDown bool) error {
@@ -28,6 +28,11 @@ func (c *Container) Evac(ctx context.Context, scaledDown bool) error {
 	c.evacuation.Do(func() {
 		if scaledDown {
 			err = c.evacScaledDown(ctx)
+			return
+		}
+
+		if !c.cfg.LiveMigrationEnabled() {
+			log.G(ctx).Debug("live migration is not enabled, aborting evac")
 			return
 		}
 

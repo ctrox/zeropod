@@ -33,52 +33,43 @@ func TestMigration(t *testing.T) {
 	}
 	cases := map[string]testCase{
 		"same-node live migration": {
-			deploy:         freezerDeployment("same-node-live-migration", "default", 256, migrateAnnotation("freezer")),
+			deploy:         freezerDeployment("same-node-live-migration", "default", 256, liveMigrateAnnotation("freezer")),
 			svc:            testService(8080),
 			sameNode:       true,
 			liveMigration:  true,
 			migrationCount: 3,
 		},
 		"cross-node live migration": {
-			deploy:         freezerDeployment("node-migration", "default", 256, migrateAnnotation("freezer")),
+			deploy:         freezerDeployment("node-migration", "default", 256, liveMigrateAnnotation("freezer")),
 			svc:            testService(8080),
 			sameNode:       false,
 			liveMigration:  true,
 			migrationCount: 3,
 		},
 		"cross-node 1 GiB live migration": {
-			deploy:         freezerDeployment("node-migration-1gib", "default", 1024, migrateAnnotation("freezer")),
+			deploy:         freezerDeployment("node-migration-1gib", "default", 1024, liveMigrateAnnotation("freezer")),
 			svc:            testService(8080),
 			sameNode:       false,
 			liveMigration:  true,
 			migrationCount: 1,
 		},
 		"same-node non-live migration": {
-			deploy:         freezerDeployment("same-node-migration", "default", 1, migrateAnnotation("freezer"), scaleDownAfter(time.Second*5)),
-			svc:            testService(8080),
-			sameNode:       true,
-			liveMigration:  false,
-			migrationCount: 1,
-			beforeMigration: func(t *testing.T) {
-				defaultBeforeMigration(t)
-				assert.Eventually(t, func() bool {
-					pods := podsOfDeployment(t, ctx, e2e.client, freezerDeployment("same-node-migration", "default", 1))
-					if len(pods) == 0 {
-						return false
-					}
-					return pods[0].Labels[path.Join(manager.StatusLabelKeyPrefix, "freezer")] == shimv1.ContainerPhase_SCALED_DOWN.String()
-				}, time.Second*10, time.Second, "container is scaled down before migration")
-			},
-			afterMigration: func(t *testing.T) {
-				assert.Never(t, func() bool {
-					pods := podsOfDeployment(t, ctx, e2e.client, freezerDeployment("same-node-migration", "default", 1))
-					if len(pods) == 0 {
-						return true
-					}
-					return pods[0].Labels[path.Join(manager.StatusLabelKeyPrefix, "freezer")] != shimv1.ContainerPhase_SCALED_DOWN.String()
-				}, time.Second*10, time.Second, "container is scaled down after migration")
-				defaultAfterMigration(t)
-			},
+			deploy:          freezerDeployment("same-node-migration", "default", 1, migrateAnnotation("freezer"), scaleDownAfter(time.Second*5)),
+			svc:             testService(8080),
+			sameNode:        true,
+			liveMigration:   false,
+			migrationCount:  1,
+			beforeMigration: nonLiveBeforeMigration,
+			afterMigration:  nonLiveAfterMigration,
+		},
+		"cross-node non-live migration": {
+			deploy:          freezerDeployment("same-node-migration", "default", 1, migrateAnnotation("freezer"), scaleDownAfter(time.Second*5)),
+			svc:             testService(8080),
+			sameNode:        false,
+			liveMigration:   false,
+			migrationCount:  1,
+			beforeMigration: nonLiveBeforeMigration,
+			afterMigration:  nonLiveAfterMigration,
 		},
 	}
 
@@ -172,4 +163,26 @@ func defaultAfterMigration(t *testing.T) {
 	t.Logf("freeze duration: %s", f.LastFreezeDuration)
 	assert.Equal(t, t.Name(), f.Data, "freezer memory has persisted migration")
 	assert.Less(t, f.LastFreezeDuration, time.Second, "freeze duration")
+}
+
+func nonLiveBeforeMigration(t *testing.T) {
+	defaultBeforeMigration(t)
+	require.Eventually(t, func() bool {
+		pods := podsOfDeployment(t, context.Background(), e2e.client, freezerDeployment("same-node-migration", "default", 1))
+		if len(pods) == 0 {
+			return false
+		}
+		return pods[0].Labels[path.Join(manager.StatusLabelKeyPrefix, "freezer")] == shimv1.ContainerPhase_SCALED_DOWN.String()
+	}, time.Second*30, time.Second, "container is scaled down before migration")
+}
+
+func nonLiveAfterMigration(t *testing.T) {
+	require.Never(t, func() bool {
+		pods := podsOfDeployment(t, context.Background(), e2e.client, freezerDeployment("same-node-migration", "default", 1))
+		if len(pods) == 0 {
+			return true
+		}
+		return pods[0].Labels[path.Join(manager.StatusLabelKeyPrefix, "freezer")] != shimv1.ContainerPhase_SCALED_DOWN.String()
+	}, time.Second*30, time.Second, "container is scaled down after migration")
+	defaultAfterMigration(t)
 }

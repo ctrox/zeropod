@@ -222,7 +222,15 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		}
 		return
 	}); err != nil {
-		ns.log.Info("migration servers unset", "container_name", req.PodInfo.ContainerName)
+		ns.log.Error("migration servers unset", "container_name", req.PodInfo.ContainerName)
+		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) error {
+			setOrUpdateContainerStatus(m, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
+				status.Condition.Phase = v1.MigrationPhaseFailed
+			})
+			return nil
+		}); err != nil {
+			ns.log.Error("failed to update migration status", "container_name", req.PodInfo.ContainerName)
+		}
 		return nil, fmt.Errorf("migration servers are not set on migration: %s", migration.Name)
 	}
 
@@ -310,18 +318,22 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 	}
 
 	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(migration *v1.Migration) error {
-		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
+		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
+			// in case the migration is already set to failed we skip updating it
+			if status.Condition.Phase == v1.MigrationPhaseFailed {
+				return
+			}
 			if restoreDur != 0 {
-				cms.RestoredAt = metav1.NewMicroTime(req.MigrationInfo.RestoreEnd.AsTime())
+				status.RestoredAt = metav1.NewMicroTime(req.MigrationInfo.RestoreEnd.AsTime())
 				// this is an approximation as we just use the time before calling
 				// checkpoint and subtract it from when start of the container
 				// returns. The process will be started a few milliseconds before
 				// start returns. Using the Criu reported RestoreTime also seems
 				// somewhat inaccurate as that results in lower freeze durations
 				// than measeured by the actual process.
-				cms.MigrationDuration = metav1.Duration{Duration: cms.RestoredAt.Sub(cms.PausedAt.Time)}
+				status.MigrationDuration = metav1.Duration{Duration: status.RestoredAt.Sub(status.PausedAt.Time)}
 			}
-			cms.Condition.Phase = phase
+			status.Condition.Phase = phase
 		})
 		return nil
 	}); err != nil {
@@ -465,8 +477,8 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 		ns.log.Error("prepare evac request failed",
 			"name", migration.Name, "namespace", migration.Namespace, "error", err)
 		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) error {
-			setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
-				cms.Condition.Phase = v1.MigrationPhaseUnclaimed
+			setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
+				status.Condition.Phase = v1.MigrationPhaseUnclaimed
 			})
 			return nil
 		}); err != nil {
@@ -543,9 +555,9 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 	}
 
 	if err := ns.updateMigrationStatus(ctx, nsName, func(migration *v1.Migration) error {
-		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(cms *v1.MigrationContainerStatus) {
-			cms.PausedAt = metav1.NewMicroTime(req.MigrationInfo.PausedAt.AsTime())
-			cms.Condition.Phase = v1.MigrationPhaseRunning
+		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
+			status.PausedAt = metav1.NewMicroTime(req.MigrationInfo.PausedAt.AsTime())
+			status.Condition.Phase = v1.MigrationPhaseRunning
 		})
 		return nil
 	}); err != nil {
@@ -687,7 +699,7 @@ func setOrUpdateContainerStatus(migration *v1.Migration, containerName string, u
 			return
 		}
 	}
-	cms := v1.MigrationContainerStatus{Name: containerName}
-	updateFunc(&cms)
-	migration.Status.Containers = append(migration.Status.Containers, cms)
+	status := v1.MigrationContainerStatus{Name: containerName}
+	updateFunc(&status)
+	migration.Status.Containers = append(migration.Status.Containers, status)
 }

@@ -147,7 +147,7 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil
 	})
 
-	if cfg.MigrationEnabled() {
+	if cfg.AnyMigrationEnabled() {
 		skipStart, err := zeropod.MigrationRestore(ctx, r, cfg)
 		if err != nil {
 			if !errors.Is(err, zeropod.ErrRestoreRequestFailed) {
@@ -196,7 +196,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return nil, fmt.Errorf("registering container: %w", err)
 	}
 
-	if zeropodContainer.Config().MigrationEnabled() {
+	if zeropodContainer.Config().AnyMigrationEnabled() {
 		if err := zeropod.FinishRestore(ctx, r.ID, zeropodContainer.Config(), beforeStart); err != nil {
 			log.G(ctx).Errorf("error finishing restore: %s", err)
 		}

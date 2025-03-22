@@ -3,10 +3,12 @@ package manager
 import (
 	"context"
 	"log/slog"
+	"path"
 	"testing"
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
+	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -37,7 +39,23 @@ func TestPodReconciler(t *testing.T) {
 		expectedRequeue     bool
 	}{
 		"pod that should be migrated": {
-			pod:                 newMigratePod("node1", v1.RuntimeClassName),
+			pod:                 newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_SCALED_DOWN),
+			containerID:         "containerd://imageid",
+			expectedContainerID: "imageid",
+			deletePod:           true,
+			nodeName:            "node1",
+			expectedMigration:   true,
+		},
+		"pod without live migration and running": {
+			pod:                 newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING),
+			containerID:         "containerd://imageid",
+			expectedContainerID: "imageid",
+			deletePod:           true,
+			nodeName:            "node1",
+			expectedMigration:   false,
+		},
+		"pod with live migration and running": {
+			pod:                 enableLiveMigration(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING)),
 			containerID:         "containerd://imageid",
 			expectedContainerID: "imageid",
 			deletePod:           true,
@@ -45,19 +63,19 @@ func TestPodReconciler(t *testing.T) {
 			expectedMigration:   true,
 		},
 		"pod on wrong node": {
-			pod:               newMigratePod("node2", v1.RuntimeClassName),
+			pod:               newMigratePod("node2", v1.RuntimeClassName, shimv1.ContainerPhase_SCALED_DOWN),
 			deletePod:         true,
 			nodeName:          "node1",
 			expectedMigration: false,
 		},
 		"not a zeropod": {
-			pod:               newMigratePod("node1", ""),
+			pod:               newMigratePod("node1", "", shimv1.ContainerPhase_SCALED_DOWN),
 			deletePod:         true,
 			nodeName:          "node1",
 			expectedMigration: false,
 		},
 		"not deleted": {
-			pod:               newMigratePod("node1", ""),
+			pod:               newMigratePod("node1", "", shimv1.ContainerPhase_SCALED_DOWN),
 			deletePod:         false,
 			nodeName:          "node1",
 			expectedMigration: false,
@@ -98,15 +116,26 @@ func TestPodReconciler(t *testing.T) {
 	}
 }
 
-func newMigratePod(nodeName, runtimeClassName string) *corev1.Pod {
+func newMigratePod(nodeName, runtimeClassName string, phase shimv1.ContainerPhase) *corev1.Pod {
 	pod := newPod(corev1.ResourceList{})
 	pod.Name = ""
 	pod.GenerateName = "controller-test-"
 	pod.Spec.NodeName = nodeName
 	pod.Spec.RuntimeClassName = ptr.To(runtimeClassName)
-	pod.SetAnnotations(map[string]string{nodev1.MigrateAnnotationKey: pod.Spec.Containers[0].Name})
+	containerName := pod.Spec.Containers[0].Name
+	pod.SetAnnotations(map[string]string{
+		nodev1.MigrateAnnotationKey: pod.Spec.Containers[0].Name,
+	})
+	pod.SetLabels(map[string]string{
+		path.Join(StatusLabelKeyPrefix, containerName): phase.String(),
+	})
 	pod.Status.ContainerStatuses = []corev1.ContainerStatus{{
-		Name: pod.Spec.Containers[0].Name,
+		Name: containerName,
 	}}
+	return pod
+}
+
+func enableLiveMigration(pod *corev1.Pod) *corev1.Pod {
+	pod.Annotations[nodev1.LiveMigrateAnnotationKey] = pod.Spec.Containers[0].Name
 	return pod
 }
