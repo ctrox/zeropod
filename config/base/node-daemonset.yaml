@@ -33,6 +33,8 @@ spec:
               name: systemd-run
             - mountPath: /etc/criu
               name: criu-etc
+            - mountPath: /tls
+              name: tls
         - name: prepare-bpf-fs
           args:
           - mount | grep "/sys/fs/bpf type bpf" || mount -t bpf bpf /sys/fs/bpf
@@ -58,13 +60,30 @@ spec:
           ports:
             - name: metrics
               containerPort: 8080
+            - name: node-server
+              containerPort: 8090
+          env:
+            - name: POD_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.podIP
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
           volumeMounts:
+            - mountPath: /opt/zeropod
+              name: zeropod-opt
             - mountPath: /run/zeropod
               name: zeropod-run
+            - mountPath: /var/lib/zeropod
+              name: zeropod-var
             - mountPath: /hostproc
               name: hostproc
             - mountPath: /sys/fs/bpf
               name: bpf
+            - mountPath: /tls
+              name: tls
           securityContext:
             capabilities:
               add:
@@ -82,6 +101,9 @@ spec:
         - name: containerd-run
           hostPath:
             path: /run/containerd
+        - name: zeropod-var
+          hostPath:
+            path: /var/lib/zeropod
         - name: zeropod-opt
           hostPath:
             path: /opt/zeropod
@@ -102,3 +124,5 @@ spec:
             path: /sys/fs/bpf
             type: Directory
           name: bpf
+        - name: tls
+          emptyDir: {}

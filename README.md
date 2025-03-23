@@ -2,13 +2,16 @@
 
 Zeropod is a Kubernetes runtime (more specifically a containerd shim) that
 automatically checkpoints containers to disk after a certain amount of time of
-the last TCP connection. While in scaled down state, it will listen on the
-same port the application inside the container was listening on and will
-restore the container on the first incoming connection. Depending on the
-memory size of the checkpointed program this happens in tens to a few hundred
-milliseconds, virtually unnoticable to the user. As all the memory contents
-are stored to disk during checkpointing, all state of the application is
-restored.
+the last TCP connection. While in scaled down state, it will listen on the same
+port the application inside the container was listening on and will restore the
+container on the first incoming connection. Depending on the memory size of the
+checkpointed program this happens in tens to a few hundred milliseconds,
+virtually unnoticable to the user. As all the memory contents are stored to disk
+during checkpointing, all state of the application is restored. [It adjusts
+resource requests](#in-place-resource-scaling) in scaled down state in-place if
+the cluster supports it. To prevent huge resource usage spikes when draining a
+node, scaled down pods can be [migrated between nodes](#zeropodctroxdevmigrate)
+without needing to start up.
 
 ## Use-cases
 
@@ -17,6 +20,7 @@ that could work are:
 
 * Low traffic sites
 * Dev/Staging environments
+* Providing a small tier on Heroku-like platforms
 * "Mostly static" sites that still need some server component
 * Hopefully more to be found
 
@@ -116,14 +120,14 @@ issues with your software, please don't hesitate to create an issue.
 * Containerd 1.6+
 
 As zeropod is implemented using a [runtime
-class](https://kubernetes.io/docs/concepts/containers/runtime-class/), it
-needs to install binaries to your cluster nodes (by default in `/opt/zeropod`)
-and also configure Containerd to load the shim. If you first test this, it's
+class](https://kubernetes.io/docs/concepts/containers/runtime-class/), it needs
+to install binaries to your cluster nodes (by default in `/opt/zeropod`) and
+also configure Containerd to load the shim. If you first test this, it's
 probably best to use a [kind](https://kind.sigs.k8s.io) cluster or something
-similar that you can quickly setup and delete again. It uses a DaemonSet
-called `zeropod-node` for installing components on the node itself and also
-runs the `manager` component for attaching the eBPF programs and collecting
-metrics.
+similar that you can quickly setup and delete again. It uses a DaemonSet called
+`zeropod-node` for installing components on the node itself and also runs the
+`manager` component for attaching the eBPF programs, collecting metrics and
+facilitating migrations.
 
 ### Installation
 
@@ -220,48 +224,99 @@ spec:
 ```
 
 Then there are also a few optional annotations that can be set on the pod to
-tweak the behaviour of zeropod:
+tweak the behaviour of zeropod.
+
+### `zeropod.ctrox.dev/container-names`
+
+A comma-separated list of container-names in the pod that should be considered
+for scaling to zero. If unset or empty, all containers will be considered.
 
 ```yaml
-# container-names of containers in the pod that should be considered for
-# scaling to zero. If empty all containers will be considered.
 zeropod.ctrox.dev/container-names: "nginx,sidecar"
+```
 
-# ports-map configures the ports our to be scaled down application(s) are
-# listening on. As ports have to be matched with containers in a pod, the
-# key is the container name and the value a comma-delimited list of ports
-# any TCP connection on one of these ports will restore an application.
-# If omitted, the zeropod will try to find the listening ports automatically,
-# use this option in case this fails for your application.
+### `zeropod.ctrox.dev/ports-map`
+
+Ports-map configures the ports our to be scaled down application(s) are
+listening on. As ports have to be matched with containers in a pod, the key is
+the container name and the value a comma-delimited list of ports any TCP
+connection on one of these ports will restore an application. If omitted, the
+zeropod will try to find the listening ports automatically, use this option in
+case this fails for your application.
+
+```yaml
 zeropod.ctrox.dev/ports-map: "nginx=80,81;sidecar=8080"
+```
 
-# Configures long to wait before scaling down again after the last
-# connnection. The duration is reset whenever a connection happens.
-# Setting it to 0 means the application will be checkpointed as soon
-# as possible after restore. Use with caution as this will cause lots
-# of checkpoints/restores.
-# Default is 1 minute.
+### `zeropod.ctrox.dev/scaledown-duration`
+
+Configures how long to wait before scaling down again after the last
+connnection. The duration is reset whenever a connection happens. Setting it to
+0 disables scaling down. If unset it defaults to 1 minute.
+
+```yaml
 zeropod.ctrox.dev/scaledown-duration: 10s
+```
 
-# Execute a pre-dump before the full checkpoint and process stop. This can
-# reduce the checkpoint time in some cases but testing has shown that it also
-# has a small impact on restore time so YMMV. The default is false.
-# See https://criu.org/Memory_changes_tracking for details on what this does.
+### `zeropod.ctrox.dev/pre-dump`
+
+Execute a pre-dump before the full checkpoint and process stop. This can reduce
+the checkpoint time in some cases but testing has shown that it also has a small
+impact on restore time so YMMV. The default is false. See
+https://criu.org/Memory_changes_tracking for details on what this does.
+
+```yaml
 zeropod.ctrox.dev/pre-dump: "true"
+```
 
-# Disable checkpointing completely. This option was introduced for testing
-# purposes to measure how fast some applications can be restored from a complete
-# restart instead of from memory images. If enabled, the process will be
-# killed on scale-down and all state is lost. This might be useful for some
-# use-cases where the application is stateless and super fast to startup.
+### `zeropod.ctrox.dev/disable-checkpointing`
+
+Disable checkpointing completely. This option was introduced for testing
+purposes to measure how fast some applications can be restored from a complete
+restart instead of from memory images. If enabled, the process will be killed on
+scale-down and all state is lost. This might be useful for some use-cases where
+the application is stateless and super fast to startup.
+
+```yaml
 zeropod.ctrox.dev/disable-checkpointing: "true"
+```
 
-# Experimental:
-# It's possible to reduce the resource usage further by grouping multiple pods
-# into one shim process. The value of the annotation specifies the group id,
-# each of which will result in a shim process. This is currently marked as
-# experimental since not much testing has been done and new issues might
-# surface when using grouping.
+## Experimental features
+
+### `zeropod.ctrox.dev/migrate`
+
+Enables migration of scaled down containers by listing the containers to be
+migrated. When such an annotated pod is deleted and it's part of a Deployment,
+the new pod will fetch the checkpoints of these containers and instead of
+starting it will simply wait for activation again. This minmizes the surge in
+resources if for example a whole node of scaled down zeropods is drained.
+
+```yaml
+zeropod.ctrox.dev/migrate: "nginx,sidecar"
+```
+
+### `zeropod.ctrox.dev/live-migrate`
+
+Enables live-migration of a running container in the pod. Only one container per
+pod is supported at this point. When such an annotated pod is deleted and it's
+part of a Deployment, the new pod will do a lazy-migration of the memory
+contents. This requires
+[userfaultd](https://www.kernel.org/doc/html/latest/admin-guide/mm/userfaultfd.html)
+to be enabled in the host kernel (`CONFIG_USERFAULTFD`).
+
+```yaml
+zeropod.ctrox.dev/live-migrate: "nginx"
+```
+
+### `io.containerd.runc.v2.group`
+
+It's possible to reduce the resource usage further by grouping multiple pods
+into one shim process. The value of the annotation specifies the group id, each
+of which will result in a shim process. This is currently marked as experimental
+since not much testing has been done and new issues might surface when using
+grouping.
+
+```yaml
 io.containerd.runc.v2.group: "zeropod"
 ```
 
@@ -291,7 +346,7 @@ These are the responsibilities of the manager:
 - Collect metrics from all shim processes and expose them on HTTP for scraping.
 - Subscribes to shim scaling events and adjusts Pod requests.
 
-#### In-place Resource scaling (Experimental)
+#### In-place Resource scaling
 
 This makes use of the feature flag
 [InPlacePodVerticalScaling](https://github.com/kubernetes/enhancements/tree/master/keps/sig-node/1287-in-place-update-pod-resources)

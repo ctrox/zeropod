@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -21,6 +22,8 @@ const (
 	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledown-duration"
 	DisableCheckpoiningAnnotationKey = "zeropod.ctrox.dev/disable-checkpointing"
 	PreDumpAnnotationKey             = "zeropod.ctrox.dev/pre-dump"
+	MigrateAnnotationKey             = "zeropod.ctrox.dev/migrate"
+	LiveMigrateAnnotationKey         = "zeropod.ctrox.dev/live-migrate"
 	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
 	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
 
@@ -38,6 +41,8 @@ type annotationConfig struct {
 	ScaledownDuration     string `mapstructure:"zeropod.ctrox.dev/scaledown-duration"`
 	DisableCheckpointing  string `mapstructure:"zeropod.ctrox.dev/disable-checkpointing"`
 	PreDump               string `mapstructure:"zeropod.ctrox.dev/pre-dump"`
+	Migrate               string `mapstructure:"zeropod.ctrox.dev/migrate"`
+	LiveMigrate           string `mapstructure:"zeropod.ctrox.dev/live-migrate"`
 	ContainerName         string `mapstructure:"io.kubernetes.cri.container-name"`
 	ContainerType         string `mapstructure:"io.kubernetes.cri.container-type"`
 	PodName               string `mapstructure:"io.kubernetes.cri.sandbox-name"`
@@ -51,6 +56,8 @@ type Config struct {
 	ScaleDownDuration     time.Duration
 	DisableCheckpointing  bool
 	PreDump               bool
+	Migrate               []string
+	LiveMigrate           string
 	ContainerName         string
 	ContainerType         string
 	PodName               string
@@ -128,6 +135,11 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		containerNames = strings.Split(cfg.ZeropodContainerNames, containersDelim)
 	}
 
+	migrate := []string{}
+	if len(cfg.Migrate) != 0 {
+		migrate = strings.Split(cfg.Migrate, containersDelim)
+	}
+
 	ns, ok := namespaces.Namespace(ctx)
 	if !ok {
 		ns = defaultContainerdNS
@@ -138,6 +150,8 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ScaleDownDuration:     dur,
 		DisableCheckpointing:  disableCheckpointing,
 		PreDump:               preDump,
+		Migrate:               migrate,
+		LiveMigrate:           cfg.LiveMigrate,
 		ZeropodContainerNames: containerNames,
 		ContainerName:         cfg.ContainerName,
 		ContainerType:         cfg.ContainerType,
@@ -158,4 +172,16 @@ func (cfg Config) IsZeropodContainer() bool {
 
 	// if there is none specified, every one of them is considered.
 	return len(cfg.ZeropodContainerNames) == 0
+}
+
+func (cfg Config) migrationEnabled() bool {
+	return slices.Contains(cfg.Migrate, cfg.ContainerName)
+}
+
+func (cfg Config) LiveMigrationEnabled() bool {
+	return cfg.LiveMigrate == cfg.ContainerName
+}
+
+func (cfg Config) AnyMigrationEnabled() bool {
+	return cfg.migrationEnabled() || cfg.LiveMigrationEnabled()
 }

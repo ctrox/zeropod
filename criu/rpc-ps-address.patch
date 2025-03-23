@@ -1,0 +1,12 @@
+diff --git a/criu/cr-service.c b/criu/cr-service.c
+index deb16e553..f86f0e334 100644
+--- a/criu/cr-service.c
++++ b/criu/cr-service.c
+@@ -598,6 +598,7 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
+ 
+ 	if (req->ps) {
+ 		opts.port = (short)req->ps->port;
++		opts.addr = req->ps->address;
+ 
+ 		if (!opts.lazy_pages) {
+ 			opts.use_page_server = true;

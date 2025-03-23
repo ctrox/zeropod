@@ -12,6 +12,7 @@ import (
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/ctrox/zeropod/activator"
+	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 )
 
 const retryInterval = time.Second
@@ -38,6 +39,10 @@ func (c *Container) scaleDown(ctx context.Context) error {
 	if err := c.tracker.RemovePid(uint32(c.process.Pid())); err != nil {
 		// key could not exist, just log the error for now
 		log.G(ctx).Errorf("unable to remove pid %d: %s", c.process.Pid(), err)
+	}
+
+	if c.ScaledDown() {
+		return nil
 	}
 
 	if c.cfg.DisableCheckpointing {
@@ -71,13 +76,12 @@ func (c *Container) checkpoint(ctx context.Context) error {
 	c.checkpointRestore.Lock()
 	defer c.checkpointRestore.Unlock()
 
-	snapshotDir := snapshotDir(c.Bundle)
-
+	snapshotDir := nodev1.SnapshotPath(c.ID())
 	if err := os.RemoveAll(snapshotDir); err != nil {
 		return fmt.Errorf("unable to prepare snapshot dir: %w", err)
 	}
 
-	workDir := path.Join(snapshotDir, "work")
+	workDir := nodev1.WorkDirPath(c.ID())
 	log.G(ctx).Infof("checkpointing process %d of container to %s", c.process.Pid(), snapshotDir)
 
 	initProcess, ok := c.process.(*process.Init)
@@ -96,7 +100,7 @@ func (c *Container) checkpoint(ctx context.Context) error {
 
 	if c.cfg.PreDump {
 		// for the pre-dump we set the ImagePath to be a sub-path of our container image path
-		opts.ImagePath = preDumpDir(c.Bundle)
+		opts.ImagePath = nodev1.PreDumpDir(c.ID())
 
 		beforePreDump := time.Now()
 		if err := initProcess.Runtime().Checkpoint(ctx, c.ID(), opts, runcC.PreDump); err != nil {
@@ -114,12 +118,12 @@ func (c *Container) checkpoint(ctx context.Context) error {
 
 	if c.cfg.PreDump {
 		// ParentPath is the relative path from the ImagePath to the pre-dump dir.
-		opts.ParentPath = relativePreDumpDir()
+		opts.ParentPath = nodev1.RelativePreDumpDir()
 	}
 
 	c.AddCheckpointedPID(c.Pid())
 	// ImagePath is always the same, regardless of pre-dump
-	opts.ImagePath = containerDir(c.Bundle)
+	opts.ImagePath = nodev1.SnapshotPath(c.ID())
 
 	beforeCheckpoint := time.Now()
 	if err := initProcess.Runtime().Checkpoint(ctx, c.ID(), opts); err != nil {

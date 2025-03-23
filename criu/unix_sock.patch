@@ -1,0 +1,73 @@
+diff --git a/criu/util.c b/criu/util.c
+index d2bc9a865..38c1a42e3 100644
+--- a/criu/util.c
++++ b/criu/util.c
+@@ -12,6 +12,7 @@
+ #include <fcntl.h>
+ #include <poll.h>
+ #include <arpa/inet.h>
++#include <sys/un.h>
+ #include <sys/mount.h>
+ #include <sys/param.h>
+ #include <sys/types.h>
+@@ -1193,10 +1194,9 @@ static int get_sockaddr_in(struct sockaddr_storage *addr, char *host, unsigned s
+ 	} else if (inet_pton(AF_INET6, host, &((struct sockaddr_in6 *)addr)->sin6_addr)) {
+ 		addr->ss_family = AF_INET6;
+ 	} else {
+-		pr_err("Invalid server address \"%s\". "
+-		       "The address must be in IPv4 or IPv6 format.\n",
+-		       host);
+-		return -1;
++		struct sockaddr_un *sun = (struct sockaddr_un *)addr;
++		sun->sun_family = AF_UNIX;
++		strcpy(sun->sun_path, host);
+ 	}
+ 
+ 	if (addr->ss_family == AF_INET6) {
+@@ -1219,9 +1219,13 @@ int setup_tcp_server(char *type, char *addr, unsigned short *port)
+ 		return -1;
+ 	}
+ 
+-	pr_info("Starting %s server on port %u\n", type, *port);
++	if (saddr.ss_family == AF_UNIX) {
++		pr_info("Starting %s server on socket %s\n", type, addr);
++	} else {
++		pr_info("Starting %s server on port %u\n", type, *port);
++	}
+ 
+-	sk = socket(saddr.ss_family, SOCK_STREAM, IPPROTO_TCP);
++	sk = socket(saddr.ss_family, SOCK_STREAM, IPPROTO_IP);
+ 
+ 	if (sk < 0) {
+ 		pr_perror("Can't init %s server", type);
+@@ -1233,6 +1237,10 @@ int setup_tcp_server(char *type, char *addr, unsigned short *port)
+ 		goto out;
+ 	}
+ 
++    if (saddr.ss_family == AF_UNIX) {
++        slen = sizeof(struct sockaddr_un);
++    }
++
+ 	if (bind(sk, (struct sockaddr *)&saddr, slen)) {
+ 		pr_perror("Can't bind %s server", type);
+ 		goto out;
+@@ -1244,7 +1252,7 @@ int setup_tcp_server(char *type, char *addr, unsigned short *port)
+ 	}
+ 
+ 	/* Get socket port in case of autobind */
+-	if ((*port) == 0) {
++	if (saddr.ss_family != AF_UNIX && (*port) == 0) {
+ 		if (getsockname(sk, (struct sockaddr *)&saddr, &slen)) {
+ 			pr_perror("Can't get %s server name", type);
+ 			goto out;
+@@ -1306,8 +1314,8 @@ int run_tcp_server(bool daemon_mode, int *ask, int cfd, int sk)
+ 		ret = getnameinfo((struct sockaddr *)&caddr, clen, address, sizeof(address), port, sizeof(port),
+ 				  NI_NUMERICHOST | NI_NUMERICSERV);
+ 		if (ret) {
+-			pr_err("Failed converting address: %s\n", gai_strerror(ret));
+-			goto err;
++			pr_err("Failed converting address: %d\n", ret);
++			// goto err;
+ 		}
+ 		pr_info("Accepted connection from %s:%s\n", address, port);
+ 		close(sk);
