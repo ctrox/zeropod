@@ -22,7 +22,7 @@ import (
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager"
-	"github.com/ctrox/zeropod/zeropod"
+	"github.com/ctrox/zeropod/shim"
 	"github.com/go-logr/logr"
 	"github.com/phayes/freeport"
 	"github.com/pkg/errors"
@@ -192,12 +192,12 @@ func startKind(t testing.TB, name, kubeconfig string, port int) (c *rest.Config,
 				},
 				{
 					Role:        v1alpha4.WorkerRole,
-					Labels:      map[string]string{zeropod.NodeLabel: "true"},
+					Labels:      map[string]string{shim.NodeLabel: "true"},
 					ExtraMounts: extraMounts,
 				},
 				{
 					Role:        v1alpha4.WorkerRole,
-					Labels:      map[string]string{zeropod.NodeLabel: "true"},
+					Labels:      map[string]string{shim.NodeLabel: "true"},
 					ExtraMounts: extraMounts,
 				},
 			},
@@ -388,37 +388,37 @@ func annotations(annotations map[string]string) podOption {
 
 func preDump(preDump bool) podOption {
 	return annotations(map[string]string{
-		zeropod.PreDumpAnnotationKey: strconv.FormatBool(preDump),
+		shim.PreDumpAnnotationKey: strconv.FormatBool(preDump),
 	})
 }
 
 func scaleDownAfter(dur time.Duration) podOption {
 	return annotations(map[string]string{
-		zeropod.ScaleDownDurationAnnotationKey: dur.String(),
+		shim.ScaleDownDurationAnnotationKey: dur.String(),
 	})
 }
 
 func containerNamesAnnotation(names ...string) podOption {
 	return annotations(map[string]string{
-		zeropod.ContainerNamesAnnotationKey: strings.Join(names, ","),
+		shim.ContainerNamesAnnotationKey: strings.Join(names, ","),
 	})
 }
 
 func portsAnnotation(portsMap string) podOption {
 	return annotations(map[string]string{
-		zeropod.PortsAnnotationKey: portsMap,
+		shim.PortsAnnotationKey: portsMap,
 	})
 }
 
 func migrateAnnotation(container string) podOption {
 	return annotations(map[string]string{
-		zeropod.MigrateAnnotationKey: container,
+		shim.MigrateAnnotationKey: container,
 	})
 }
 
 func liveMigrateAnnotation(container string) podOption {
 	return annotations(map[string]string{
-		zeropod.LiveMigrateAnnotationKey: container,
+		shim.LiveMigrateAnnotationKey: container,
 	})
 }
 
@@ -734,14 +734,14 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 }
 
 func restoreCount(t testing.TB, ctx context.Context, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
-	val, err := getNodeMetric(t, ctx, client, cfg, zeropod.MetricRestoreDuration)
+	val, err := getNodeMetric(t, ctx, client, cfg, shim.MetricRestoreDuration)
 	if err != nil {
 		return 0, err
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
-		zeropod.LabelPodName:      pod.Name,
-		zeropod.LabelPodNamespace: pod.Namespace,
+		shim.LabelPodName:      pod.Name,
+		shim.LabelPodNamespace: pod.Namespace,
 	})
 	if !ok {
 		return 0, fmt.Errorf("could not find restore duration metric that matches pod: %s/%s: %w",
@@ -827,7 +827,7 @@ func metricMatchesLabel(metric *dto.Metric, key, value string) bool {
 
 func getNodeMetric(t testing.TB, ctx context.Context, c client.Client, cfg *rest.Config, metricName string) (*dto.MetricFamily, error) {
 	var val *dto.MetricFamily
-	metric := prometheus.BuildFQName(zeropod.MetricsNamespace, "", metricName)
+	metric := prometheus.BuildFQName(shim.MetricsNamespace, "", metricName)
 	if !assert.Eventually(t, func() bool {
 		mfs, err := getNodeMetrics(ctx, c, cfg)
 		if err != nil {

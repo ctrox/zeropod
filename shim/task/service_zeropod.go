@@ -24,7 +24,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/zeropod"
+	zshim "github.com/ctrox/zeropod/shim"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -62,7 +62,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	w := &wrapper{
 		service:           s,
 		checkpointRestore: sync.Mutex{},
-		zeropodContainers: make(map[string]*zeropod.Container),
+		zeropodContainers: make(map[string]*zshim.Container),
 		zeropodEvents:     make(chan *v1.ContainerStatus, 128),
 		exitChan:          reaper.Default.Subscribe(),
 	}
@@ -98,7 +98,7 @@ type wrapper struct {
 
 	mut               sync.Mutex
 	checkpointRestore sync.Mutex
-	zeropodContainers map[string]*zeropod.Container
+	zeropodContainers map[string]*zshim.Container
 	zeropodEvents     chan *v1.ContainerStatus
 	exitChan          chan runcC.Exit
 }
@@ -109,12 +109,12 @@ func (w *wrapper) RegisterTTRPC(server *ttrpc.Server) error {
 }
 
 func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
-	spec, err := zeropod.GetSpec(r.Bundle)
+	spec, err := zshim.GetSpec(r.Bundle)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg, err := zeropod.NewConfig(ctx, spec)
+	cfg, err := zshim.NewConfig(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -127,17 +127,17 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return w.service.Create(ctx, r)
 	}
 
-	zeropodContainer, err := zeropod.New(w.context, cfg, r.ID, &w.checkpointRestore, w.platform, w.zeropodEvents)
+	zeropodContainer, err := zshim.New(w.context, cfg, r.ID, &w.checkpointRestore, w.platform, w.zeropodEvents)
 	if err != nil {
 		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}
 
 	w.setZeropodContainer(r.ID, zeropodContainer)
-	zeropodContainer.RegisterPreRestore(func() zeropod.HandleStartedFunc {
+	zeropodContainer.RegisterPreRestore(func() zshim.HandleStartedFunc {
 		return w.preRestore()
 	})
 
-	zeropodContainer.RegisterPostRestore(func(c *runc.Container, handleStarted zeropod.HandleStartedFunc) {
+	zeropodContainer.RegisterPostRestore(func(c *runc.Container, handleStarted zshim.HandleStartedFunc) {
 		w.postRestore(c, handleStarted)
 	})
 
@@ -148,9 +148,9 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	})
 
 	if cfg.AnyMigrationEnabled() {
-		skipStart, err := zeropod.MigrationRestore(ctx, r, cfg)
+		skipStart, err := zshim.MigrationRestore(ctx, r, cfg)
 		if err != nil {
-			if !errors.Is(err, zeropod.ErrRestoreRequestFailed) {
+			if !errors.Is(err, zshim.ErrRestoreRequestFailed) {
 				return nil, err
 			}
 			// if the restore fails with ErrRestoreRequestFailed it's very
@@ -197,7 +197,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	}
 
 	if zeropodContainer.Config().AnyMigrationEnabled() {
-		if err := zeropod.FinishRestore(ctx, r.ID, zeropodContainer.Config(), beforeStart); err != nil {
+		if err := zshim.FinishRestore(ctx, r.ID, zeropodContainer.Config(), beforeStart); err != nil {
 			log.G(ctx).Errorf("error finishing restore: %s", err)
 		}
 	}
@@ -212,13 +212,13 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	return resp, err
 }
 
-func (w *wrapper) setZeropodContainer(id string, container *zeropod.Container) {
+func (w *wrapper) setZeropodContainer(id string, container *zshim.Container) {
 	w.mut.Lock()
 	w.zeropodContainers[id] = container
 	w.mut.Unlock()
 }
 
-func (w *wrapper) getZeropodContainer(id string) (*zeropod.Container, bool) {
+func (w *wrapper) getZeropodContainer(id string) (*zshim.Container, bool) {
 	w.mut.Lock()
 	container, ok := w.zeropodContainers[id]
 	w.mut.Unlock()
@@ -381,7 +381,7 @@ func (w *wrapper) preventExit(cp containerProcess) bool {
 
 // preRestore should be called before restoring as it calls preStart in the
 // task service to get the handleStarted closure.
-func (w *wrapper) preRestore() zeropod.HandleStartedFunc {
+func (w *wrapper) preRestore() zshim.HandleStartedFunc {
 	handleStarted, cleanup := w.preStart(nil)
 	defer cleanup()
 	return handleStarted
@@ -391,7 +391,7 @@ func (w *wrapper) preRestore() zeropod.HandleStartedFunc {
 // to call after restore since the container object will have changed.
 // Additionally, this also calls the passed in handleStarted to make sure we
 // monitor the process exits of the newly restored process.
-func (w *wrapper) postRestore(container *runc.Container, handleStarted zeropod.HandleStartedFunc) {
+func (w *wrapper) postRestore(container *runc.Container, handleStarted zshim.HandleStartedFunc) {
 	w.mu.Lock()
 	p, _ := container.Process("")
 	w.containers[container.ID] = container

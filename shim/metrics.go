@@ -1,4 +1,4 @@
-package zeropod
+package shim
 
 import (
 	"github.com/prometheus/client_golang/prometheus"

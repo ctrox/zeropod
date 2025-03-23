@@ -16,7 +16,7 @@ import (
 
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/runc/task"
+	"github.com/ctrox/zeropod/shim/task"
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/protobuf/types/known/emptypb"
 	corev1 "k8s.io/api/core/v1"

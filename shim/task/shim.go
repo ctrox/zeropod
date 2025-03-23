@@ -11,7 +11,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/zeropod"
+	zshim "github.com/ctrox/zeropod/shim"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -59,7 +59,7 @@ func startShimServer(ctx context.Context, id string, events chan *v1.ContainerSt
 	}
 	defer s.Close()
 
-	v1.RegisterShimService(s, &shimService{metrics: zeropod.NewRegistry(), events: events})
+	v1.RegisterShimService(s, &shimService{metrics: zshim.NewRegistry(), events: events})
 
 	defer func() {
 		s.Close()

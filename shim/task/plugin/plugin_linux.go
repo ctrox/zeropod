@@ -20,7 +20,7 @@ import (
 	"github.com/containerd/containerd/pkg/shutdown"
 	"github.com/containerd/containerd/plugin"
 	"github.com/containerd/containerd/runtime/v2/shim"
-	"github.com/ctrox/zeropod/runc/task"
+	"github.com/ctrox/zeropod/shim/task"
 )
 
 func init() {
