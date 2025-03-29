@@ -734,14 +734,14 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 }
 
 func restoreCount(t testing.TB, ctx context.Context, client client.Client, cfg *rest.Config, pod *corev1.Pod) (int, error) {
-	val, err := getNodeMetric(t, ctx, client, cfg, shim.MetricRestoreDuration)
+	val, err := getNodeMetric(t, ctx, client, cfg, manager.MetricRestoreDuration)
 	if err != nil {
 		return 0, err
 	}
 
 	metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
-		shim.LabelPodName:      pod.Name,
-		shim.LabelPodNamespace: pod.Namespace,
+		manager.LabelPodName:      pod.Name,
+		manager.LabelPodNamespace: pod.Namespace,
 	})
 	if !ok {
 		return 0, fmt.Errorf("could not find restore duration metric that matches pod: %s/%s: %w",
@@ -827,7 +827,7 @@ func metricMatchesLabel(metric *dto.Metric, key, value string) bool {
 
 func getNodeMetric(t testing.TB, ctx context.Context, c client.Client, cfg *rest.Config, metricName string) (*dto.MetricFamily, error) {
 	var val *dto.MetricFamily
-	metric := prometheus.BuildFQName(shim.MetricsNamespace, "", metricName)
+	metric := prometheus.BuildFQName(manager.MetricsNamespace, "", metricName)
 	if !assert.Eventually(t, func() bool {
 		mfs, err := getNodeMetrics(ctx, c, cfg)
 		if err != nil {
