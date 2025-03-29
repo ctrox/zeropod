@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/pkg/stdio"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
+	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
