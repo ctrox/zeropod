@@ -39,7 +39,7 @@ build:
 	CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -ldflags '${SHIM_LDFLAGS}' -o containerd-shim-zeropod-v2 cmd/shim/main.go
 
 logs:
-	docker exec -ti kind-control-plane journalctl -fu containerd
+	docker exec kind-worker journalctl -fu containerd & docker exec kind-worker2 journalctl -fu containerd
 
 build-criu:
 	docker buildx build --push --platform linux/arm64,linux/amd64 --build-arg CRIU_VERSION=$(CRIU_VERSION) -t $(CRIU_IMAGE) -f criu/Dockerfile .

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/containerd/containerd/pkg/process"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
@@ -148,6 +148,9 @@ func (c *Container) evac(ctx context.Context) error {
 				return fmt.Errorf("requesting evac: %w", err)
 			}
 		case <-done:
+			// once checkpointed, consider the container scaled down to ensure
+			// proper exit cleanup
+			c.SetScaledDown(true)
 			log.G(ctx).Info("done case")
 			return nil
 		}

@@ -18,10 +18,11 @@ import (
 	"time"
 
 	"github.com/checkpoint-restore/go-criu/v7/stats"
-	"github.com/containerd/containerd/runtime/v2/shim"
+	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/ttrpc"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
+	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/mholt/archives"
 	"google.golang.org/protobuf/types/known/emptypb"
 	appsv1 "k8s.io/api/apps/v1"
@@ -138,7 +139,7 @@ func setupUnixListener() (*net.UnixListener, error) {
 	}
 
 	// write socket address to filesystem
-	if err := shim.WriteAddress("shim_address", socket); err != nil {
+	if err := shimv1.WriteAddress("shim_address", socket); err != nil {
 		return nil, fmt.Errorf("failed to write shim address: %w", err)
 	}
 

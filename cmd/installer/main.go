@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/services/server/config"
+	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/coreos/go-systemd/v22/dbus"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager/node"

@@ -9,16 +9,16 @@ import (
 	"time"
 
 	"github.com/containerd/cgroups/v3"
-	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
+	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/pkg/cri/annotations"
-	"github.com/containerd/containerd/pkg/oom"
-	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
-	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
-	"github.com/containerd/containerd/pkg/shutdown"
-	"github.com/containerd/containerd/runtime/v2/runc"
-	"github.com/containerd/containerd/runtime/v2/shim"
-	"github.com/containerd/containerd/sys/reaper"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
+	"github.com/containerd/containerd/v2/pkg/oom"
+	oomv1 "github.com/containerd/containerd/v2/pkg/oom/v1"
+	oomv2 "github.com/containerd/containerd/v2/pkg/oom/v2"
+	"github.com/containerd/containerd/v2/pkg/shim"
+	"github.com/containerd/containerd/v2/pkg/shutdown"
+	"github.com/containerd/containerd/v2/pkg/sys/reaper"
 	"github.com/containerd/errdefs"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
@@ -29,10 +29,10 @@ import (
 )
 
 var (
-	_ = (taskAPI.TaskService)(&wrapper{})
+	_ = (shim.TTRPCService)(&wrapper{})
 )
 
-func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TaskService, error) {
+func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TTRPCTaskService, error) {
 	var (
 		ep  oom.Watcher
 		err error
@@ -45,6 +45,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	if err != nil {
 		return nil, err
 	}
+
 	go ep.Run(ctx)
 	s := &service{
 		context:              ctx,
@@ -66,7 +67,9 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		zeropodEvents:     make(chan *v1.ContainerStatus, 128),
 		exitChan:          reaper.Default.Subscribe(),
 	}
+
 	go w.processExits()
+
 	runcC.Monitor = reaper.Default
 	if err := w.initPlatform(); err != nil {
 		return nil, fmt.Errorf("failed to initialized platform behavior: %w", err)
@@ -77,18 +80,20 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		return nil
 	})
 
-	address, err := shim.ReadAddress("address")
-	if err != nil {
-		return nil, err
+	if address, err := shim.ReadAddress("address"); err == nil {
+		sd.RegisterCallback(func(context.Context) error {
+			if err := shim.RemoveSocket(shimSocketAddress(address)); err != nil {
+				log.G(ctx).Errorf("removing zeropod socket: %s", err)
+			}
+			return shim.RemoveSocket(address)
+		})
 	}
-	sd.RegisterCallback(func(context.Context) error {
-		if err := shim.RemoveSocket(shimSocketAddress(address)); err != nil {
-			log.G(ctx).Errorf("removing zeropod socket: %s", err)
-		}
-		return shim.RemoveSocket(address)
-	})
 
-	go startShimServer(ctx, address, w.zeropodEvents)
+	if id, err := shimID(); err == nil {
+		go startShimServer(ctx, id, w.zeropodEvents)
+	} else {
+		log.G(ctx).Errorf("unable to get shim ID: %s", err)
+	}
 
 	return w, nil
 }
@@ -104,7 +109,8 @@ type wrapper struct {
 }
 
 func (w *wrapper) RegisterTTRPC(server *ttrpc.Server) error {
-	taskAPI.RegisterTaskService(server, w)
+	// TODO: switch to taskServiceV3 once containerd 2 is widely adopted.
+	registerTaskService(taskServiceV2, server, w)
 	return nil
 }
 
@@ -326,7 +332,7 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 		zeropodContainer.Stop(ctx)
 
 		if err := zeropodContainer.Process().Kill(ctx, r.Signal, r.All); err != nil {
-			return nil, errdefs.ToGRPC(err)
+			return nil, errdefs.Resolve(err)
 		}
 
 		zeropodContainer.InitialProcess().SetExited(0)
