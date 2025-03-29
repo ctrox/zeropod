@@ -2,16 +2,17 @@ package task
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
 
-	"github.com/containerd/containerd/runtime/v2/shim"
+	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/zeropod"
+	zshim "github.com/ctrox/zeropod/shim"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -19,6 +20,28 @@ const ShimSocketPath = "/run/zeropod/s/"
 
 func shimSocketAddress(containerdSocket string) string {
 	return fmt.Sprintf("unix://%s.sock", filepath.Join(ShimSocketPath, path.Base(containerdSocket)))
+}
+
+func shimID() (string, error) {
+	address, err := shim.ReadAddress("address")
+	if err == nil {
+		return address, nil
+	}
+
+	path, err := filepath.Abs("bootstrap.json")
+	if err != nil {
+		return "", fmt.Errorf("reading bootstrap.json: %w", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("reading bootstrap.json: %w", err)
+	}
+	var params shim.BootstrapParams
+	if err := json.Unmarshal(data, &params); err != nil {
+		return "", fmt.Errorf("unmarshalling bootstrap.json: %w", err)
+	}
+
+	return filepath.Base(params.Address), nil
 }
 
 func startShimServer(ctx context.Context, id string, events chan *v1.ContainerStatus) {
@@ -47,7 +70,7 @@ func startShimServer(ctx context.Context, id string, events chan *v1.ContainerSt
 
 	log.G(ctx).Infof("starting shim server at %s", socket)
 	// write shim address to filesystem
-	if err := shim.WriteAddress("shim_address", socket); err != nil {
+	if err := v1.WriteAddress("shim_address", socket); err != nil {
 		log.G(ctx).WithError(err).Errorf("failed to write shim address")
 		return
 	}
@@ -59,7 +82,7 @@ func startShimServer(ctx context.Context, id string, events chan *v1.ContainerSt
 	}
 	defer s.Close()
 
-	v1.RegisterShimService(s, &shimService{metrics: zeropod.NewRegistry(), events: events})
+	v1.RegisterShimService(s, &shimService{metrics: zshim.NewRegistry(), events: events})
 
 	defer func() {
 		s.Close()

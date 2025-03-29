@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/containerd/containerd"
 	"github.com/containerd/containerd/services/server/config"
+	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/coreos/go-systemd/v22/dbus"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager/node"
-	"github.com/ctrox/zeropod/zeropod"
+	"github.com/ctrox/zeropod/shim"
 	corev1 "k8s.io/api/core/v1"
 	knodev1 "k8s.io/api/node/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -342,7 +342,7 @@ func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error
 	runtimeClass := &knodev1.RuntimeClass{
 		ObjectMeta: metav1.ObjectMeta{Name: v1.RuntimeClassName},
 		Handler:    v1.RuntimeClassName,
-		Scheduling: &knodev1.Scheduling{NodeSelector: map[string]string{zeropod.NodeLabel: "true"}},
+		Scheduling: &knodev1.Scheduling{NodeSelector: map[string]string{shim.NodeLabel: "true"}},
 	}
 
 	if _, err := client.NodeV1().RuntimeClasses().Create(ctx, runtimeClass, metav1.CreateOptions{}); err != nil {

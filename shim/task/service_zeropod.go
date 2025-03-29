@@ -9,30 +9,30 @@ import (
 	"time"
 
 	"github.com/containerd/cgroups/v3"
-	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
+	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/pkg/cri/annotations"
-	"github.com/containerd/containerd/pkg/oom"
-	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
-	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
-	"github.com/containerd/containerd/pkg/shutdown"
-	"github.com/containerd/containerd/runtime/v2/runc"
-	"github.com/containerd/containerd/runtime/v2/shim"
-	"github.com/containerd/containerd/sys/reaper"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
+	"github.com/containerd/containerd/v2/pkg/oom"
+	oomv1 "github.com/containerd/containerd/v2/pkg/oom/v1"
+	oomv2 "github.com/containerd/containerd/v2/pkg/oom/v2"
+	"github.com/containerd/containerd/v2/pkg/shim"
+	"github.com/containerd/containerd/v2/pkg/shutdown"
+	"github.com/containerd/containerd/v2/pkg/sys/reaper"
 	"github.com/containerd/errdefs"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/zeropod"
+	zshim "github.com/ctrox/zeropod/shim"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var (
-	_ = (taskAPI.TaskService)(&wrapper{})
+	_ = (shim.TTRPCService)(&wrapper{})
 )
 
-func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TaskService, error) {
+func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TTRPCTaskService, error) {
 	var (
 		ep  oom.Watcher
 		err error
@@ -45,6 +45,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	if err != nil {
 		return nil, err
 	}
+
 	go ep.Run(ctx)
 	s := &service{
 		context:              ctx,
@@ -62,11 +63,13 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	w := &wrapper{
 		service:           s,
 		checkpointRestore: sync.Mutex{},
-		zeropodContainers: make(map[string]*zeropod.Container),
+		zeropodContainers: make(map[string]*zshim.Container),
 		zeropodEvents:     make(chan *v1.ContainerStatus, 128),
 		exitChan:          reaper.Default.Subscribe(),
 	}
+
 	go w.processExits()
+
 	runcC.Monitor = reaper.Default
 	if err := w.initPlatform(); err != nil {
 		return nil, fmt.Errorf("failed to initialized platform behavior: %w", err)
@@ -77,18 +80,20 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		return nil
 	})
 
-	address, err := shim.ReadAddress("address")
-	if err != nil {
-		return nil, err
+	if address, err := shim.ReadAddress("address"); err == nil {
+		sd.RegisterCallback(func(context.Context) error {
+			if err := shim.RemoveSocket(shimSocketAddress(address)); err != nil {
+				log.G(ctx).Errorf("removing zeropod socket: %s", err)
+			}
+			return shim.RemoveSocket(address)
+		})
 	}
-	sd.RegisterCallback(func(context.Context) error {
-		if err := shim.RemoveSocket(shimSocketAddress(address)); err != nil {
-			log.G(ctx).Errorf("removing zeropod socket: %s", err)
-		}
-		return shim.RemoveSocket(address)
-	})
 
-	go startShimServer(ctx, address, w.zeropodEvents)
+	if id, err := shimID(); err == nil {
+		go startShimServer(ctx, id, w.zeropodEvents)
+	} else {
+		log.G(ctx).Errorf("unable to get shim ID: %s", err)
+	}
 
 	return w, nil
 }
@@ -98,23 +103,24 @@ type wrapper struct {
 
 	mut               sync.Mutex
 	checkpointRestore sync.Mutex
-	zeropodContainers map[string]*zeropod.Container
+	zeropodContainers map[string]*zshim.Container
 	zeropodEvents     chan *v1.ContainerStatus
 	exitChan          chan runcC.Exit
 }
 
 func (w *wrapper) RegisterTTRPC(server *ttrpc.Server) error {
-	taskAPI.RegisterTaskService(server, w)
+	// TODO: switch to taskServiceV3 once containerd 2 is widely adopted.
+	registerTaskService(taskServiceV2, server, w)
 	return nil
 }
 
 func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *taskAPI.CreateTaskResponse, err error) {
-	spec, err := zeropod.GetSpec(r.Bundle)
+	spec, err := zshim.GetSpec(r.Bundle)
 	if err != nil {
 		return nil, err
 	}
 
-	cfg, err := zeropod.NewConfig(ctx, spec)
+	cfg, err := zshim.NewConfig(ctx, spec)
 	if err != nil {
 		return nil, err
 	}
@@ -127,17 +133,17 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return w.service.Create(ctx, r)
 	}
 
-	zeropodContainer, err := zeropod.New(w.context, cfg, r.ID, &w.checkpointRestore, w.platform, w.zeropodEvents)
+	zeropodContainer, err := zshim.New(w.context, cfg, r.ID, &w.checkpointRestore, w.platform, w.zeropodEvents)
 	if err != nil {
 		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}
 
 	w.setZeropodContainer(r.ID, zeropodContainer)
-	zeropodContainer.RegisterPreRestore(func() zeropod.HandleStartedFunc {
+	zeropodContainer.RegisterPreRestore(func() zshim.HandleStartedFunc {
 		return w.preRestore()
 	})
 
-	zeropodContainer.RegisterPostRestore(func(c *runc.Container, handleStarted zeropod.HandleStartedFunc) {
+	zeropodContainer.RegisterPostRestore(func(c *runc.Container, handleStarted zshim.HandleStartedFunc) {
 		w.postRestore(c, handleStarted)
 	})
 
@@ -148,9 +154,9 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 	})
 
 	if cfg.AnyMigrationEnabled() {
-		skipStart, err := zeropod.MigrationRestore(ctx, r, cfg)
+		skipStart, err := zshim.MigrationRestore(ctx, r, cfg)
 		if err != nil {
-			if !errors.Is(err, zeropod.ErrRestoreRequestFailed) {
+			if !errors.Is(err, zshim.ErrRestoreRequestFailed) {
 				return nil, err
 			}
 			// if the restore fails with ErrRestoreRequestFailed it's very
@@ -197,7 +203,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	}
 
 	if zeropodContainer.Config().AnyMigrationEnabled() {
-		if err := zeropod.FinishRestore(ctx, r.ID, zeropodContainer.Config(), beforeStart); err != nil {
+		if err := zshim.FinishRestore(ctx, r.ID, zeropodContainer.Config(), beforeStart); err != nil {
 			log.G(ctx).Errorf("error finishing restore: %s", err)
 		}
 	}
@@ -212,13 +218,13 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	return resp, err
 }
 
-func (w *wrapper) setZeropodContainer(id string, container *zeropod.Container) {
+func (w *wrapper) setZeropodContainer(id string, container *zshim.Container) {
 	w.mut.Lock()
 	w.zeropodContainers[id] = container
 	w.mut.Unlock()
 }
 
-func (w *wrapper) getZeropodContainer(id string) (*zeropod.Container, bool) {
+func (w *wrapper) getZeropodContainer(id string) (*zshim.Container, bool) {
 	w.mut.Lock()
 	container, ok := w.zeropodContainers[id]
 	w.mut.Unlock()
@@ -326,7 +332,7 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 		zeropodContainer.Stop(ctx)
 
 		if err := zeropodContainer.Process().Kill(ctx, r.Signal, r.All); err != nil {
-			return nil, errdefs.ToGRPC(err)
+			return nil, errdefs.Resolve(err)
 		}
 
 		zeropodContainer.InitialProcess().SetExited(0)
@@ -381,7 +387,7 @@ func (w *wrapper) preventExit(cp containerProcess) bool {
 
 // preRestore should be called before restoring as it calls preStart in the
 // task service to get the handleStarted closure.
-func (w *wrapper) preRestore() zeropod.HandleStartedFunc {
+func (w *wrapper) preRestore() zshim.HandleStartedFunc {
 	handleStarted, cleanup := w.preStart(nil)
 	defer cleanup()
 	return handleStarted
@@ -391,7 +397,7 @@ func (w *wrapper) preRestore() zeropod.HandleStartedFunc {
 // to call after restore since the container object will have changed.
 // Additionally, this also calls the passed in handleStarted to make sure we
 // monitor the process exits of the newly restored process.
-func (w *wrapper) postRestore(container *runc.Container, handleStarted zeropod.HandleStartedFunc) {
+func (w *wrapper) postRestore(container *runc.Container, handleStarted zshim.HandleStartedFunc) {
 	w.mu.Lock()
 	p, _ := container.Process("")
 	w.containers[container.ID] = container

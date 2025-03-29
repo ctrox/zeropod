@@ -1,4 +1,4 @@
-package zeropod
+package shim
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"path"
 	"time"
 
-	"github.com/containerd/containerd/pkg/process"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/ctrox/zeropod/activator"

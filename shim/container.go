@@ -1,4 +1,4 @@
-package zeropod
+package shim
 
 import (
 	"context"
@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
-	"github.com/containerd/containerd/runtime/v2/runc"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
 	"github.com/containerd/errdefs"
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
@@ -87,7 +87,7 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 
 	p, err := container.Process("")
 	if err != nil {
-		return errdefs.ToGRPC(err)
+		return errdefs.Resolve(err)
 	}
 	c.process = p
 	c.initialProcess = p

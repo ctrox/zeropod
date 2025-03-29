@@ -1,4 +1,4 @@
-package zeropod
+package shim
 
 import (
 	"context"
@@ -10,15 +10,15 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/containerd/containerd/api/runtime/task/v2"
+	"github.com/containerd/containerd/api/runtime/task/v3"
+	"github.com/containerd/containerd/api/types/runc/options"
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/namespaces"
 	crio "github.com/containerd/containerd/pkg/cri/io"
 	cioutil "github.com/containerd/containerd/pkg/ioutil"
-	"github.com/containerd/containerd/pkg/process"
 	"github.com/containerd/containerd/pkg/stdio"
-	"github.com/containerd/containerd/runtime/v2/runc"
-	"github.com/containerd/containerd/runtime/v2/runc/options"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/node/v1"
@@ -43,7 +43,15 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		// as soon as we checkpoint the container, the log pipe is closed. As
 		// we currently have no way to instruct containerd to restore the logs
 		// and pipe it again, we do it manually.
-		if err := c.restoreLoggers(c.ID(), c.initialProcess.Stdio()); err != nil {
+		if err := c.restoreLoggers(
+			c.ID(),
+			stdio.Stdio{
+				Stdin:    c.initialProcess.Stdio().Stdin,
+				Stdout:   c.initialProcess.Stdio().Stdout,
+				Stderr:   c.initialProcess.Stdio().Stderr,
+				Terminal: c.initialProcess.Stdio().Terminal,
+			},
+		); err != nil {
 			log.G(ctx).Errorf("error restoring loggers: %s", err)
 		}
 	}()

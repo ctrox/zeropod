@@ -30,35 +30,38 @@ import (
 	"github.com/containerd/cgroups/v3/cgroup1"
 	cgroupsv2 "github.com/containerd/cgroups/v3/cgroup2"
 	eventstypes "github.com/containerd/containerd/api/events"
-	taskAPI "github.com/containerd/containerd/api/runtime/task/v2"
+	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
+	"github.com/containerd/containerd/api/types/runc/options"
 	"github.com/containerd/containerd/api/types/task"
-	"github.com/containerd/containerd/namespaces"
-	"github.com/containerd/containerd/pkg/oom"
-	oomv1 "github.com/containerd/containerd/pkg/oom/v1"
-	oomv2 "github.com/containerd/containerd/pkg/oom/v2"
-	"github.com/containerd/containerd/pkg/process"
-	"github.com/containerd/containerd/pkg/shutdown"
-	"github.com/containerd/containerd/pkg/stdio"
-	"github.com/containerd/containerd/protobuf"
-	ptypes "github.com/containerd/containerd/protobuf/types"
-	"github.com/containerd/containerd/runtime/v2/runc"
-	"github.com/containerd/containerd/runtime/v2/runc/options"
-	"github.com/containerd/containerd/runtime/v2/shim"
-	"github.com/containerd/containerd/sys/reaper"
 	"github.com/containerd/errdefs"
+	"github.com/containerd/errdefs/pkg/errgrpc"
 	runcC "github.com/containerd/go-runc"
+	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	"github.com/containerd/typeurl/v2"
-	"github.com/sirupsen/logrus"
+
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
+	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
+	"github.com/containerd/containerd/v2/core/runtime"
+	"github.com/containerd/containerd/v2/pkg/namespaces"
+	"github.com/containerd/containerd/v2/pkg/oom"
+	oomv1 "github.com/containerd/containerd/v2/pkg/oom/v1"
+	oomv2 "github.com/containerd/containerd/v2/pkg/oom/v2"
+	"github.com/containerd/containerd/v2/pkg/protobuf"
+	ptypes "github.com/containerd/containerd/v2/pkg/protobuf/types"
+	"github.com/containerd/containerd/v2/pkg/shim"
+	"github.com/containerd/containerd/v2/pkg/shutdown"
+	"github.com/containerd/containerd/v2/pkg/stdio"
+	"github.com/containerd/containerd/v2/pkg/sys/reaper"
 )
 
 var (
-	_     = (taskAPI.TaskService)(&service{})
+	_     = shim.TTRPCService(&service{})
 	empty = &ptypes.Empty{}
 )
 
 // NewTaskService creates a new instance of a task service
-func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TaskService, error) {
+func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.Service) (taskAPI.TTRPCTaskService, error) {
 	var (
 		ep  oom.Watcher
 		err error
@@ -260,7 +263,7 @@ func (s *service) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 }
 
 func (s *service) RegisterTTRPC(server *ttrpc.Server) error {
-	taskAPI.RegisterTaskService(server, s)
+	taskAPI.RegisterTTRPCTaskService(server, s)
 	return nil
 }
 
@@ -278,7 +281,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 	} else {
 		if _, initExited := s.containerInitExit[container]; initExited {
 			s.lifecycleMu.Unlock()
-			return nil, errdefs.ToGRPCf(errdefs.ErrFailedPrecondition, "container %s init process is not running", container.ID)
+			return nil, errgrpc.ToGRPCf(errdefs.ErrFailedPrecondition, "container %s init process is not running", container.ID)
 		}
 		s.runningExecs[container]++
 	}
@@ -300,7 +303,7 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 			s.lifecycleMu.Unlock()
 		}
 		handleStarted(container, p)
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 
 	switch r.ExecID {
@@ -308,23 +311,23 @@ func (s *service) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		switch cg := container.Cgroup().(type) {
 		case cgroup1.Cgroup:
 			if err := s.ep.Add(container.ID, cg); err != nil {
-				logrus.WithError(err).Error("add cg to OOM monitor")
+				log.G(ctx).WithError(err).Error("add cg to OOM monitor")
 			}
 		case *cgroupsv2.Manager:
 			allControllers, err := cg.RootControllers()
 			if err != nil {
-				logrus.WithError(err).Error("failed to get root controllers")
+				log.G(ctx).WithError(err).Error("failed to get root controllers")
 			} else {
 				if err := cg.ToggleControllers(allControllers, cgroupsv2.Enable); err != nil {
 					if userns.RunningInUserNS() {
-						logrus.WithError(err).Debugf("failed to enable controllers (%v)", allControllers)
+						log.G(ctx).WithError(err).Debugf("failed to enable controllers (%v)", allControllers)
 					} else {
-						logrus.WithError(err).Errorf("failed to enable controllers (%v)", allControllers)
+						log.G(ctx).WithError(err).Errorf("failed to enable controllers (%v)", allControllers)
 					}
 				}
 			}
 			if err := s.ep.Add(container.ID, cg); err != nil {
-				logrus.WithError(err).Error("add cg to OOM monitor")
+				log.G(ctx).WithError(err).Error("add cg to OOM monitor")
 			}
 		}
 
@@ -353,7 +356,7 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	}
 	p, err := container.Delete(ctx, r)
 	if err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	// if we deleted an init task, send the task delete event
 	if r.ExecID == "" {
@@ -366,6 +369,9 @@ func (s *service) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 			ExitStatus:  uint32(p.ExitStatus()),
 			ExitedAt:    protobuf.ToTimestamp(p.ExitedAt()),
 		})
+		s.lifecycleMu.Lock()
+		delete(s.containerInitExit, container)
+		s.lifecycleMu.Unlock()
 	}
 	return &taskAPI.DeleteResponse{
 		ExitStatus: uint32(p.ExitStatus()),
@@ -382,12 +388,12 @@ func (s *service) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*pty
 	}
 	ok, cancel := container.ReserveProcess(r.ExecID)
 	if !ok {
-		return nil, errdefs.ToGRPCf(errdefs.ErrAlreadyExists, "id %s", r.ExecID)
+		return nil, errgrpc.ToGRPCf(errdefs.ErrAlreadyExists, "id %s", r.ExecID)
 	}
 	process, err := container.Exec(ctx, r)
 	if err != nil {
 		cancel()
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 
 	s.send(&eventstypes.TaskExecAdded{
@@ -404,7 +410,7 @@ func (s *service) ResizePty(ctx context.Context, r *taskAPI.ResizePtyRequest) (*
 		return nil, err
 	}
 	if err := container.ResizePty(ctx, r); err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	return empty, nil
 }
@@ -417,7 +423,7 @@ func (s *service) State(ctx context.Context, r *taskAPI.StateRequest) (*taskAPI.
 	}
 	p, err := container.Process(r.ExecID)
 	if err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	st, err := p.Status(ctx)
 	if err != nil {
@@ -458,7 +464,7 @@ func (s *service) Pause(ctx context.Context, r *taskAPI.PauseRequest) (*ptypes.E
 		return nil, err
 	}
 	if err := container.Pause(ctx); err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	s.send(&eventstypes.TaskPaused{
 		ContainerID: container.ID,
@@ -473,7 +479,7 @@ func (s *service) Resume(ctx context.Context, r *taskAPI.ResumeRequest) (*ptypes
 		return nil, err
 	}
 	if err := container.Resume(ctx); err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	s.send(&eventstypes.TaskResumed{
 		ContainerID: container.ID,
@@ -488,7 +494,7 @@ func (s *service) Kill(ctx context.Context, r *taskAPI.KillRequest) (*ptypes.Emp
 		return nil, err
 	}
 	if err := container.Kill(ctx, r); err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	return empty, nil
 }
@@ -501,7 +507,7 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 	}
 	pids, err := s.getContainerPids(ctx, container)
 	if err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	var processes []*task.ProcessInfo
 	for _, pid := range pids {
@@ -513,7 +519,7 @@ func (s *service) Pids(ctx context.Context, r *taskAPI.PidsRequest) (*taskAPI.Pi
 				d := &options.ProcessDetails{
 					ExecID: p.ID(),
 				}
-				a, err := protobuf.MarshalAnyToProto(d)
+				a, err := typeurl.MarshalAnyToProto(d)
 				if err != nil {
 					return nil, fmt.Errorf("failed to marshal process %d info: %w", pid, err)
 				}
@@ -547,7 +553,7 @@ func (s *service) Checkpoint(ctx context.Context, r *taskAPI.CheckpointTaskReque
 		return nil, err
 	}
 	if err := container.Checkpoint(ctx, r); err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	return empty, nil
 }
@@ -559,7 +565,7 @@ func (s *service) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*pt
 		return nil, err
 	}
 	if err := container.Update(ctx, r); err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	return empty, nil
 }
@@ -572,7 +578,7 @@ func (s *service) Wait(ctx context.Context, r *taskAPI.WaitRequest) (*taskAPI.Wa
 	}
 	p, err := container.Process(r.ExecID)
 	if err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	p.Wait()
 
@@ -617,7 +623,7 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 	}
 	cgx := container.Cgroup()
 	if cgx == nil {
-		return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "cgroup does not exist")
+		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "cgroup does not exist")
 	}
 	var statsx interface{}
 	switch cg := cgx.(type) {
@@ -634,14 +640,14 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 		}
 		statsx = stats
 	default:
-		return nil, errdefs.ToGRPCf(errdefs.ErrNotImplemented, "unsupported cgroup type %T", cg)
+		return nil, errgrpc.ToGRPCf(errdefs.ErrNotImplemented, "unsupported cgroup type %T", cg)
 	}
 	data, err := typeurl.MarshalAny(statsx)
 	if err != nil {
 		return nil, err
 	}
 	return &taskAPI.StatsResponse{
-		Stats: protobuf.FromAny(data),
+		Stats: typeurl.MarshalProto(data),
 	}, nil
 }
 
@@ -676,8 +682,10 @@ func (s *service) processExits() {
 
 		for _, cp := range cps {
 			if ip, ok := cp.Process.(*process.Init); ok {
+				log.G(s.context).Info("handling init exit")
 				s.handleInitExit(e, cp.Container, ip)
 			} else {
+				log.G(s.context).Info("handling process exit")
 				s.handleProcessExit(e, cp.Container, cp.Process)
 			}
 		}
@@ -701,7 +709,7 @@ func (s *service) handleInitExit(e runcC.Exit, c *runc.Container, p *process.Ini
 	// kill all running container processes
 	if runc.ShouldKillAllOnExit(s.context, c.Bundle) {
 		if err := p.KillAll(s.context); err != nil {
-			logrus.WithError(err).WithField("id", p.ID()).
+			log.G(s.context).WithError(err).WithField("id", p.ID()).
 				Error("failed to kill init's children")
 		}
 	}
@@ -763,7 +771,7 @@ func (s *service) handleProcessExit(e runcC.Exit, c *runc.Container, p process.P
 func (s *service) getContainerPids(ctx context.Context, container *runc.Container) ([]uint32, error) {
 	p, err := container.Process("")
 	if err != nil {
-		return nil, errdefs.ToGRPC(err)
+		return nil, errgrpc.ToGRPC(err)
 	}
 	ps, err := p.(*process.Init).Runtime().Ps(ctx, container.ID)
 	if err != nil {
@@ -780,9 +788,9 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
 	ns, _ := namespaces.Namespace(ctx)
 	ctx = namespaces.WithNamespace(context.Background(), ns)
 	for e := range s.events {
-		err := publisher.Publish(ctx, runc.GetTopic(e), e)
+		err := publisher.Publish(ctx, runtime.GetTopic(e), e)
 		if err != nil {
-			logrus.WithError(err).Error("post event")
+			log.G(ctx).WithError(err).Error("post event")
 		}
 	}
 	publisher.Close()
@@ -793,7 +801,7 @@ func (s *service) getContainer(id string) (*runc.Container, error) {
 	container := s.containers[id]
 	s.mu.Unlock()
 	if container == nil {
-		return nil, errdefs.ToGRPCf(errdefs.ErrNotFound, "container not created")
+		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "container not created")
 	}
 	return container, nil
 }

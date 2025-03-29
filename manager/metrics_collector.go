@@ -12,7 +12,7 @@ import (
 
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/runc/task"
+	"github.com/ctrox/zeropod/shim/task"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
 	"golang.org/x/exp/maps"
