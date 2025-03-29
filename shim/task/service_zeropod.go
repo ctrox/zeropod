@@ -11,7 +11,6 @@ import (
 	"github.com/containerd/cgroups/v3"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types/task"
-	"github.com/containerd/containerd/pkg/cri/annotations"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
 	"github.com/containerd/containerd/v2/pkg/oom"
 	oomv1 "github.com/containerd/containerd/v2/pkg/oom/v1"
@@ -27,6 +26,10 @@ import (
 	zshim "github.com/ctrox/zeropod/shim"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+// containerTypeSandbox represents a pod sandbox container
+// from github.com/containerd/containerd/v2/internal/cri/annotations
+const containerTypeSandbox = "sandbox"
 
 var (
 	_ = (shim.TTRPCService)(&wrapper{})
@@ -127,7 +130,7 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 
 	// if we have a sandbox container or the container does not match the
 	// configured one(s) we should not do anything further with the container.
-	if cfg.ContainerType == annotations.ContainerTypeSandbox ||
+	if cfg.ContainerType == containerTypeSandbox ||
 		!cfg.IsZeropodContainer() {
 		log.G(ctx).Debugf("ignoring container: %q of type %q", cfg.ContainerName, cfg.ContainerType)
 		return w.service.Create(ctx, r)
