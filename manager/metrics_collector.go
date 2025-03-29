@@ -2,72 +2,134 @@ package manager
 
 import (
 	"context"
-	"io"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
-	"slices"
 
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/shim/task"
-	dto "github.com/prometheus/client_model/go"
-	"github.com/prometheus/common/expfmt"
-	"golang.org/x/exp/maps"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
-func Handler(w http.ResponseWriter, req *http.Request) {
-	fetchMetricsAndMerge(w)
+const (
+	labelContainerName = "container"
+	LabelPodName       = "pod"
+	LabelPodNamespace  = "namespace"
+
+	MetricsNamespace         = "zeropod"
+	MetricCheckpointDuration = "checkpoint_duration_seconds"
+	MetricRestoreDuration    = "restore_duration_seconds"
+	MetricLastCheckpointTime = "last_checkpoint_time"
+	MetricLastRestoreTime    = "last_restore_time"
+	MetricRunning            = "running"
+)
+
+var (
+	crBuckets = []float64{
+		0.02, 0.03, 0.04, 0.05, 0.075,
+		0.1, 0.12, 0.14, 0.16, 0.18,
+		0.2, 0.3, 0.4, 0.5, 1,
+	}
+	commonLabels = []string{labelContainerName, LabelPodName, LabelPodNamespace}
+)
+
+type Collector struct {
+	checkpointDuration *prometheus.HistogramVec
+	restoreDuration    *prometheus.HistogramVec
+	lastCheckpointTime *prometheus.GaugeVec
+	lastRestoreTime    *prometheus.GaugeVec
+	running            *prometheus.GaugeVec
 }
 
-// fetchMetricsAndMerge gets metrics from each socket, merges them together
-// and writes them to w.
-func fetchMetricsAndMerge(w io.Writer) {
+func NewCollector() *Collector {
+	return &Collector{
+		checkpointDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricCheckpointDuration,
+			Help:      "The duration of the last checkpoint in seconds.",
+			Buckets:   crBuckets,
+		}, commonLabels),
+
+		restoreDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricRestoreDuration,
+			Help:      "The duration of the last restore in seconds.",
+			Buckets:   crBuckets,
+		}, commonLabels),
+
+		lastCheckpointTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricLastCheckpointTime,
+			Help:      "A unix timestamp in nanoseconds of the last checkpoint.",
+		}, commonLabels),
+
+		lastRestoreTime: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricLastRestoreTime,
+			Help:      "A unix timestamp in nanoseconds of the last restore.",
+		}, commonLabels),
+
+		running: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricRunning,
+			Help:      "Reports if the process is currently running or checkpointed.",
+		}, commonLabels),
+	}
+}
+
+func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	socks, err := os.ReadDir(task.ShimSocketPath)
 	if err != nil {
 		slog.Error("error listing file in shim socket path", "path", task.ShimSocketPath, "err", err)
 		return
 	}
 
-	mfs := map[string]*dto.MetricFamily{}
 	for _, sock := range socks {
 		sockName := filepath.Join(task.ShimSocketPath, sock.Name())
 		slog.Debug("getting metrics", "name", sockName)
 
-		shimMetrics, err := getMetricsOverTTRPC(context.Background(), sockName)
+		shimMetrics, err := collectMetricsOverTTRPC(context.Background(), sockName)
 		if err != nil {
 			slog.Error("getting metrics", "err", err)
 			// we still want to read the rest of the sockets
 			continue
 		}
-		for _, mf := range shimMetrics {
-			if mf.Name == nil {
-				continue
-			}
 
-			mfo, ok := mfs[*mf.Name]
-			if ok {
-				mfo.Metric = append(mfo.Metric, mf.Metric...)
-			} else {
-				mfs[*mf.Name] = mf
+		for _, metrics := range shimMetrics {
+			l := labels(metrics)
+			r := 0
+			if metrics.Running {
+				r = 1
+			}
+			// TODO: handle stale metrics
+			c.running.With(l).Set(float64(r))
+			if metrics.LastCheckpointDuration != nil {
+				c.checkpointDuration.With(l).Observe(metrics.LastCheckpointDuration.AsDuration().Seconds())
+			}
+			if metrics.LastRestoreDuration != nil {
+				c.restoreDuration.With(l).Observe(metrics.LastRestoreDuration.AsDuration().Seconds())
+			}
+			if metrics.LastCheckpoint != nil {
+				c.lastCheckpointTime.With(l).Set(float64(metrics.LastCheckpoint.AsTime().UnixNano()))
+			}
+			if metrics.LastRestore != nil {
+				c.lastRestoreTime.With(l).Set(float64(metrics.LastRestore.AsTime().UnixNano()))
 			}
 		}
 	}
-	keys := maps.Keys(mfs)
-	slices.Sort(keys)
-	enc := expfmt.NewEncoder(w, expfmt.NewFormat(expfmt.TypeTextPlain))
-	for _, n := range keys {
-		err := enc.Encode(mfs[n])
-		if err != nil {
-			slog.Error("encoding metrics", "err", err)
-			return
-		}
-	}
+	c.running.Collect(ch)
+	c.checkpointDuration.Collect(ch)
+	c.restoreDuration.Collect(ch)
+	c.lastCheckpointTime.Collect(ch)
+	c.lastRestoreTime.Collect(ch)
 }
 
-func getMetricsOverTTRPC(ctx context.Context, sock string) ([]*dto.MetricFamily, error) {
+func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
+}
+
+func collectMetricsOverTTRPC(ctx context.Context, sock string) ([]*v1.ContainerMetrics, error) {
 	conn, err := net.Dial("unix", sock)
 	if err != nil {
 		return nil, err
@@ -79,4 +141,25 @@ func getMetricsOverTTRPC(ctx context.Context, sock string) ([]*dto.MetricFamily,
 	}
 
 	return resp.Metrics, nil
+}
+
+func labels(metrics *v1.ContainerMetrics) map[string]string {
+	return map[string]string{
+		labelContainerName: metrics.Name,
+		LabelPodName:       metrics.PodName,
+		LabelPodNamespace:  metrics.PodNamespace,
+	}
+}
+
+func (c *Collector) deleteMetrics(status *v1.ContainerStatus) {
+	l := labels(&v1.ContainerMetrics{
+		Name:         status.Name,
+		PodName:      status.PodName,
+		PodNamespace: status.PodNamespace,
+	})
+	c.running.Delete(l)
+	c.checkpointDuration.Delete(l)
+	c.restoreDuration.Delete(l)
+	c.lastCheckpointTime.Delete(l)
+	c.lastRestoreTime.Delete(l)
 }

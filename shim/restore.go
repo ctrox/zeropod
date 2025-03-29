@@ -23,6 +23,7 @@ import (
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/node/v1"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -100,8 +101,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 
 		return nil, nil, fmt.Errorf("start failed during restore: %w", err)
 	}
-	restoreDuration.With(c.labels()).Observe(time.Since(beforeRestore).Seconds())
-
+	c.metrics.LastRestoreDuration = durationpb.New(time.Since(beforeRestore))
 	c.Container = container
 	c.process = p
 	c.SetScaledDown(false)

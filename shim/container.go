@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"sync"
 	"time"
 
@@ -17,6 +18,8 @@ import (
 	"github.com/ctrox/zeropod/activator"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/socket"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type HandleStartedFunc func(*runc.Container, process.Process)
@@ -48,6 +51,7 @@ type Container struct {
 	// containers.
 	checkpointRestore *sync.Mutex
 	evacuation        sync.Once
+	metrics           *v1.ContainerMetrics
 }
 
 func New(ctx context.Context, cfg *Config, id string, cr *sync.Mutex, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
@@ -77,6 +81,7 @@ func New(ctx context.Context, cfg *Config, id string, cr *sync.Mutex, pt stdio.P
 		checkpointRestore: cr,
 		events:            events,
 		checkpointedPIDs:  map[int]struct{}{},
+		metrics:           newMetrics(cfg, true),
 	}
 	return c, nil
 }
@@ -106,15 +111,13 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 		return err
 	}
 	if c.SkipStart() {
-		c.scaledDown = true
-		running.With(c.labels()).Set(0)
+		c.SetScaledDown(true)
 		if err := c.scaleDown(ctx); err != nil {
 			return err
 		}
 	} else {
-		running.With(c.labels()).Set(1)
+		c.SetScaledDown(false)
 	}
-	c.sendEvent(c.Status())
 	return nil
 }
 
@@ -183,12 +186,11 @@ func (c *Container) CancelScaleDown() {
 
 func (c *Container) SetScaledDown(scaledDown bool) {
 	c.scaledDown = scaledDown
+	c.metrics.Running = !scaledDown
 	if scaledDown {
-		running.With(c.labels()).Set(0)
-		lastCheckpointTime.With(c.labels()).Set(float64(time.Now().UnixNano()))
+		c.metrics.LastCheckpoint = timestamppb.Now()
 	} else {
-		running.With(c.labels()).Set(1)
-		lastRestoreTime.With(c.labels()).Set(float64(time.Now().UnixNano()))
+		c.metrics.LastRestore = timestamppb.Now()
 	}
 	c.sendEvent(c.Status())
 }
@@ -266,8 +268,10 @@ func (c *Container) Stop(ctx context.Context) {
 	if err := c.tracker.Close(); err != nil {
 		log.G(ctx).Errorf("unable to close tracker: %s", err)
 	}
+	status := c.Status()
+	status.Phase = v1.ContainerPhase_STOPPING
+	c.sendEvent(status)
 	c.StopActivator(ctx)
-	c.deleteMetrics()
 }
 
 func (c *Container) Process() process.Process {
@@ -365,4 +369,35 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 
 		return c.ScheduleScaleDown()
 	}
+}
+
+func (c *Container) GetMetrics() *v1.ContainerMetrics {
+	m := proto.Clone(c.metrics)
+	c.clearMetrics()
+	return m.(*v1.ContainerMetrics)
+}
+
+func (c *Container) clearMetrics() {
+	c.metrics.LastCheckpoint = nil
+	c.metrics.LastRestore = nil
+	c.metrics.LastCheckpointDuration = nil
+	c.metrics.LastRestoreDuration = nil
+}
+
+func snapshotDir(bundle string) string {
+	return path.Join(bundle, "work", "snapshots")
+}
+
+func containerDir(bundle string) string {
+	return path.Join(snapshotDir(bundle), "container")
+}
+
+const preDumpDirName = "pre-dump"
+
+func preDumpDir(bundle string) string {
+	return path.Join(snapshotDir(bundle), preDumpDirName)
+}
+
+func relativePreDumpDir() string {
+	return "../" + preDumpDirName
 }

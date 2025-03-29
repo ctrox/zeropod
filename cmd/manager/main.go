@@ -15,6 +15,8 @@ import (
 	"github.com/ctrox/zeropod/manager"
 	"github.com/ctrox/zeropod/manager/node"
 	"github.com/ctrox/zeropod/socket"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
@@ -69,13 +71,26 @@ func main() {
 		podHandlers = append(podHandlers, manager.NewPodScaler(log))
 	}
 
-	if err := manager.StartSubscribers(ctx, log, mgr.GetClient(), podHandlers...); err != nil {
+	col := manager.NewCollector()
+	sc := manager.SubscriberConfig{Log: log, Kube: mgr.GetClient(), Collector: col}
+	if err := manager.StartSubscribers(ctx, sc, podHandlers...); err != nil {
 		log.Error("starting subscribers", "err", err)
 		os.Exit(1)
 	}
 
-	server := &http.Server{Addr: *metricsAddr}
-	http.HandleFunc("/metrics", manager.Handler)
+	registry := prometheus.NewRegistry()
+	if err := registry.Register(col); err != nil {
+		slog.Error("registering metrics", "err", err)
+		os.Exit(1)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(
+		registry,
+		promhttp.HandlerOpts{
+			EnableOpenMetrics: true,
+		}))
+	server := &http.Server{Addr: *metricsAddr, Handler: mux}
 
 	go func() {
 		if err := server.ListenAndServe(); err != nil {

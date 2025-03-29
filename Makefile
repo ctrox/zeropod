@@ -22,7 +22,6 @@ GOARCH ?= $(shell go env GOARCH)
 # switches out the shim binary. Running pods have to be recreated to make use
 # of the new shim.
 build-kind: build
-	docker cp containerd-shim-zeropod-v2 kind-control-plane:/opt/zeropod/bin/
 	docker cp containerd-shim-zeropod-v2 kind-worker:/opt/zeropod/bin/
 	docker cp containerd-shim-zeropod-v2 kind-worker2:/opt/zeropod/bin/
 

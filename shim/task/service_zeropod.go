@@ -90,7 +90,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	}
 
 	if id, err := shimID(); err == nil {
-		go startShimServer(ctx, id, w.zeropodEvents)
+		go startShimServer(ctx, id, w)
 	} else {
 		log.G(ctx).Errorf("unable to get shim ID: %s", err)
 	}

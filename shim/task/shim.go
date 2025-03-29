@@ -12,8 +12,6 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	zshim "github.com/ctrox/zeropod/shim"
-	"github.com/prometheus/client_golang/prometheus"
 )
 
 const ShimSocketPath = "/run/zeropod/s/"
@@ -44,7 +42,7 @@ func shimID() (string, error) {
 	return filepath.Base(params.Address), nil
 }
 
-func startShimServer(ctx context.Context, id string, events chan *v1.ContainerStatus) {
+func startShimServer(ctx context.Context, id string, task *wrapper) {
 	socket := shimSocketAddress(id)
 	listener, err := shim.NewSocket(socket)
 	if err != nil {
@@ -82,7 +80,7 @@ func startShimServer(ctx context.Context, id string, events chan *v1.ContainerSt
 	}
 	defer s.Close()
 
-	v1.RegisterShimService(s, &shimService{metrics: zshim.NewRegistry(), events: events})
+	v1.RegisterShimService(s, &shimService{task: task})
 
 	defer func() {
 		s.Close()
@@ -99,16 +97,14 @@ func startShimServer(ctx context.Context, id string, events chan *v1.ContainerSt
 // shimService is an extension to the shim task service to provide
 // zeropod-specific functions like metrics.
 type shimService struct {
-	metrics *prometheus.Registry
-	task    wrapper
-	events  chan *v1.ContainerStatus
+	task *wrapper
 }
 
 // SubscribeStatus watches for shim events.
 func (s *shimService) SubscribeStatus(ctx context.Context, _ *v1.SubscribeStatusRequest, srv v1.Shim_SubscribeStatusServer) error {
 	for {
 		select {
-		case msg := <-s.events:
+		case msg := <-s.task.zeropodEvents:
 			if err := srv.Send(msg); err != nil {
 				log.G(ctx).Errorf("unable to send event message: %s", err)
 			}
@@ -130,6 +126,9 @@ func (s *shimService) GetStatus(ctx context.Context, req *v1.ContainerRequest) (
 
 // Metrics returns metrics of the zeropod shim instance.
 func (s *shimService) Metrics(context.Context, *v1.MetricsRequest) (*v1.MetricsResponse, error) {
-	mfs, err := s.metrics.Gather()
-	return &v1.MetricsResponse{Metrics: mfs}, err
+	containerMetrics := []*v1.ContainerMetrics{}
+	for _, container := range s.task.zeropodContainers {
+		containerMetrics = append(containerMetrics, container.GetMetrics())
+	}
+	return &v1.MetricsResponse{Metrics: containerMetrics}, nil
 }

@@ -4,7 +4,8 @@ package zeropod.shim.v1;
 option go_package = "github.com/ctrox/zeropod/api/shim/v1/;v1";
 
 import "google/protobuf/empty.proto";
-import "io/prometheus/client/metrics.proto";
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
 
 service Shim {
 	rpc Metrics(MetricsRequest) returns (MetricsResponse);
@@ -21,7 +22,7 @@ message SubscribeStatusRequest {
 }
 
 message MetricsResponse {
-	repeated io.prometheus.client.MetricFamily metrics = 1;
+	repeated ContainerMetrics metrics = 1;
 }
 
 message ContainerRequest {
@@ -31,6 +32,7 @@ message ContainerRequest {
 enum ContainerPhase {
   SCALED_DOWN = 0;
   RUNNING = 1;
+  STOPPING = 2;
 }
 
 message ContainerStatus {
@@ -39,4 +41,15 @@ message ContainerStatus {
 	string pod_name = 3;
 	string pod_namespace = 4;
 	ContainerPhase phase = 5;
+}
+
+message ContainerMetrics {
+    string name = 1;
+	string pod_name = 2;
+	string pod_namespace = 3;
+    google.protobuf.Timestamp lastCheckpoint = 4;
+    google.protobuf.Timestamp lastRestore = 5;
+    google.protobuf.Duration lastCheckpointDuration = 6;
+    google.protobuf.Duration lastRestoreDuration = 7;
+    bool running = 8;
 }

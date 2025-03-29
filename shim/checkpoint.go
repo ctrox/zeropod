@@ -13,6 +13,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/ctrox/zeropod/activator"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
+	"google.golang.org/protobuf/types/known/durationpb"
 )
 
 const retryInterval = time.Second
@@ -137,7 +138,7 @@ func (c *Container) checkpoint(ctx context.Context) error {
 	}
 
 	c.SetScaledDown(true)
-	checkpointDuration.With(c.labels()).Observe(time.Since(beforeCheckpoint).Seconds())
+	c.metrics.LastCheckpointDuration = durationpb.New(time.Since(beforeCheckpoint))
 	log.G(ctx).Infof("checkpointing done in %s", time.Since(beforeCheckpoint))
 
 	return nil
