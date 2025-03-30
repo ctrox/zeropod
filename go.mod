@@ -22,7 +22,6 @@ require (
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/go-logr/logr v1.4.2
 	github.com/mholt/archives v0.0.0-20241216060121-23e0af8fe73d
-	github.com/mitchellh/mapstructure v1.5.0
 	github.com/moby/sys/userns v0.1.0
 	github.com/opencontainers/runtime-spec v1.2.0
 	github.com/phayes/freeport v0.0.0-20220201140144-74d24b5ae9f5
