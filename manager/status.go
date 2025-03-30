@@ -51,9 +51,16 @@ type subscriber struct {
 	kube            client.Client
 	subscribeClient v1.Shim_SubscribeStatusClient
 	podHandlers     []PodHandler
+	collector       *Collector
 }
 
-func StartSubscribers(ctx context.Context, log *slog.Logger, kube client.Client, podHandlers ...PodHandler) error {
+type SubscriberConfig struct {
+	Log       *slog.Logger
+	Kube      client.Client
+	Collector *Collector
+}
+
+func StartSubscribers(ctx context.Context, sc SubscriberConfig, podHandlers ...PodHandler) error {
 	if _, err := os.Stat(task.ShimSocketPath); errors.Is(err, os.ErrNotExist) {
 		if err := os.Mkdir(task.ShimSocketPath, os.ModePerm); err != nil {
 			return err
@@ -68,19 +75,19 @@ func StartSubscribers(ctx context.Context, log *slog.Logger, kube client.Client,
 	for _, sock := range socks {
 		sock := sock
 		go func() {
-			if err := subscribe(ctx, log, filepath.Join(task.ShimSocketPath, sock.Name()), kube, podHandlers); err != nil {
-				log.Error("error subscribing", "sock", sock.Name(), "err", err)
+			if err := subscribe(ctx, sc, filepath.Join(task.ShimSocketPath, sock.Name()), podHandlers); err != nil {
+				sc.Log.Error("error subscribing", "sock", sock.Name(), "err", err)
 			}
 		}()
 	}
 
-	go watchForShims(ctx, log, kube, podHandlers)
+	go watchForShims(ctx, sc, podHandlers)
 
 	return nil
 }
 
-func subscribe(ctx context.Context, log *slog.Logger, sock string, kube client.Client, handlers []PodHandler) error {
-	log.With("sock", sock).Info("subscribing to status events")
+func subscribe(ctx context.Context, sc SubscriberConfig, sock string, handlers []PodHandler) error {
+	sc.Log.With("sock", sock).Info("subscribing to status events")
 	shimClient, err := newShimClient(ctx, sock)
 	if err != nil {
 		return err
@@ -98,8 +105,9 @@ func subscribe(ctx context.Context, log *slog.Logger, sock string, kube client.C
 	}
 
 	s := subscriber{
-		log:             log.With("sock", sock),
-		kube:            kube,
+		log:             sc.Log.With("sock", sock),
+		kube:            sc.Kube,
+		collector:       sc.Collector,
 		subscribeClient: subscribeClient,
 		podHandlers:     handlers,
 	}
@@ -154,6 +162,10 @@ func (s *subscriber) receive(ctx context.Context) error {
 }
 
 func (s *subscriber) onStatus(ctx context.Context, status *v1.ContainerStatus) error {
+	if status.Phase == v1.ContainerPhase_STOPPING {
+		s.collector.deleteMetrics(status)
+		return nil
+	}
 	if len(s.podHandlers) > 0 {
 		if err := s.handlePod(ctx, status); err != nil {
 			return err
@@ -208,7 +220,7 @@ func (s *subscriber) handlePod(ctx context.Context, status *v1.ContainerStatus) 
 	return nil
 }
 
-func watchForShims(ctx context.Context, log *slog.Logger, kube client.Client, podHandlers []PodHandler) error {
+func watchForShims(ctx context.Context, sc SubscriberConfig, podHandlers []PodHandler) error {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		return err
@@ -225,13 +237,13 @@ func watchForShims(ctx context.Context, log *slog.Logger, kube client.Client, po
 			switch event.Op {
 			case fsnotify.Create:
 				go func() {
-					if err := subscribe(ctx, log, event.Name, kube, podHandlers); err != nil {
-						log.Error("error subscribing", "sock", event.Name, "err", err)
+					if err := subscribe(ctx, sc, event.Name, podHandlers); err != nil {
+						sc.Log.Error("error subscribing", "sock", event.Name, "err", err)
 					}
 				}()
 			}
 		case err := <-watcher.Errors:
-			log.Error("watch error", "err", err)
+			sc.Log.Error("watch error", "err", err)
 		case <-ctx.Done():
 			return nil
 		}

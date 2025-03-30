@@ -12,7 +12,6 @@ import (
 
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager"
-	"github.com/ctrox/zeropod/shim"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
@@ -310,30 +309,30 @@ func TestE2E(t *testing.T) {
 			minHistogramSampleCount *uint64
 		}{
 			"running": {
-				metric:     prometheus.BuildFQName(shim.MetricsNamespace, "", shim.MetricRunning),
+				metric:     prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRunning),
 				gaugeValue: ptr.To(float64(1)),
 				pod:        runningPod,
 			},
 			"not running": {
-				metric:     prometheus.BuildFQName(shim.MetricsNamespace, "", shim.MetricRunning),
+				metric:     prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRunning),
 				gaugeValue: ptr.To(float64(0)),
 				pod:        checkpointedPod,
 			},
 			"last checkpoint time": {
-				metric: prometheus.BuildFQName(shim.MetricsNamespace, "", shim.MetricLastCheckpointTime),
+				metric: prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricLastCheckpointTime),
 				pod:    checkpointedPod,
 			},
 			"checkpoint duration": {
-				metric:                  prometheus.BuildFQName(shim.MetricsNamespace, "", shim.MetricCheckPointDuration),
+				metric:                  prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricCheckpointDuration),
 				pod:                     checkpointedPod,
 				minHistogramSampleCount: ptr.To(uint64(1)),
 			},
 			"last restore time": {
-				metric: prometheus.BuildFQName(shim.MetricsNamespace, "", shim.MetricLastRestoreTime),
+				metric: prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricLastRestoreTime),
 				pod:    restoredPod,
 			},
 			"restore duration": {
-				metric:                  prometheus.BuildFQName(shim.MetricsNamespace, "", shim.MetricRestoreDuration),
+				metric:                  prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRestoreDuration),
 				pod:                     restoredPod,
 				minHistogramSampleCount: ptr.To(uint64(1)),
 			},
@@ -348,8 +347,8 @@ func TestE2E(t *testing.T) {
 				}
 
 				metric, ok := findMetricByLabelMatch(val.Metric, map[string]string{
-					shim.LabelPodName:      tc.pod.Name,
-					shim.LabelPodNamespace: tc.pod.Namespace,
+					manager.LabelPodName:      tc.pod.Name,
+					manager.LabelPodNamespace: tc.pod.Namespace,
 				})
 				if !ok {
 					t.Fatalf("could not find expected metric for pod: %s/%s", tc.pod.Name, tc.pod.Namespace)
