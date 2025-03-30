@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 
 	"github.com/containerd/containerd/api/types"
-	shimbinary "github.com/containerd/containerd/runtime/v2/shim"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/manager"
 	"github.com/containerd/containerd/v2/pkg/shim"
+	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	zshim "github.com/ctrox/zeropod/shim"
 	_ "github.com/ctrox/zeropod/shim/task/plugin"
 )
@@ -37,7 +37,7 @@ func (cm compatManager) Start(ctx context.Context, id string, opts shim.StartOpt
 	if err != nil {
 		return params, err
 	}
-	if err := shimbinary.WriteAddress(path, params.Address); err != nil {
+	if err := shimv1.WriteAddress(path, params.Address); err != nil {
 		return params, err
 	}
 	return params, err
