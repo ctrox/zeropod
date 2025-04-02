@@ -1,25 +1,25 @@
 resources:
-  - ../base
+- ../base
 # pod-updater is required if status-labels or in-place-scaling is enabled
 components:
-  - ../pod-updater
-  - ../status-labels
-  - ../migration-manager
+- ../pod-updater
+- ../status-labels
+- ../migration-manager
 # uncommment to enable in-place-scaling
 # - ../in-place-scaling
 images:
-  - name: installer
-    newName: ghcr.io/ctrox/zeropod-installer
-    newTag: v0.6.0
-  - name: manager
-    newName: ghcr.io/ctrox/zeropod-manager
-    newTag: v0.6.0
+- name: installer
+  newName: ghcr.io/ctrox/zeropod-installer
+  newTag: v0.6.1
+- name: manager
+  newName: ghcr.io/ctrox/zeropod-manager
+  newTag: v0.6.1
 patches:
-  - patch: |-
-      - op: add
-        path: /spec/template/spec/initContainers/0/args/-
-        value: -criu-image=ghcr.io/ctrox/zeropod-criu:8d5cef546a035c4dda3a1be28ff1202c3b1b4c72
-    target:
-      kind: DaemonSet
+- patch: |-
+    - op: add
+      path: /spec/template/spec/initContainers/0/args/-
+      value: -criu-image=ghcr.io/ctrox/zeropod-criu:8d5cef546a035c4dda3a1be28ff1202c3b1b4c72
+  target:
+    kind: DaemonSet
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
