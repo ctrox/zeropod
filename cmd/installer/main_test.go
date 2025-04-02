@@ -55,7 +55,7 @@ version = 2
 `
 
 func TestConfigureContainerd(t *testing.T) {
-	configFile, err := os.CreateTemp("", "containerd-config-*.toml")
+	configFile, err := os.CreateTemp(t.TempDir(), "containerd-config-*.toml")
 	require.NoError(t, err)
 
 	require.NoError(t, os.WriteFile(configFile.Name(), []byte(kindContainerdConfig), os.ModePerm))
@@ -72,4 +72,18 @@ func TestConfigureContainerd(t *testing.T) {
 	assert.NotEmpty(t, backupInfo.Size())
 	assert.NotEmpty(t, newFile)
 	assert.True(t, restart)
+}
+
+func TestConfigureContainerdK3S(t *testing.T) {
+	configFile, err := os.CreateTemp(t.TempDir(), "containerd-config-*.toml")
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(configFile.Name(), []byte(kindContainerdConfig), os.ModePerm))
+
+	restart, err := configureContainerd(runtimeK3S, configFile.Name())
+	require.NoError(t, err)
+	assert.True(t, restart)
+
+	newFile, err := os.ReadFile(configFile.Name() + templateSuffix)
+	require.NoError(t, err)
+	assert.NotEmpty(t, newFile)
 }
