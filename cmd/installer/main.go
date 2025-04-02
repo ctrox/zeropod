@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path"
 	"path/filepath"
 	"strings"
@@ -259,8 +258,8 @@ func configureContainerd(runtime containerRuntime, containerdConfig string) (res
 		// for rke2/k3s the containerd config has to be customized via the
 		// config.toml.tmpl file. So we make a copy of the original config and
 		// insert our shim config into the template.
-		if out, err := exec.Command("cp", containerdConfig, containerdConfig+templateSuffix).CombinedOutput(); err != nil {
-			return false, fmt.Errorf("unable to copy config.toml to template: %s: %w", out, err)
+		if err := copyConfig(containerdConfig, containerdConfig+templateSuffix); err != nil {
+			return false, fmt.Errorf("unable to copy config template: %w", err)
 		}
 		containerdConfig = containerdConfig + templateSuffix
 	}
@@ -313,11 +312,15 @@ func restoreContainerdConfig() error {
 }
 
 func copyConfig(from, to string) error {
+	info, err := os.Stat(from)
+	if err != nil {
+		return fmt.Errorf("could not stat containerd config: %w", err)
+	}
 	originalConfig, err := os.ReadFile(from)
 	if err != nil {
 		return fmt.Errorf("could not read containerd config: %w", err)
 	}
-	if err := os.WriteFile(to, originalConfig, os.ModePerm); err != nil {
+	if err := os.WriteFile(to, originalConfig, info.Mode()); err != nil {
 		return fmt.Errorf("could not write config backup: %w", err)
 	}
 
