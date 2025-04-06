@@ -215,6 +215,15 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 		return fmt.Errorf("unable to write shim file: %w", err)
 	}
 
+	if runtime == runtimeK3S {
+		// for some reason, k3s containerd only has access to the busybox tar by
+		// default. This breaks criu checkpoint since it needs the full gnu tar.
+		// To work around this, we symlink tar in our opt path to /bin/tar.
+		if err := linkTar(*hostOptPath); err != nil {
+			return fmt.Errorf("unable to link tar: %w", err)
+		}
+	}
+
 	restartRequired, err := configureContainerd(ctx, runtime)
 	if err != nil {
 		if restoreErr := restoreContainerdConfig(runtime, defaultContainerdConfigPath); restoreErr != nil {
@@ -689,4 +698,11 @@ func generateTLSCA(ctx context.Context, client kubernetes.Interface, namespace s
 	}
 
 	return secret, err
+}
+
+func linkTar(opt string) error {
+	if err := os.Symlink("/bin/tar", filepath.Join(opt, "bin", "tar")); !os.IsExist(err) {
+		return err
+	}
+	return nil
 }
