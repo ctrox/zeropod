@@ -46,6 +46,7 @@ const (
 	runtimeRKE2       containerRuntime = "rke2"
 	runtimeK3S        containerRuntime = "k3s"
 
+	hostRoot                    = "/host"
 	binPath                     = "bin/"
 	criuConfigFile              = "/etc/criu/default.conf"
 	shimBinaryName              = "containerd-shim-zeropod-v2"
@@ -173,7 +174,7 @@ func installCriu(ctx context.Context) error {
 	if err := client.Install(
 		ctx, image, containerd.WithInstallLibs,
 		containerd.WithInstallReplace,
-		containerd.WithInstallPath(node.OptPath),
+		containerd.WithInstallPath(optPath(ctx, containerRuntime(*runtime))),
 	); err != nil {
 		return err
 	}
@@ -201,7 +202,7 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 	// note that if the shim binary already exists, we simply switch it out with
 	// the new one but existing zeropods will have to be deleted to use the
 	// updated shim.
-	shimDest := filepath.Join(node.OptPath, binPath, shimBinaryName)
+	shimDest := filepath.Join(optPath(ctx, runtime), binPath, shimBinaryName)
 	if err := os.Remove(shimDest); err != nil {
 		log.Printf("unable to remove shim binary, continuing with install: %s", err)
 	}
@@ -354,7 +355,7 @@ func configureContainerdv1(ctx context.Context, runtime containerRuntime, contai
 	}
 
 	if _, ok := conf.Plugins[criPluginKey]; ok {
-		criPlugin := map[string]map[string]map[string]interface{}{}
+		criPlugin := map[string]map[string]map[string]any{}
 		if _, err := conf.Decode(ctx, criPluginKey, &criPlugin); err == nil {
 			if _, ok := criPlugin["containerd"]["runtimes"]["zeropod"]; ok {
 				log.Println("runtime already configured, no need to restart containerd")
@@ -586,6 +587,17 @@ func optConfigured(ctx context.Context, containerdConfig string) (bool, string, 
 	return false, "", nil
 }
 
+func optPath(ctx context.Context, runtime containerRuntime) string {
+	ok, path, err := optConfigured(ctx, containerdConfigFile(runtime, defaultContainerdConfigPath))
+	if err != nil {
+		return defaultOptPath
+	}
+	if ok {
+		return filepath.Join(hostRoot, path)
+	}
+	return defaultOptPath
+}
+
 func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
 	runtimeClass := &knodev1.RuntimeClass{
 		ObjectMeta: metav1.ObjectMeta{Name: v1.RuntimeClassName},
@@ -627,7 +639,7 @@ func runUninstall(ctx context.Context, client kubernetes.Interface, runtime cont
 		return err
 	}
 
-	if err := os.RemoveAll(node.OptPath); err != nil {
+	if err := os.RemoveAll(optPath(ctx, runtime)); err != nil {
 		return fmt.Errorf("removing opt path: %w", err)
 	}
 

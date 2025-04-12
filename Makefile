@@ -47,7 +47,7 @@ build-installer:
 	docker build --load -t $(INSTALLER_IMAGE) -f cmd/installer/Dockerfile .
 
 build-manager:
-	docker build --load -t $(MANAGER_IMAGE) -f cmd/manager/Dockerfile .
+	docker build --build-arg CRIU_VERSION=$(CRIU_VERSION) --load -t $(MANAGER_IMAGE) -f cmd/manager/Dockerfile .
 
 build-test:
 	docker build --load -t $(TEST_IMAGE) -f e2e/Dockerfile .

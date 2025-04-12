@@ -42,7 +42,7 @@ const (
 	ImageServerPortKey = "image_server_port"
 	PageServerHostKey  = "page_server_host"
 	PageServerPortKey  = "page_server_port"
-	OptPath            = "/opt/zeropod"
+	CriuBin            = "/bin/criu"
 
 	pagesTransferTimeout = time.Minute * 5
 	caCertFile           = "/tls/ca.crt"
@@ -597,9 +597,8 @@ func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyP
 		r.CheckpointPath, "--work-dir", r.CheckpointPath, "--page-server",
 		"--address", "127.0.0.1", "--port", strconv.Itoa(psp.Port()),
 	}
-	cmd := exec.Command(filepath.Join(OptPath, "bin/criu"), args...)
+	cmd := exec.Command(CriuBin, args...)
 	ns.log.Info("starting lazy pages daemon", "cmd", cmd.Args)
-	cmd.Env = []string{"LD_LIBRARY_PATH=" + filepath.Join(OptPath, "lib")}
 	execLogger := newExecLogger("criu-page-server", ns.log, slog.LevelDebug)
 	cmd.Stderr = execLogger
 	cmd.Stdout = execLogger
