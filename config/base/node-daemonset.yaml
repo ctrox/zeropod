@@ -37,19 +37,19 @@ spec:
               name: tls
         - name: prepare-bpf-fs
           args:
-          - mount | grep "/sys/fs/bpf type bpf" || mount -t bpf bpf /sys/fs/bpf
+            - mount | grep "/sys/fs/bpf type bpf" || mount -t bpf bpf /sys/fs/bpf
           command:
-          - /bin/sh
-          - -c
-          - --
+            - /bin/sh
+            - -c
+            - --
           image: alpine:3.19.1
           imagePullPolicy: IfNotPresent
           securityContext:
             privileged: true
           volumeMounts:
-          - mountPath: /sys/fs/bpf
-            mountPropagation: Bidirectional
-            name: bpf
+            - mountPath: /sys/fs/bpf
+              mountPropagation: Bidirectional
+              name: bpf
       containers:
         - name: manager
           image: manager
@@ -85,6 +85,8 @@ spec:
             - mountPath: /tls
               name: tls
           securityContext:
+            appArmorProfile:
+              type: Unconfined
             capabilities:
               add:
                 # for net nsenter
@@ -92,6 +94,8 @@ spec:
                 - "SYS_ADMIN"
                 # for attaching qdiscs/filters
                 - "NET_ADMIN"
+                # for setting memlock rlimit
+                - SYS_RESOURCE
       tolerations:
         - operator: Exists
       volumes:
