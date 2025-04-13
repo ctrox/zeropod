@@ -349,19 +349,13 @@ func configureContainerdv2(ctx context.Context, runtime containerRuntime, contai
 }
 
 func configureContainerdv1(ctx context.Context, runtime containerRuntime, containerdConfig string) (bool, error) {
-	conf := &config.Config{}
-	if err := config.LoadConfig(ctx, containerdConfig, conf); err != nil {
+	confContents, err := os.ReadFile(containerdConfig)
+	if err != nil {
 		return false, err
 	}
-
-	if _, ok := conf.Plugins[criPluginKey]; ok {
-		criPlugin := map[string]map[string]map[string]any{}
-		if _, err := conf.Decode(ctx, criPluginKey, &criPlugin); err == nil {
-			if _, ok := criPlugin["containerd"]["runtimes"]["zeropod"]; ok {
-				log.Println("runtime already configured, no need to restart containerd")
-				return false, nil
-			}
-		}
+	if strings.Contains(string(confContents), zeropodRuntimeKey) {
+		log.Println("runtime already configured, no need to restart containerd")
+		return false, nil
 	}
 
 	// backup the original config
