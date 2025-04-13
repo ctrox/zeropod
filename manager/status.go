@@ -205,7 +205,7 @@ func (s *subscriber) handlePod(ctx context.Context, status *v1.ContainerStatus) 
 			if !apierrors.IsNotFound(err) {
 				return err
 			}
-			s.log.Info("updating pod resources using resize failed, falling back to update")
+			s.log.Debug("updating pod resources using resize failed, falling back to update")
 			if err := s.kube.Update(ctx, pod); err != nil {
 				return fmt.Errorf("updating pod: %w", err)
 			}
