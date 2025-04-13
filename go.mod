@@ -6,7 +6,6 @@ require (
 	github.com/checkpoint-restore/go-criu/v7 v7.2.0
 	github.com/cilium/ebpf v0.17.3
 	github.com/containerd/cgroups/v3 v3.0.3
-	github.com/containerd/containerd v1.7.27
 	github.com/containerd/containerd/api v1.8.0
 	github.com/containerd/containerd/v2 v2.0.4
 	github.com/containerd/errdefs v1.0.0
@@ -24,6 +23,7 @@ require (
 	github.com/mholt/archives v0.0.0-20241216060121-23e0af8fe73d
 	github.com/moby/sys/userns v0.1.0
 	github.com/opencontainers/runtime-spec v1.2.0
+	github.com/pelletier/go-toml/v2 v2.2.3
 	github.com/phayes/freeport v0.0.0-20220201140144-74d24b5ae9f5
 	github.com/pkg/errors v0.9.1
 	github.com/prometheus/client_golang v1.20.5
@@ -67,7 +67,6 @@ require (
 	github.com/containerd/platforms v1.0.0-rc.1 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/distribution/reference v0.6.0 // indirect
-	github.com/docker/go-events v0.0.0-20190806004212-e31b211e4f1c // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dsnet/compress v0.0.2-0.20230904184137-39efe44ab707 // indirect
 	github.com/emicklei/go-restful/v3 v3.12.1 // indirect

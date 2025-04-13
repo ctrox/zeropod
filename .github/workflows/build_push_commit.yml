@@ -2,7 +2,7 @@ name: Build and Publish manager/installer
 
 on:
   push:
-    tags:
+    branches:
       - "*"
 
 env:
@@ -35,12 +35,16 @@ jobs:
         id: meta_installer
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
+          tags: |
+            type=sha,prefix=dev-
           images: ${{ env.REGISTRY }}/${{ env.INSTALLER_IMAGE_NAME }}
 
       - name: Extract metadata for manager
         id: meta_manager
         uses: docker/metadata-action@9ec57ed1fcdbf14dcef7dfbe97b2010124a938b7
         with:
+          tags: |
+            type=sha,prefix=dev-
           images: ${{ env.REGISTRY }}/${{ env.MANAGER_IMAGE_NAME }}
 
       - name: Build and push installer

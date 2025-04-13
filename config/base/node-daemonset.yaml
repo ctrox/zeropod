@@ -23,6 +23,8 @@ spec:
           args: []
           imagePullPolicy: IfNotPresent
           volumeMounts:
+            - mountPath: /host
+              name: hostroot
             - mountPath: /etc/containerd
               name: containerd-etc
             - mountPath: /run/containerd
@@ -72,8 +74,6 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
           volumeMounts:
-            - mountPath: /opt/zeropod
-              name: zeropod-opt
             - mountPath: /run/zeropod
               name: zeropod-run
             - mountPath: /var/lib/zeropod
@@ -99,6 +99,9 @@ spec:
       tolerations:
         - operator: Exists
       volumes:
+        - name: hostroot
+          hostPath:
+            path: /
         - name: containerd-etc
           hostPath:
             path: /etc/containerd

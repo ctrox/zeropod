@@ -1,15 +1,18 @@
 package main
 
 import (
+	"context"
 	"os"
 	"testing"
 
+	"github.com/containerd/containerd/v2/cmd/containerd/server/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// kindContainerdConfig was extracted from a Kind cluster
-const kindContainerdConfig = `
+const (
+	// fullContainerdConfigV2 was extracted from a Kind cluster
+	fullContainerdConfigV2 = `
 # explicitly use v2 config format
 version = 2
 
@@ -53,37 +56,179 @@ version = 2
   # restrict_oom_score_adj needs to be true when running inside UserNS (rootless)
   restrict_oom_score_adj = true
 `
+	configV3 = `
+version = 3
+`
+	configWithOptPlugin = `
+version = 2
 
-func TestConfigureContainerd(t *testing.T) {
-	configFile, err := os.CreateTemp(t.TempDir(), "containerd-config-*.toml")
-	require.NoError(t, err)
+[plugins."io.containerd.internal.v1.opt"]
+  path = "/opt"
+`
+	configWithImports = `
+version = 2
+imports = ["/etc/containerd/foo_*.toml", "./bar*.toml"]
+`
+	configWithZeropodImport = `
+version = 2
+imports = ["/etc/containerd/foo_*.toml", "runtime_zeropod.toml"]
+`
+	configWithMulitlineImports = `
+version = 2
 
-	require.NoError(t, os.WriteFile(configFile.Name(), []byte(kindContainerdConfig), os.ModePerm))
+imports = [
+  "/etc/containerd/foo_*.toml",
+  "./bar*.toml",
+]
+`
+	configWithMulitlineImportsZeropod = `
+version = 2
 
-	restart, err := configureContainerd(runtimeContainerd, configFile.Name())
-	require.NoError(t, err)
+imports = [
+  "/etc/containerd/foo_*.toml",
+  "./bar*.toml",
+  "runtime_zeropod.toml",
+]
+`
+	containerdv1AlreadyConfigured = runtimeConfig + `
+[plugins."io.containerd.internal.v1.opt"]
+  path = "/opt/zeropod"
+`
+)
 
-	newFile, err := os.ReadFile(configFile.Name())
-	require.NoError(t, err)
-
-	backupInfo, err := os.Stat(configFile.Name() + configBackupSuffix)
-	require.NoError(t, err)
-
-	assert.NotEmpty(t, backupInfo.Size())
-	assert.NotEmpty(t, newFile)
-	assert.True(t, restart)
+type testConfig struct {
+	containerdConfig       string
+	runtime                containerRuntime
+	expectedRestart        bool
+	preCreateZeropodConfig bool
+	newConfigSuffix        string
+	expectedOptPath        string
+	containerdv1           bool
 }
 
-func TestConfigureContainerdK3S(t *testing.T) {
-	configFile, err := os.CreateTemp(t.TempDir(), "containerd-config-*.toml")
-	require.NoError(t, err)
-	require.NoError(t, os.WriteFile(configFile.Name(), []byte(kindContainerdConfig), os.ModePerm))
+func TestConfigureContainerd(t *testing.T) {
+	for name, tc := range map[string]testConfig{
+		"full config": {
+			containerdConfig: fullContainerdConfigV2,
+			runtime:          runtimeContainerd,
+			expectedRestart:  true,
+		},
+		"v3 config": {
+			containerdConfig: configV3,
+			runtime:          runtimeContainerd,
+			expectedRestart:  true,
+		},
+		"with imports already defined": {
+			containerdConfig: configWithImports,
+			runtime:          runtimeContainerd,
+			expectedRestart:  true,
+		},
+		"with multiline-imports already defined": {
+			containerdConfig: configWithMulitlineImports,
+			runtime:          runtimeContainerd,
+			expectedRestart:  true,
+		},
+		"with zeropod import already defined": {
+			containerdConfig:       configWithZeropodImport,
+			runtime:                runtimeContainerd,
+			preCreateZeropodConfig: true,
+			expectedRestart:        false,
+		},
+		"with zeropod multiline-imports already defined": {
+			containerdConfig:       configWithMulitlineImportsZeropod,
+			runtime:                runtimeContainerd,
+			preCreateZeropodConfig: true,
+			expectedRestart:        false,
+		},
+		"with opt plugin defined": {
+			containerdConfig: configWithOptPlugin,
+			runtime:          runtimeContainerd,
+			expectedRestart:  true,
+			expectedOptPath:  "/opt",
+		},
+		"k3s config": {
+			containerdConfig: fullContainerdConfigV2,
+			runtime:          runtimeK3S,
+			expectedRestart:  true,
+			newConfigSuffix:  templateSuffix,
+		},
+		"rke2 config": {
+			containerdConfig: fullContainerdConfigV2,
+			runtime:          runtimeRKE2,
+			expectedRestart:  true,
+			newConfigSuffix:  templateSuffix,
+		},
+		"full config v1": {
+			containerdConfig: fullContainerdConfigV2,
+			runtime:          runtimeContainerd,
+			expectedRestart:  true,
+			containerdv1:     true,
+		},
+		"config v1 already configured": {
+			containerdConfig:       containerdv1AlreadyConfigured,
+			runtime:                runtimeContainerd,
+			preCreateZeropodConfig: true,
+			expectedRestart:        false,
+			containerdv1:           true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if tc.expectedOptPath == "" {
+				tc.expectedOptPath = defaultOptPath
+			}
+			assert := assert.New(t)
+			require := require.New(t)
+			configName := setupTestConfig(t, tc)
+			var restart bool
+			var err error
+			if tc.containerdv1 {
+				restart, err = configureContainerdv1(context.Background(), tc.runtime, configName)
+			} else {
+				restart, err = configureContainerdv2(context.Background(), tc.runtime, configName)
+			}
+			require.NoError(err)
+			newFile, err := os.ReadFile(configName + tc.newConfigSuffix)
+			require.NoError(err)
+			backupConfig, err := os.ReadFile(configName + configBackupSuffix)
+			require.NoError(err)
 
-	restart, err := configureContainerd(runtimeK3S, configFile.Name())
-	require.NoError(t, err)
-	assert.True(t, restart)
+			ctx := context.Background()
+			conf := &config.Config{}
+			assert.NoError(config.LoadConfig(ctx, configName+tc.newConfigSuffix, conf))
 
-	newFile, err := os.ReadFile(configFile.Name() + templateSuffix)
+			if !tc.containerdv1 {
+				zeropodConfig, err := os.ReadFile(zeropodRuntimeConfigPath(configName))
+				require.NoError(err)
+				assert.NotEmpty(zeropodConfig)
+				t.Log(string(zeropodConfig))
+				assert.Contains(conf.Imports, zeropodTomlName)
+			}
+
+			assert.NotEmpty(backupConfig)
+			assert.Equal(tc.containerdConfig, string(backupConfig))
+			assert.NotEmpty(newFile)
+			assert.Equal(tc.expectedRestart, restart)
+
+			hasOpt, containerdOptPath, err := optConfigured(ctx, configName+tc.newConfigSuffix)
+			require.NoError(err)
+			assert.True(hasOpt)
+			assert.Equal(tc.expectedOptPath, containerdOptPath)
+			t.Log(string(newFile))
+		})
+	}
+}
+
+func setupTestConfig(t *testing.T, tc testConfig) string {
+	temp := t.TempDir()
+	configFile, err := os.CreateTemp(temp, "containerd-config-*.toml")
 	require.NoError(t, err)
-	assert.NotEmpty(t, newFile)
+	require.NoError(t, os.WriteFile(configFile.Name(), []byte(tc.containerdConfig), 0644))
+
+	if tc.preCreateZeropodConfig {
+		if !tc.containerdv1 {
+			require.NoError(t, writeZeropodRuntimeConfig(configFile.Name(), tc.expectedOptPath, tc.expectedOptPath == "", 2))
+		}
+		require.NoError(t, backupContainerdConfig(configFile.Name()))
+	}
+	return configFile.Name()
 }
