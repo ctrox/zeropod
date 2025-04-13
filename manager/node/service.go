@@ -47,9 +47,9 @@ const (
 	pagesTransferTimeout = time.Minute * 5
 	caCertFile           = "/tls/ca.crt"
 	caKeyFile            = "/tls/ca.key"
-	// tlsKeyFile  = "/run/tls.crt"
-	// tlsCertFile = "/run/tls.key"
 )
+
+var ErrLiveMigrationNotSupported = errors.New("live migration is not supported on this node")
 
 func nodeSocketAddress() string {
 	return fmt.Sprintf("unix://%s", nodev1.SocketPath)
@@ -97,16 +97,23 @@ func NewServer(addr string, kube client.Client, log *slog.Logger) (*Server, erro
 		return nil, fmt.Errorf("failed to create ttrpc server: %w", err)
 	}
 
+	liveMigrationSupported := true
+	if err := checkLazyPages(); err != nil {
+		liveMigrationSupported = false
+	}
+
 	nodev1.RegisterNodeService(s, &nodeService{
-		kube:          kube,
-		log:           log,
-		host:          host,
-		nodeName:      nodeName,
-		port:          listener.Addr().(*net.TCPAddr).Port,
-		tlsConfig:     tlsConfig,
-		pageServerTLS: true,
+		kube:                   kube,
+		log:                    log,
+		host:                   host,
+		nodeName:               nodeName,
+		port:                   listener.Addr().(*net.TCPAddr).Port,
+		tlsConfig:              tlsConfig,
+		pageServerTLS:          true,
+		liveMigrationSupported: liveMigrationSupported,
 	})
 
+	log.Info("new node server", "name", nodeName, "live_migration_supported", liveMigrationSupported)
 	return &Server{
 		ttrpc:        s,
 		unixListener: unixListener,
@@ -165,13 +172,14 @@ func (s *Server) Start(ctx context.Context) {
 // nodeService is a central RPC service running once per zeropod-node. It
 // facilitates pod migration requests.
 type nodeService struct {
-	kube          client.Client
-	log           *slog.Logger
-	host          string
-	nodeName      string
-	port          int
-	tlsConfig     *tls.Config
-	pageServerTLS bool
+	kube                   client.Client
+	log                    *slog.Logger
+	host                   string
+	nodeName               string
+	port                   int
+	tlsConfig              *tls.Config
+	pageServerTLS          bool
+	liveMigrationSupported bool
 }
 
 var findMigrationBackoff = wait.Backoff{
@@ -223,15 +231,8 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		}
 		return
 	}); err != nil {
+		ns.setMigrationFailed(ctx, req.PodInfo.ContainerName, migration)
 		ns.log.Error("migration servers unset", "container_name", req.PodInfo.ContainerName)
-		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) error {
-			setOrUpdateContainerStatus(m, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
-				status.Condition.Phase = v1.MigrationPhaseFailed
-			})
-			return nil
-		}); err != nil {
-			ns.log.Error("failed to update migration status", "container_name", req.PodInfo.ContainerName)
-		}
 		return nil, fmt.Errorf("migration servers are not set on migration: %s", migration.Name)
 	}
 
@@ -256,6 +257,12 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		return nil, err
 	}
 	if migration.Spec.LiveMigration {
+		if !ns.liveMigrationSupported {
+			ns.setMigrationFailed(ctx, req.PodInfo.ContainerName, migration)
+			ns.log.Error(ErrLiveMigrationNotSupported.Error())
+			return nil, ErrLiveMigrationNotSupported
+		}
+
 		ns.log.Info("starting page server for migration", "name", migration.Name, "namespace", migration.Namespace)
 
 		if _, err := ns.NewCriuLazyPages(ctx, &nodev1.CriuLazyPagesRequest{
@@ -275,6 +282,17 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 			Ports:         container.Ports,
 		},
 	}, nil
+}
+
+func (ns *nodeService) setMigrationFailed(ctx context.Context, containerName string, migration *v1.Migration) {
+	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) error {
+		setOrUpdateContainerStatus(m, containerName, func(status *v1.MigrationContainerStatus) {
+			status.Condition.Phase = v1.MigrationPhaseFailed
+		})
+		return nil
+	}); err != nil {
+		ns.log.Error("failed to update migration status", "container_name", containerName)
+	}
 }
 
 func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreRequest) (*nodev1.RestoreResponse, error) {
@@ -512,6 +530,10 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 
 	var pageServer *v1.MigrationServer
 	if req.MigrationInfo.LiveMigration {
+		if !ns.liveMigrationSupported {
+			ns.log.Error(ErrLiveMigrationNotSupported.Error())
+			return nil, ErrLiveMigrationNotSupported
+		}
 		tlsConfig := ns.tlsConfig
 		if !ns.pageServerTLS {
 			tlsConfig = nil
