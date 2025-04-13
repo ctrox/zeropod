@@ -90,7 +90,7 @@ imports = [
   "runtime_zeropod.toml",
 ]
 `
-	containerdv1AlreadyConfigured = runtimeConfig + `
+	containerdv1AlreadyConfigured = fullContainerdConfigV2 + runtimeConfig + `
 [plugins."io.containerd.internal.v1.opt"]
   path = "/opt/zeropod"
 `
