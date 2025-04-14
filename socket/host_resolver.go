@@ -26,9 +26,10 @@ func (h hostResolver) Resolve(pid uint32) uint32 {
 
 // findHostPid greps through the procfs to find the host pid of the supplied
 // namespaced pid. It's very ugly but it works well enough for testing with
-// Kind.
+// Kind. It would be better to use the procfs package here but NSpid is always
+// empty.
 func findHostPid(procPath string, nsPid uint32) (uint32, error) {
-	out, err := exec.Command("bash", "-c", fmt.Sprintf("grep %d -ril %s*/status | head -n 1", nsPid, procPath)).Output()
+	out, err := exec.Command("bash", "-c", fmt.Sprintf(`grep -P 'NSpid:.*\t%d\t' -ril %s*/status | head -n 1`, nsPid, procPath)).Output()
 	if err != nil {
 		return 0, err
 	}
