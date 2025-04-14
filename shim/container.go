@@ -264,6 +264,9 @@ func (c *Container) DeleteCheckpointedPID(pid int) {
 
 func (c *Container) Stop(ctx context.Context) {
 	c.CancelScaleDown()
+	if err := c.tracker.RemovePid(uint32(c.process.Pid())); err != nil {
+		log.G(ctx).Errorf("unable to remove pid from tracker: %s", err)
+	}
 	if err := c.tracker.Close(); err != nil {
 		log.G(ctx).Errorf("unable to close tracker: %s", err)
 	}
