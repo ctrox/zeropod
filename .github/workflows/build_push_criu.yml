@@ -8,7 +8,7 @@ on:
 env:
   REGISTRY: ghcr.io
   CRIU_IMAGE_NAME: ${{ github.repository }}-criu
-  CRIU_VERSION: 8d5cef546a035c4dda3a1be28ff1202c3b1b4c72
+  CRIU_VERSION: v4.1
 
 jobs:
   push_to_registry:
