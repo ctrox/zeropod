@@ -10,7 +10,7 @@ env:
   INSTALLER_IMAGE_NAME: ${{ github.repository }}-installer
   MANAGER_IMAGE_NAME: ${{ github.repository }}-manager
   CRIU_IMAGE_NAME: ${{ github.repository }}-criu
-  CRIU_VERSION: 8d5cef546a035c4dda3a1be28ff1202c3b1b4c72
+  CRIU_VERSION: v4.1
 
 jobs:
   push_to_registry:
@@ -67,5 +67,5 @@ jobs:
           tags: ${{ steps.meta_manager.outputs.tags }}
           labels: ${{ steps.meta_manager.outputs.labels }}
           build-args: |
-            CRIU_IMAGE_NAME=${{ env.CRIU_IMAGE_NAME }}
+            CRIU_IMAGE_NAME=${{ env.REGISTRY }}/${{ env.CRIU_IMAGE_NAME }}
             CRIU_VERSION=${{ env.CRIU_VERSION }}

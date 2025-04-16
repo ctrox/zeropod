@@ -10,7 +10,7 @@ WORKDIR /workspace
 RUN git clone https://github.com/checkpoint-restore/criu.git
 WORKDIR /workspace/criu
 ADD criu/*.patch .
-ARG CRIU_VERSION=v4.0
+ARG CRIU_VERSION=v4.1
 RUN git checkout $CRIU_VERSION
 RUN git apply *.patch
 RUN make -j $(nproc)
