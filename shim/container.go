@@ -237,7 +237,9 @@ func (c *Container) InitialProcess() process.Process {
 }
 
 func (c *Container) StopActivator(ctx context.Context) {
-	c.activator.Stop(ctx)
+	if c.activator != nil {
+		c.activator.Stop(ctx)
+	}
 }
 
 // CheckpointedPID indicates if the pid has been checkpointed before.
