@@ -84,6 +84,7 @@ network-lock skip
     "zeropod.ctrox.dev/pre-dump",
     "zeropod.ctrox.dev/migrate",
     "zeropod.ctrox.dev/live-migrate",
+    "zeropod.ctrox.dev/migrate-data",
     "io.containerd.runc.v2.group"
   ]
 
@@ -104,6 +105,7 @@ network-lock skip
     "zeropod.ctrox.dev/pre-dump",
     "zeropod.ctrox.dev/migrate",
     "zeropod.ctrox.dev/live-migrate",
+    "zeropod.ctrox.dev/migrate-data",
     "io.containerd.runc.v2.group"
   ]
 

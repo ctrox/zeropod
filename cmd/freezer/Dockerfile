@@ -9,6 +9,6 @@ COPY cmd/freezer cmd/freezer
 
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o freezer cmd/freezer/main.go
 
-FROM gcr.io/distroless/static-debian12
+FROM gcr.io/distroless/static-debian12:debug
 COPY --from=builder /workspace/freezer /
 ENTRYPOINT ["/freezer"]
