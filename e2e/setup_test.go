@@ -597,9 +597,9 @@ func createDeployAndWait(t testing.TB, ctx context.Context, c client.Client, dep
 	}
 }
 
-func podsOfDeployment(t testing.TB, ctx context.Context, c client.Client, deploy *appsv1.Deployment) []corev1.Pod {
+func podsOfDeployment(t testing.TB, c client.Client, deploy *appsv1.Deployment) []corev1.Pod {
 	podList := &corev1.PodList{}
-	if err := c.List(ctx, podList, client.MatchingLabels(deploy.Spec.Selector.MatchLabels)); err != nil {
+	if err := c.List(t.Context(), podList, client.MatchingLabels(deploy.Spec.Selector.MatchLabels)); err != nil {
 		t.Error(err)
 	}
 
@@ -711,7 +711,7 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 		Name(pod.Name).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Command: []string{"/bin/sh", "-c", command},
+			Command: []string{"sh", "-c", command},
 			Stdin:   false,
 			Stdout:  true,
 			Stderr:  true,

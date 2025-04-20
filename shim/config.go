@@ -23,6 +23,7 @@ const (
 	PreDumpAnnotationKey             = "zeropod.ctrox.dev/pre-dump"
 	MigrateAnnotationKey             = "zeropod.ctrox.dev/migrate"
 	LiveMigrateAnnotationKey         = "zeropod.ctrox.dev/live-migrate"
+	DisableMigrateDataAnnotationKey  = "zeropod.ctrox.dev/disable-migrate-data"
 	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
 	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
 	CRIPodNameAnnotation             = "io.kubernetes.cri.sandbox-name"
@@ -45,6 +46,7 @@ type Config struct {
 	PreDump               bool
 	Migrate               []string
 	LiveMigrate           string
+	DisableMigrateData    bool
 	ContainerName         string
 	ContainerType         string
 	PodName               string
@@ -130,6 +132,15 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		migrate = strings.Split(migrateValue, containersDelim)
 	}
 
+	disableMigrateDataValue := spec.Annotations[DisableMigrateDataAnnotationKey]
+	disableMigrateData := false
+	if disableMigrateDataValue != "" {
+		disableMigrateData, err = strconv.ParseBool(disableMigrateDataValue)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	ns, ok := namespaces.Namespace(ctx)
 	if !ok {
 		ns = defaultContainerdNS
@@ -142,6 +153,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		PreDump:               preDump,
 		Migrate:               migrate,
 		LiveMigrate:           spec.Annotations[LiveMigrateAnnotationKey],
+		DisableMigrateData:    disableMigrateData,
 		ZeropodContainerNames: containerNames,
 		ContainerName:         containerName,
 		ContainerType:         containerType,

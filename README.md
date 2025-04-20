@@ -308,6 +308,17 @@ to be enabled in the host kernel (`CONFIG_USERFAULTFD`).
 zeropod.ctrox.dev/live-migrate: "nginx"
 ```
 
+### `zeropod.ctrox.dev/disbale-migrate-data`
+
+When migrating a pod (regardless of live or scaled down), data that has been
+written to the containers file system will be copied over. This is done by
+copying the upper layer of the container overlayfs. Enabled by default but can
+be disabled with this annotation.
+
+```yaml
+zeropod.ctrox.dev/disbale-migrate-data: "true"
+```
+
 ### `io.containerd.runc.v2.group`
 
 It's possible to reduce the resource usage further by grouping multiple pods

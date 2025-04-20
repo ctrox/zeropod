@@ -2,6 +2,7 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"path"
 	"testing"
 	"time"
@@ -23,13 +24,14 @@ func TestMigration(t *testing.T) {
 	ctx := context.Background()
 
 	type testCase struct {
-		deploy          *appsv1.Deployment
-		svc             *corev1.Service
-		sameNode        bool
-		migrationCount  int
-		liveMigration   bool
-		beforeMigration func(t *testing.T)
-		afterMigration  func(t *testing.T)
+		deploy                *appsv1.Deployment
+		svc                   *corev1.Service
+		sameNode              bool
+		migrationCount        int
+		liveMigration         bool
+		expectDataNotMigrated bool
+		beforeMigration       func(t *testing.T)
+		afterMigration        func(t *testing.T)
 	}
 	cases := map[string]testCase{
 		"same-node live migration": {
@@ -74,7 +76,7 @@ func TestMigration(t *testing.T) {
 	}
 
 	migrate := func(t *testing.T, ctx context.Context, e2e *e2eConfig, tc testCase) {
-		pods := podsOfDeployment(t, ctx, e2e.client, tc.deploy)
+		pods := podsOfDeployment(t, e2e.client, tc.deploy)
 		if len(pods) < 1 {
 			t.Fatal("expected at least one pod in the deployment")
 		}
@@ -90,7 +92,7 @@ func TestMigration(t *testing.T) {
 
 		assert.NoError(t, e2e.client.Delete(ctx, &pod))
 		assert.Eventually(t, func() bool {
-			pods := podsOfDeployment(t, ctx, e2e.client, tc.deploy)
+			pods := podsOfDeployment(t, e2e.client, tc.deploy)
 			if len(pods) != 1 {
 				return false
 			}
@@ -132,6 +134,8 @@ func TestMigration(t *testing.T) {
 
 			for range tc.migrationCount {
 				tc.beforeMigration(t)
+				_, _, err := podExec(e2e.cfg, migrationPod(t, tc.deploy), fmt.Sprintf("echo %s > /containerdata", t.Name()))
+				assert.NoError(t, err)
 				checkCtx, cancel := context.WithCancel(ctx)
 				defer cancel()
 				if tc.liveMigration {
@@ -143,9 +147,24 @@ func TestMigration(t *testing.T) {
 				migrate(t, ctx, e2e, tc)
 				cancel()
 				tc.afterMigration(t)
+				data, _, err := podExec(e2e.cfg, migrationPod(t, tc.deploy), "cat /containerdata")
+				if tc.expectDataNotMigrated {
+					assert.Error(t, err)
+				} else {
+					assert.NoError(t, err)
+					assert.Equal(t, t.Name(), data)
+				}
 			}
 		})
 	}
+}
+
+func migrationPod(t testing.TB, deploy *appsv1.Deployment) *corev1.Pod {
+	pods := podsOfDeployment(t, e2e.client, deploy)
+	if len(pods) != 1 {
+		t.Errorf("pod of deployment %s not found", deploy.Name)
+	}
+	return &pods[0]
 }
 
 func defaultBeforeMigration(t *testing.T) {
@@ -170,7 +189,7 @@ func defaultAfterMigration(t *testing.T) {
 func nonLiveBeforeMigration(t *testing.T) {
 	defaultBeforeMigration(t)
 	require.Eventually(t, func() bool {
-		pods := podsOfDeployment(t, context.Background(), e2e.client, freezerDeployment("same-node-migration", "default", 1))
+		pods := podsOfDeployment(t, e2e.client, freezerDeployment("same-node-migration", "default", 1))
 		if len(pods) == 0 {
 			return false
 		}
@@ -180,7 +199,7 @@ func nonLiveBeforeMigration(t *testing.T) {
 
 func nonLiveAfterMigration(t *testing.T) {
 	require.Never(t, func() bool {
-		pods := podsOfDeployment(t, context.Background(), e2e.client, freezerDeployment("same-node-migration", "default", 1))
+		pods := podsOfDeployment(t, e2e.client, freezerDeployment("same-node-migration", "default", 1))
 		if len(pods) == 0 {
 			return true
 		}
