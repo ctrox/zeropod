@@ -17,7 +17,7 @@ spec:
     spec:
       runtimeClassName: zeropod
       containers:
-        - image: ctrox/freezer:latest
+        - image: ghcr.io/ctrox/zeropod-freezer:latest
           name: freezer
           args: ["-memory", "128"]
           imagePullPolicy: IfNotPresent

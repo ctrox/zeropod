@@ -150,7 +150,9 @@ func TestMigration(t *testing.T) {
 
 func defaultBeforeMigration(t *testing.T) {
 	assert.Eventually(t, func() bool {
-		require.NoError(t, freezerWrite(t.Name(), e2e.port))
+		if err := freezerWrite(t.Name(), e2e.port); err != nil {
+			return false
+		}
 		f, err := freezerRead(e2e.port)
 		require.NoError(t, err)
 		return t.Name() == f.Data

@@ -11,4 +11,4 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags
 
 FROM gcr.io/distroless/static-debian12
 COPY --from=builder /workspace/freezer /
-CMD ["/freezer"]
+ENTRYPOINT ["/freezer"]

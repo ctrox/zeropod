@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"time"
 )
@@ -81,8 +82,12 @@ func main() {
 
 func allocateMemory(mem int) {
 	slog.Info("allocating memory", "bytes", mem<<20)
+	// we don't really care about the randomness too much, we want something
+	// quick that isn't so easily compressable.
+	r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	ballast = make([]byte, mem<<20)
-	for i := 0; i < len(ballast); i++ {
-		ballast[i] = byte('A')
+	for i := range len(ballast) {
+		ballast[i] = byte(r.UintN(255))
 	}
+	slog.Info("done allocating", "bytes", mem<<20)
 }

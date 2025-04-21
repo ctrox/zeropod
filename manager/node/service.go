@@ -2,7 +2,6 @@
 package node
 
 import (
-	"bytes"
 	"context"
 	"crypto/tls"
 	"errors"
@@ -23,6 +22,7 @@ import (
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/klauspost/compress/zstd"
 	"github.com/mholt/archives"
 	"google.golang.org/protobuf/types/known/emptypb"
 	appsv1 "k8s.io/api/apps/v1"
@@ -421,16 +421,53 @@ func matchingMigration(pod *corev1.Pod, migration v1.Migration) bool {
 }
 
 func (ns *nodeService) pullImage(ctx context.Context, nodeClient nodev1.NodeClient, id string) error {
+	beforePull := time.Now()
 	cl, err := nodeClient.PullImage(ctx, &nodev1.PullImageRequest{ImageId: id})
 	if err != nil {
 		return err
 	}
-	img, err := cl.Recv()
-	if err != nil {
+
+	errs := make(chan error)
+	transferredBytes := 0
+	r, w := io.Pipe()
+	defer w.Close()
+	go func() {
+		defer close(errs)
+		if err := extract(ctx, id, r); err != nil {
+			errs <- err
+		}
+	}()
+	for {
+		img, err := cl.Recv()
+		if err != nil {
+			if err == io.EOF {
+				_ = w.Close()
+				break
+			}
+			return err
+		}
+		n, err := w.Write(img.ImageData)
+		if err != nil {
+			return fmt.Errorf("sending image data: %w", err)
+		}
+		transferredBytes += n
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
+	for err := range errs {
 		return err
 	}
-	ns.log.Info("received image data, starting extract", "len", len(img.ImageData))
 
+	ns.log.Info("done pulling image",
+		"elapsed", time.Since(beforePull).String(),
+		"transferred_bytes", transferredBytes)
+	return nil
+}
+
+func extract(ctx context.Context, id string, reader io.ReadCloser) error {
 	format := archives.CompressedArchive{
 		Compression: archives.Zstd{},
 		Extraction:  archives.Tar{},
@@ -440,7 +477,7 @@ func (ns *nodeService) pullImage(ctx context.Context, nodeClient nodev1.NodeClie
 	if err := os.MkdirAll(baseDir, os.ModePerm); err != nil {
 		return err
 	}
-	return format.Extract(ctx, bytes.NewReader(img.ImageData), func(ctx context.Context, f archives.FileInfo) error {
+	return format.Extract(ctx, reader, func(ctx context.Context, f archives.FileInfo) error {
 		name := filepath.Join(baseDir, filepath.Clean(f.NameInArchive))
 		if f.IsDir() {
 			return os.MkdirAll(name, f.Mode())
@@ -459,7 +496,6 @@ func (ns *nodeService) pullImage(ctx context.Context, nodeClient nodev1.NodeClie
 		if _, err := io.Copy(file, rc); err != nil {
 			return err
 		}
-
 		return nil
 	})
 }
@@ -642,7 +678,6 @@ func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyP
 var imageIDRegexp = regexp.MustCompile("^[A-Fa-f0-9]{64}$")
 
 // PullImage allows the caller to pull a compressed image from the server
-// TODO: transmit image in chunks, not all in one message
 func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageRequest, imageStream nodev1.Node_PullImageServer) error {
 	ns.log.Info("got pull image request", "image_id", req.ImageId)
 	if !imageIDRegexp.MatchString(req.ImageId) {
@@ -656,20 +691,49 @@ func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageReque
 	}
 
 	format := archives.CompressedArchive{
-		Compression: archives.Zstd{},
-		Archival:    archives.Tar{},
+		Compression: archives.Zstd{
+			EncoderOptions: []zstd.EOption{zstd.WithEncoderLevel(zstd.SpeedFastest)},
+		},
+		Archival: archives.Tar{},
 	}
+	// split our image into 64KiB chunks
+	const chunkSize = 64 * 1024
 
-	// TODO: send in chunks
-	imageData := bytes.Buffer{}
-	if err := format.Archive(ctx, &imageData, arch); err != nil {
+	errChan := make(chan error)
+	r, w := io.Pipe()
+	archive := func() {
+		defer close(errChan)
+		defer w.Close()
+		if err := format.Archive(ctx, w, arch); err != nil {
+			errChan <- err
+		}
+	}
+	go archive()
+	for {
+		chunk := make([]byte, chunkSize)
+		n, err := r.Read(chunk)
+		if err != nil && err != io.EOF {
+			return err
+		}
+		if err == io.EOF {
+			break
+		}
+		if n == 0 {
+			continue
+		}
+		if err := imageStream.Send(&nodev1.Image{ImageData: chunk[:n]}); err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+	}
+	for err := range errChan {
 		return err
 	}
-	ns.log.Debug("sending archived image data", "path", nodev1.SnapshotPath(req.ImageId), "size", imageData.Len())
-
-	return imageStream.Send(&nodev1.Image{
-		ImageData: imageData.Bytes(),
-	})
+	return nil
 }
 
 func (ns *nodeService) local(host string) bool {
