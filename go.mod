@@ -20,6 +20,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/fsnotify/fsnotify v1.7.0
 	github.com/go-logr/logr v1.4.2
+	github.com/klauspost/compress v1.17.11
 	github.com/mholt/archives v0.0.0-20241216060121-23e0af8fe73d
 	github.com/moby/sys/userns v0.1.0
 	github.com/opencontainers/runtime-spec v1.2.0
@@ -99,7 +100,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
-	github.com/klauspost/compress v1.17.11 // indirect
 	github.com/klauspost/pgzip v1.2.6 // indirect
 	github.com/mailru/easyjson v0.7.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
