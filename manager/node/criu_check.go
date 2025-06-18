@@ -15,7 +15,7 @@ func checkLazyPages() error {
 		return fmt.Errorf("lazy pages feature check failed with: %w", err)
 	}
 	if feat.LazyPages == nil || !*feat.LazyPages {
-		return fmt.Errorf("lazy pages feature check failed")
+		return fmt.Errorf("lazy pages feature not available")
 	}
 	return nil
 }

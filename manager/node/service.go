@@ -99,6 +99,7 @@ func NewServer(addr string, kube client.Client, log *slog.Logger) (*Server, erro
 
 	liveMigrationSupported := true
 	if err := checkLazyPages(); err != nil {
+		log.Warn("lazy pages check failed", "error", err)
 		liveMigrationSupported = false
 	}
 
