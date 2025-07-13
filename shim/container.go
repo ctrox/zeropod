@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
 	"github.com/containerd/containerd/v2/pkg/stdio"
@@ -18,6 +19,7 @@ import (
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/socket"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -28,6 +30,7 @@ type Container struct {
 
 	context          context.Context
 	id               string
+	createOpts       *anypb.Any
 	activator        *activator.Server
 	cfg              *Config
 	initialProcess   process.Process
@@ -53,7 +56,7 @@ type Container struct {
 	metrics           *v1.ContainerMetrics
 }
 
-func New(ctx context.Context, cfg *Config, id string, cr *sync.Mutex, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
+func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, cr *sync.Mutex, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
 	// get network ns of our container and store it for later use
 	netNSPath, err := GetNetworkNS(cfg.spec)
 	if err != nil {
@@ -71,7 +74,8 @@ func New(ctx context.Context, cfg *Config, id string, cr *sync.Mutex, pt stdio.P
 	}
 
 	c := &Container{
-		id:                id,
+		id:                r.ID,
+		createOpts:        r.Options,
 		context:           ctx,
 		platform:          pt,
 		cfg:               cfg,

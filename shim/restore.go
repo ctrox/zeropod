@@ -59,6 +59,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 
 	createReq := &task.CreateTaskRequest{
 		ID:               c.ID(),
+		Options:          c.createOpts,
 		Bundle:           c.Bundle,
 		Terminal:         false,
 		Stdin:            c.initialProcess.Stdio().Stdin,
