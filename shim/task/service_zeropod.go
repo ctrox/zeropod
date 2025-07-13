@@ -136,7 +136,7 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return w.service.Create(ctx, r)
 	}
 
-	zeropodContainer, err := zshim.New(w.context, cfg, r.ID, &w.checkpointRestore, w.platform, w.zeropodEvents)
+	zeropodContainer, err := zshim.New(w.context, cfg, r, &w.checkpointRestore, w.platform, w.zeropodEvents)
 	if err != nil {
 		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}
