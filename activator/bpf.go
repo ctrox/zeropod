@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 
@@ -132,27 +131,24 @@ func MapsPath() string {
 	return filepath.Join(BPFFSPath, "zeropod_maps")
 }
 
-// MountBPFFS executes a mount -t bpf on the supplied path
+// MountBPFFS executes a bpf mount on the supplied path. It has been adapted by:
+// https://github.com/cilium/cilium/blob/cf3889af46a4058d5e89495d502fc19c10713110/pkg/bpf/bpffs_linux.go#L124
 func MountBPFFS(path string) error {
-	return mount("bpf", "bpf", path)
-}
-
-// MountBPFFS mounts the kernel debugfs
-func MountDebugFS() error {
-	return mount("debugfs", "debugfs", "/sys/kernel/debug")
-}
-
-func mount(name, typ, path string) error {
-	const alreadyMountedCode = 32
-	out, err := exec.Command("mount", "-t", typ, name, path).CombinedOutput()
+	mapRootStat, err := os.Stat(path)
 	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			if exitError.ExitCode() == alreadyMountedCode {
-				return nil
+		if os.IsNotExist(err) {
+			if err := os.MkdirAll(path, 0755); err != nil {
+				return fmt.Errorf("unable to create bpf mount directory: %w", err)
 			}
+		} else {
+			return fmt.Errorf("failed to stat the mount path %s: %w", path, err)
 		}
-		return fmt.Errorf("unable to mount BPF fs: %s: %s", err, out)
+	} else if !mapRootStat.IsDir() {
+		return fmt.Errorf("%s is a file which is not a directory", path)
 	}
 
+	if err := unix.Mount(path, path, "bpf", 0, ""); err != nil {
+		return fmt.Errorf("failed to mount %s: %w", path, err)
+	}
 	return nil
 }

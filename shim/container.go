@@ -41,6 +41,7 @@ type Container struct {
 	skipStart        bool
 	netNS            ns.NetNS
 	scaleDownTimer   *time.Timer
+	scaleDownBackoff time.Duration
 	platform         stdio.Platform
 	tracker          socket.Tracker
 	preRestore       func() HandleStartedFunc
@@ -108,10 +109,11 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 	c.tracker = tracker
 
 	if err := tracker.TrackPid(uint32(p.Pid())); err != nil {
-		return err
+		log.G(ctx).Warnf("tracking pid failed: %s", err)
 	}
 	if err := c.initActivator(ctx); err != nil {
-		return err
+		log.G(ctx).Warnf("activator init failed, disabling scale down: %s", err)
+		c.cfg.ScaleDownDuration = 0
 	}
 	if c.SkipStart() {
 		c.SetScaledDown(true)
@@ -147,7 +149,7 @@ func (c *Container) scheduleScaleDownIn(in time.Duration) error {
 		if errors.Is(err, socket.NoActivityRecordedErr{}) {
 			log.G(c.context).Info(err)
 		} else if err != nil {
-			log.G(c.context).Errorf("unable to get last TCP activity from tracker: %s", err)
+			log.G(c.context).Warnf("unable to get last TCP activity from tracker: %s", err)
 		} else {
 			log.G(c.context).Infof("last activity was %s ago", time.Since(last))
 
@@ -271,10 +273,10 @@ func (c *Container) DeleteCheckpointedPID(pid int) {
 func (c *Container) Stop(ctx context.Context) {
 	c.CancelScaleDown()
 	if err := c.tracker.RemovePid(uint32(c.process.Pid())); err != nil {
-		log.G(ctx).Errorf("unable to remove pid from tracker: %s", err)
+		log.G(ctx).Warnf("unable to remove pid from tracker: %s", err)
 	}
 	if err := c.tracker.Close(); err != nil {
-		log.G(ctx).Errorf("unable to close tracker: %s", err)
+		log.G(ctx).Warnf("unable to close tracker: %s", err)
 	}
 	status := c.Status()
 	status.Phase = v1.ContainerPhase_STOPPING
@@ -370,7 +372,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
 		c.Container = restoredContainer
 
 		if err := c.tracker.TrackPid(uint32(p.Pid())); err != nil {
-			log.G(ctx).Errorf("unable to track pid %d: %s", p.Pid(), err)
+			log.G(ctx).Warnf("unable to track pid %d: %s", p.Pid(), err)
 		}
 
 		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))

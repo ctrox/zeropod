@@ -47,14 +47,13 @@ func main() {
 	defer stop()
 
 	if err := manager.AttachRedirectors(ctx, log); err != nil {
-		log.Error("attaching redirectors", "err", err)
-		os.Exit(1)
+		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
 	}
 
 	cleanSocketTracker, err := socket.LoadEBPFTracker()
 	if err != nil {
-		log.Error("loading socket tracker", "err", err)
-		os.Exit(1)
+		log.Warn("loading socket tracker failed, scaling down with static duration", "err", err)
+		cleanSocketTracker = func() error { return nil }
 	}
 
 	mgr, err := newControllerManager()

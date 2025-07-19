@@ -16,18 +16,18 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 )
 
-const retryInterval = time.Second
-
 func (c *Container) scaleDown(ctx context.Context) error {
 	if err := c.startActivator(ctx); err != nil {
 		if errors.Is(err, errNoPortsDetected) {
-			log.G(ctx).Infof("no ports detected, rescheduling scale down in %s", retryInterval)
-			return c.scheduleScaleDownIn(retryInterval)
+			retryIn := c.scaleDownRetry()
+			log.G(ctx).Infof("no ports detected, rescheduling scale down in %s", retryIn)
+			return c.scheduleScaleDownIn(retryIn)
 		}
 
 		if errors.Is(err, activator.ErrMapNotFound) {
-			log.G(ctx).Infof("activator is not ready, rescheduling scale down in %s", retryInterval)
-			return c.scheduleScaleDownIn(retryInterval)
+			retryIn := c.scaleDownRetry()
+			log.G(ctx).Infof("activator is not ready, rescheduling scale down in %s", retryIn)
+			return c.scheduleScaleDownIn(retryIn)
 		}
 
 		return err
@@ -39,7 +39,7 @@ func (c *Container) scaleDown(ctx context.Context) error {
 
 	if err := c.tracker.RemovePid(uint32(c.process.Pid())); err != nil {
 		// key could not exist, just log the error for now
-		log.G(ctx).Errorf("unable to remove pid %d: %s", c.process.Pid(), err)
+		log.G(ctx).Warnf("unable to remove pid %d: %s", c.process.Pid(), err)
 	}
 
 	if c.ScaledDown() {
@@ -58,6 +58,22 @@ func (c *Container) scaleDown(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// scaleDownRetry returns the duration in which the next scaledown should be
+// retried. It backs off exponentially with an initial wait of 1 second.
+func (c *Container) scaleDownRetry() time.Duration {
+	const initial, max = time.Second, time.Minute * 5
+	c.scaleDownBackoff = c.scaleDownBackoff * 2
+	if c.scaleDownBackoff >= max {
+		c.scaleDownBackoff = max
+	}
+
+	if c.scaleDownBackoff == 0 {
+		c.scaleDownBackoff = initial
+	}
+
+	return c.scaleDownBackoff
 }
 
 func (c *Container) kill(ctx context.Context) error {
