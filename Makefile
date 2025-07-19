@@ -81,7 +81,7 @@ docker-bench: build-test
 # has to have SYS_ADMIN because the test tries to set netns and mount bpffs
 # we use --pid=host to make the ebpf tracker work without a pid resolver
 docker-test:
-	docker run --rm --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host -v $(PWD):/app $(TEST_IMAGE) make test
+	docker run --rm --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host --userns=host -v $(PWD):/app $(TEST_IMAGE) make test
 
 CLANG ?= clang
 CFLAGS := -O2 -g -Wall -Werror
