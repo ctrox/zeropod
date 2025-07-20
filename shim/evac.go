@@ -36,6 +36,7 @@ func (c *Container) Evac(ctx context.Context, scaledDown bool) error {
 			return
 		}
 
+		defer cleanupEvacFiles(ctx, c.ID())
 		err = c.evac(ctx)
 		if err != nil {
 			b, err := os.ReadFile(filepath.Join(nodev1.WorkDirPath(c.ID()), "dump.log"))
@@ -92,11 +93,7 @@ func (c *Container) evac(ctx context.Context) error {
 	lazyStarted := make(chan bool, 1)
 	done := make(chan bool, 1)
 	checkpointCtx, cancelCheckpoint := context.WithCancel(ctx)
-	defer func() {
-		cancelCheckpoint()
-		_ = os.Remove(nodev1.LazyPagesSocket(c.ID()))
-		_ = os.RemoveAll(nodeImagePath)
-	}()
+	defer cancelCheckpoint()
 	var pausedAt time.Time
 	go waitForStatus(ctx, lazyStarted, errChan, statusRead)
 	go func(errChan chan error) {
@@ -154,6 +151,15 @@ func (c *Container) evac(ctx context.Context) error {
 			log.G(ctx).Info("done case")
 			return nil
 		}
+	}
+}
+
+func cleanupEvacFiles(ctx context.Context, containerID string) {
+	if err := os.Remove(nodev1.LazyPagesSocket(containerID)); err != nil {
+		log.G(ctx).WithError(err).Warn("cleaning up lazy pages socket")
+	}
+	if err := os.RemoveAll(nodev1.ImagePath(containerID)); err != nil {
+		log.G(ctx).WithError(err).Warn("cleaning up checkpoint image")
 	}
 }
 

@@ -1,4 +1,4 @@
-FROM docker:24.0-cli
+FROM docker:28.0-cli
 
 RUN apk add --update go make iptables
 WORKDIR /app

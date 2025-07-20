@@ -16,7 +16,6 @@ import (
 // an HTTP server and doing a request against it. This test requires elevated
 // privileges to run.
 func TestEBPFTracker(t *testing.T) {
-	require.NoError(t, activator.MountDebugFS())
 	require.NoError(t, activator.MountBPFFS(activator.BPFFSPath))
 
 	clean, err := LoadEBPFTracker()
