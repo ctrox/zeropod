@@ -1,3 +1,8 @@
+// Package activator contains a userspace TCP proxy that listens on a random
+// port and loads an eBPF program to intercept and redirect packets destined to
+// the configured ports. The activator accepts the connection, calls onAccept,
+// signals to disable the eBPF redirect and then proxies the initial data to the
+// defined ports as soon as something is listening.
 package activator
 
 import (
@@ -19,14 +24,13 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 )
 
-const ()
-
 type Server struct {
 	listeners      []net.Listener
 	ports          []uint16
-	quit           chan interface{}
+	quit           chan any
 	wg             sync.WaitGroup
-	onAccept       OnAccept
+	connHook       ConnHook
+	restoreHook    RestoreHook
 	connectTimeout time.Duration
 	proxyTimeout   time.Duration
 	proxyCancel    context.CancelFunc
@@ -34,13 +38,15 @@ type Server struct {
 	maps           bpfMaps
 	sandboxPid     int
 	started        bool
+	peekBufferSize int
 }
 
-type OnAccept func() error
+type ConnHook func(net.Conn) (conn net.Conn, cont bool, err error)
+type RestoreHook func() error
 
 func NewServer(ctx context.Context, nn ns.NetNS) (*Server, error) {
 	s := &Server{
-		quit:           make(chan interface{}),
+		quit:           make(chan any),
 		connectTimeout: time.Second * 5,
 		proxyTimeout:   time.Second * 5,
 		ns:             nn,
@@ -66,15 +72,17 @@ func parsePidFromNetNS(nn ns.NetNS) int {
 
 var ErrMapNotFound = errors.New("bpf map could not be found")
 
-func (s *Server) Start(ctx context.Context, ports []uint16, onAccept OnAccept) error {
+func (s *Server) Start(ctx context.Context, ports []uint16, connHook ConnHook, restoreHook RestoreHook) error {
 	s.ports = ports
+	s.connHook = connHook
+	s.restoreHook = restoreHook
 
 	if err := s.loadPinnedMaps(); err != nil {
 		return err
 	}
 
 	for _, port := range s.ports {
-		proxyPort, err := s.listen(ctx, port, onAccept)
+		proxyPort, err := s.listen(ctx, port)
 		if err != nil {
 			return err
 		}
@@ -111,7 +119,11 @@ func (s *Server) DisableRedirects() error {
 	return nil
 }
 
-func (s *Server) listen(ctx context.Context, port uint16, onAccept OnAccept) (int, error) {
+func (s *Server) SetPeekBufferSize(size int) {
+	s.peekBufferSize = size
+}
+
+func (s *Server) listen(ctx context.Context, port uint16) (int, error) {
 	// use a random free port for our proxy
 	addr := "0.0.0.0:0"
 	cfg := net.ListenConfig{}
@@ -131,8 +143,6 @@ func (s *Server) listen(ctx context.Context, port uint16, onAccept OnAccept) (in
 	}
 
 	log.G(ctx).Debugf("listening on %s in ns %s", listener.Addr(), s.ns.Path())
-
-	s.onAccept = onAccept
 
 	s.wg.Add(1)
 	go s.serve(ctx, listener, port)
@@ -188,15 +198,23 @@ func (s *Server) serve(ctx context.Context, listener net.Listener, port uint16) 
 			wg.Add(1)
 			go func() {
 				log.G(ctx).Debug("accepting connection")
-				s.handleConection(ctx, conn, port)
+				s.handleConnection(ctx, conn, port)
 				wg.Done()
 			}()
 		}
 	}
 }
 
-func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16) {
+func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port uint16) {
+	conn, cont, err := s.connHook(netConn)
+	if err != nil {
+		log.G(ctx).Errorf("connHook: %s", err)
+		return
+	}
 	defer conn.Close()
+	if !cont {
+		return
+	}
 
 	tcpAddr, ok := conn.RemoteAddr().(*net.TCPAddr)
 	if !ok {
@@ -204,14 +222,14 @@ func (s *Server) handleConection(ctx context.Context, conn net.Conn, port uint16
 		return
 	}
 
-	log.G(ctx).Debugf("registering connection on remote port %d", tcpAddr.Port)
+	log.G(ctx).Debugf("registering connection on remote port %d from %s", tcpAddr.Port, tcpAddr.IP.String())
 	if err := s.registerConnection(uint16(tcpAddr.Port)); err != nil {
 		log.G(ctx).Errorf("error registering connection: %s", err)
 		return
 	}
 
-	if err := s.onAccept(); err != nil {
-		log.G(ctx).Errorf("accept function: %s", err)
+	if err := s.restoreHook(); err != nil {
+		log.G(ctx).Errorf("restoreHook: %s", err)
 		return
 	}
 
@@ -300,38 +318,38 @@ const (
 	ingressRedirectsMap  = "ingress_redirects"
 )
 
-func (a *Server) loadPinnedMaps() error {
+func (s *Server) loadPinnedMaps() error {
 	// either all or none of the maps are pinned, so we want to return
 	// ErrMapNotFound so it can be handled.
-	if _, err := os.Stat(filepath.Join(PinPath(a.sandboxPid), activeConnectionsMap)); os.IsNotExist(err) {
+	if _, err := os.Stat(filepath.Join(PinPath(s.sandboxPid), activeConnectionsMap)); os.IsNotExist(err) {
 		return ErrMapNotFound
 	}
 
 	var err error
 	opts := &ebpf.LoadPinOptions{}
-	if a.maps.ActiveConnections == nil {
-		a.maps.ActiveConnections, err = ebpf.LoadPinnedMap(a.mapPath(activeConnectionsMap), opts)
+	if s.maps.ActiveConnections == nil {
+		s.maps.ActiveConnections, err = ebpf.LoadPinnedMap(s.mapPath(activeConnectionsMap), opts)
 		if err != nil {
 			return err
 		}
 	}
 
-	if a.maps.DisableRedirect == nil {
-		a.maps.DisableRedirect, err = ebpf.LoadPinnedMap(a.mapPath(disableRedirectMap), opts)
+	if s.maps.DisableRedirect == nil {
+		s.maps.DisableRedirect, err = ebpf.LoadPinnedMap(s.mapPath(disableRedirectMap), opts)
 		if err != nil {
 			return err
 		}
 	}
 
-	if a.maps.EgressRedirects == nil {
-		a.maps.EgressRedirects, err = ebpf.LoadPinnedMap(a.mapPath(egressRedirectsMap), opts)
+	if s.maps.EgressRedirects == nil {
+		s.maps.EgressRedirects, err = ebpf.LoadPinnedMap(s.mapPath(egressRedirectsMap), opts)
 		if err != nil {
 			return err
 		}
 	}
 
-	if a.maps.IngressRedirects == nil {
-		a.maps.IngressRedirects, err = ebpf.LoadPinnedMap(a.mapPath(ingressRedirectsMap), opts)
+	if s.maps.IngressRedirects == nil {
+		s.maps.IngressRedirects, err = ebpf.LoadPinnedMap(s.mapPath(ingressRedirectsMap), opts)
 		if err != nil {
 			return err
 		}
@@ -340,44 +358,44 @@ func (a *Server) loadPinnedMaps() error {
 	return nil
 }
 
-func (a *Server) mapPath(name string) string {
-	return filepath.Join(PinPath(a.sandboxPid), name)
+func (s *Server) mapPath(name string) string {
+	return filepath.Join(PinPath(s.sandboxPid), name)
 }
 
 // RedirectPort redirects the port from to on ingress and to from on egress.
-func (a *Server) RedirectPort(from, to uint16) error {
-	if err := a.maps.IngressRedirects.Put(&from, &to); err != nil {
+func (s *Server) RedirectPort(from, to uint16) error {
+	if err := s.maps.IngressRedirects.Put(&from, &to); err != nil {
 		return fmt.Errorf("unable to put ports %d -> %d into bpf map: %w", from, to, err)
 	}
-	if err := a.maps.EgressRedirects.Put(&to, &from); err != nil {
+	if err := s.maps.EgressRedirects.Put(&to, &from); err != nil {
 		return fmt.Errorf("unable to put ports %d -> %d into bpf map: %w", to, from, err)
 	}
 	return nil
 }
 
-func (a *Server) registerConnection(port uint16) error {
-	if err := a.maps.ActiveConnections.Put(&port, uint8(1)); err != nil {
+func (s *Server) registerConnection(port uint16) error {
+	if err := s.maps.ActiveConnections.Put(&port, uint8(1)); err != nil {
 		return fmt.Errorf("unable to put port %d into bpf map: %w", port, err)
 	}
 	return nil
 }
 
-func (a *Server) removeConnection(port uint16) error {
-	if err := a.maps.ActiveConnections.Delete(&port); err != nil {
+func (s *Server) removeConnection(port uint16) error {
+	if err := s.maps.ActiveConnections.Delete(&port); err != nil {
 		return fmt.Errorf("unable to delete port %d in bpf map: %w", port, err)
 	}
 	return nil
 }
 
-func (a *Server) disableRedirect(port uint16) error {
-	if err := a.maps.DisableRedirect.Put(&port, uint8(1)); err != nil {
+func (s *Server) disableRedirect(port uint16) error {
+	if err := s.maps.DisableRedirect.Put(&port, uint8(1)); err != nil {
 		return fmt.Errorf("unable to put %d into bpf map: %w", port, err)
 	}
 	return nil
 }
 
-func (a *Server) enableRedirect(port uint16) error {
-	if err := a.maps.DisableRedirect.Delete(&port); err != nil {
+func (s *Server) enableRedirect(port uint16) error {
+	if err := s.maps.DisableRedirect.Delete(&port); err != nil {
 		if !errors.Is(err, ebpf.ErrKeyNotExist) {
 			return err
 		}

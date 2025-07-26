@@ -25,10 +25,6 @@ func TestActivator(t *testing.T) {
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
-
-	port, err := freePort()
-	require.NoError(t, err)
-
 	s, err := NewServer(ctx, nn)
 	require.NoError(t, err)
 
@@ -36,61 +32,122 @@ func TestActivator(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, bpf.AttachRedirector("lo"))
 
-	response := "ok"
-	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, response)
-	}))
-
-	once := sync.Once{}
-	err = s.Start(ctx, []uint16{uint16(port)}, func() error {
-		once.Do(func() {
-			// simulate a delay until our server is started
-			time.Sleep(time.Millisecond * 200)
-			l, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))
-			require.NoError(t, err)
-
-			if err := s.DisableRedirects(); err != nil {
-				t.Errorf("could not disable redirects: %s", err)
-			}
-
-			// replace listener of server
-			ts.Listener.Close()
-			ts.Listener = l
-			ts.Start()
-			t.Logf("listening on :%d", port)
-
-			t.Cleanup(func() {
-				ts.Close()
-			})
-		})
-		return nil
-	})
+	port, err := freePort()
 	require.NoError(t, err)
+
 	t.Cleanup(func() {
 		s.Stop(ctx)
 		cancel()
 	})
 
-	c := &http.Client{Timeout: time.Second}
+	c := &http.Client{
+		Timeout: time.Second,
+		Transport: &http.Transport{
+			DisableKeepAlives: true,
+		},
+	}
 
-	parallelReqs := 10
+	tests := map[string]struct {
+		parallelReqs int
+		connHook     ConnHook
+		expectedBody string
+		expectedCode int
+	}{
+		"no probe": {
+			parallelReqs: 1,
+			expectedBody: "ok",
+			expectedCode: http.StatusOK,
+		},
+		"10 in parallel": {
+			parallelReqs: 10,
+			expectedBody: "ok",
+			expectedCode: http.StatusOK,
+		},
+		"conn hook": {
+			parallelReqs: 1,
+			expectedBody: "",
+			connHook: func(conn net.Conn) (net.Conn, bool, error) {
+				resp := http.Response{
+					StatusCode: http.StatusForbidden,
+				}
+				return conn, false, resp.Write(conn)
+			},
+			expectedCode: http.StatusForbidden,
+		},
+	}
 	wg := sync.WaitGroup{}
-	for _, port := range []int{port} {
-		port := port
-		for i := 0; i < parallelReqs; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
-				resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
-				require.NoError(t, err)
-				b, err := io.ReadAll(resp.Body)
-				require.NoError(t, err)
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			startServer(t, ctx, s, port, tc.connHook)
+			for i := 0; i < tc.parallelReqs; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d", port), nil)
+					if !assert.NoError(t, err) {
+						return
+					}
 
-				assert.Equal(t, http.StatusOK, resp.StatusCode)
-				assert.Equal(t, response, string(b))
-				t.Log(string(b))
-			}()
+					resp, err := c.Do(req)
+					if !assert.NoError(t, err) {
+						return
+					}
+
+					b, err := io.ReadAll(resp.Body)
+					if !assert.NoError(t, err) {
+						return
+					}
+
+					assert.Equal(t, tc.expectedCode, resp.StatusCode)
+					assert.Equal(t, tc.expectedBody, string(b))
+					t.Log(string(b))
+				}()
+			}
+			wg.Wait()
+			assert.NoError(t, s.Reset())
+		})
+	}
+}
+
+func startServer(t *testing.T, ctx context.Context, s *Server, port int, connHook ConnHook) {
+	response := "ok"
+	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, response)
+	}))
+	if connHook == nil {
+		connHook = func(c net.Conn) (net.Conn, bool, error) {
+			return c, true, nil
 		}
 	}
-	wg.Wait()
+
+	once := sync.Once{}
+	err := s.Start(
+		ctx, []uint16{uint16(port)},
+		connHook,
+		func() error {
+			once.Do(func() {
+				// simulate a delay until our server is started
+				time.Sleep(time.Millisecond * 200)
+				l, err := net.Listen("tcp4", fmt.Sprintf(":%d", port))
+				require.NoError(t, err)
+
+				if err := s.DisableRedirects(); err != nil {
+					t.Errorf("could not disable redirects: %s", err)
+				}
+
+				// replace listener of server
+				ts.Listener.Close()
+				ts.Listener = l
+				ts.Start()
+				t.Logf("listening on :%d", port)
+
+				t.Cleanup(func() {
+					l.Close()
+					ts.Close()
+				})
+			})
+			return nil
+		},
+	)
+	require.NoError(t, err)
 }

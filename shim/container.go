@@ -340,7 +340,7 @@ func (c *Container) startActivator(ctx context.Context) error {
 
 	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
 
-	if err := c.activator.Start(ctx, c.cfg.Ports, c.restoreHandler(ctx)); err != nil {
+	if err := c.activator.Start(ctx, c.cfg.Ports, c.detectProbe(ctx), c.restoreHandler(ctx)); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}
@@ -353,7 +353,7 @@ func (c *Container) startActivator(ctx context.Context) error {
 	return nil
 }
 
-func (c *Container) restoreHandler(ctx context.Context) activator.OnAccept {
+func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 	return func() error {
 		log.G(ctx).Printf("got a request")
 

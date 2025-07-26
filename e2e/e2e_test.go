@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 )
 
@@ -33,17 +34,18 @@ func TestE2E(t *testing.T) {
 	}
 
 	cases := map[string]struct {
-		pod            *corev1.Pod
-		svc            *corev1.Service
-		parallelReqs   int
-		sequentialReqs int
-		sequentialWait time.Duration
-		maxReqDuration time.Duration
-		ignoreFirstReq bool
-		keepAlive      bool
-		preDump        bool
-		waitScaledDown bool
-		expectRunning  bool
+		pod              *corev1.Pod
+		svc              *corev1.Service
+		parallelReqs     int
+		sequentialReqs   int
+		sequentialWait   time.Duration
+		maxReqDuration   time.Duration
+		ignoreFirstReq   bool
+		keepAlive        bool
+		preDump          bool
+		waitScaledDown   bool
+		expectRunning    bool
+		expectScaledDown bool
 	}{
 		// note: some of these max request durations are really
 		// system-dependent. It has been tested on a few systems so far and
@@ -130,6 +132,46 @@ func TestE2E(t *testing.T) {
 			maxReqDuration: time.Second,
 			waitScaledDown: true,
 		},
+		"pod with HTTP probe": {
+			pod: testPod(
+				scaleDownAfter(time.Second),
+				addContainer("nginx", "nginx", nil, 80),
+				livenessProbe(&corev1.Probe{
+					InitialDelaySeconds: 5,
+					PeriodSeconds:       1,
+					ProbeHandler: corev1.ProbeHandler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Port: intstr.FromInt(80),
+						},
+					},
+				}),
+			),
+			parallelReqs:     0,
+			sequentialReqs:   0,
+			waitScaledDown:   true,
+			expectRunning:    false,
+			expectScaledDown: true,
+		},
+		"pod with TCP probe": {
+			pod: testPod(
+				scaleDownAfter(time.Second),
+				addContainer("nginx", "nginx", nil, 80),
+				livenessProbe(&corev1.Probe{
+					InitialDelaySeconds: 5,
+					PeriodSeconds:       1,
+					ProbeHandler: corev1.ProbeHandler{
+						TCPSocket: &corev1.TCPSocketAction{
+							Port: intstr.FromInt(80),
+						},
+					},
+				}),
+			),
+			parallelReqs:     0,
+			sequentialReqs:   0,
+			waitScaledDown:   true,
+			expectRunning:    false,
+			expectScaledDown: true,
+		},
 	}
 
 	for name, tc := range cases {
@@ -154,6 +196,10 @@ func TestE2E(t *testing.T) {
 
 			if tc.expectRunning {
 				alwaysRunningFor(t, ctx, e2e.client, tc.pod, time.Second*10)
+			}
+
+			if tc.expectScaledDown {
+				alwaysScaledDownFor(t, ctx, e2e.client, tc.pod, time.Second*10)
 			}
 
 			wg := sync.WaitGroup{}
