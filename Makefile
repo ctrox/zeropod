@@ -91,9 +91,11 @@ CFLAGS := -O2 -g -Wall -Werror
 # dependencies installed.
 generate: export BPF_CLANG := $(CLANG)
 generate: export BPF_CFLAGS := $(CFLAGS)
-generate: ttrpc
+generate: ttrpc ebpf
 	go generate ./api/...
-	docker run --rm -v $(PWD):/app:Z --user $(shell id -u):$(shell id -g) --env=BPF_CLANG="$(CLANG)" --env=BPF_CFLAGS="$(CFLAGS)" $(EBPF_IMAGE)
+
+ebpf:
+	docker run --rm -v $(PWD):/app:Z --user $(shell id -u):$(shell id -g) --userns=host --env=BPF_CLANG="$(CLANG)" --env=BPF_CFLAGS="$(CFLAGS)" $(EBPF_IMAGE)
 
 ttrpc:
 	go mod download

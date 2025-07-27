@@ -2,8 +2,10 @@ package manager
 
 import (
 	"context"
+	"encoding/binary"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -11,6 +13,7 @@ import (
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/ctrox/zeropod/socket"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -21,6 +24,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
@@ -40,6 +44,9 @@ func NewPodController(ctx context.Context, mgr manager.Manager, log *slog.Logger
 	}
 	return c.Watch(source.Kind(
 		mgr.GetCache(), &corev1.Pod{}, &handler.TypedEnqueueRequestForObject[*corev1.Pod]{},
+		predicate.NewTypedPredicateFuncs[*corev1.Pod](func(pod *corev1.Pod) bool {
+			return isZeropod(pod)
+		}),
 	))
 }
 
@@ -47,6 +54,7 @@ type podReconciler struct {
 	kube     client.Client
 	log      *slog.Logger
 	nodeName string
+	tracker  socket.Tracker
 }
 
 func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, error) {
@@ -54,10 +62,15 @@ func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, err
 	if !ok {
 		return nil, fmt.Errorf("could not find node name, env %s is not set", nodev1.NodeNameEnvKey)
 	}
+	tracker, err := socket.NewEBPFTracker()
+	if err != nil {
+		return nil, err
+	}
 	return &podReconciler{
 		log:      log,
 		kube:     kube,
 		nodeName: nodeName,
+		tracker:  tracker,
 	}, nil
 }
 
@@ -76,6 +89,18 @@ func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, err
+	}
+
+	// pass the pod IP to the tracker so it can ignore kubelet probes going to
+	// this pod.
+	netIP, err := netip.ParseAddr(pod.Status.PodIP)
+	if err == nil {
+		// TODO: support ipv6-only pods
+		podIPv4 := netIP.As4()
+		if err := r.tracker.PutPodIP(binary.NativeEndian.Uint32(podIPv4[:])); err != nil {
+			// log error but continue as we might want to do other things
+			log.Error("putting pod IP in tracker map", "error", err)
+		}
 	}
 
 	if !r.isMigratable(pod) {
@@ -112,11 +137,13 @@ func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request
 }
 
 func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
-	if pod.Spec.RuntimeClassName != nil && *pod.Spec.RuntimeClassName != v1.RuntimeClassName {
+	// some of these are already handled by the cache/predicate but there's no
+	// harm in being sure.
+	if pod.Spec.NodeName != r.nodeName {
 		return false
 	}
 
-	if pod.Spec.NodeName != r.nodeName {
+	if !isZeropod(pod) {
 		return false
 	}
 
@@ -135,6 +162,10 @@ func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
 	}
 
 	return true
+}
+
+func isZeropod(pod *corev1.Pod) bool {
+	return pod.Spec.RuntimeClassName != nil && *pod.Spec.RuntimeClassName == v1.RuntimeClassName
 }
 
 func newMigration(pod *corev1.Pod) (*v1.Migration, error) {

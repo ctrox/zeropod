@@ -7,7 +7,7 @@ ADD go.* /app
 RUN go mod download
 
 # we use fedora since it has a recent version of bpftool
-FROM fedora:41
+FROM fedora:42
 RUN dnf install -y llvm clang bpftool libbpf-devel golang
 
 RUN mkdir /headers

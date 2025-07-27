@@ -29,3 +29,7 @@ func (n NoopTracker) LastActivity(pid uint32) (time.Time, error) {
 func (n NoopTracker) Close() error {
 	return nil
 }
+
+func (n NoopTracker) PutPodIP(ip uint32) error {
+	return nil
+}

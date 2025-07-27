@@ -1,6 +1,7 @@
 package socket
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,9 +15,12 @@ import (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf kprobe.c -- -I/headers
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -target amd64,arm64 -cflags $BPF_CFLAGS bpf kprobe.c -- -I/headers
 
-const TCPEventsMap = "tcp_events"
+const (
+	TCPEventsMap       = "tcp_events"
+	PodKubeletAddrsMap = "pod_kubelet_addrs"
+)
 
 // LoadEBPFTracker loads the eBPF program and attaches the kretprobe to track
 // connections system-wide.
@@ -33,7 +37,7 @@ func LoadEBPFTracker() (func() error, error) {
 
 	// Load pre-compiled programs and maps into the kernel.
 	objs := bpfObjects{}
-	if err := loadBpfObjects(&objs, &ebpf.CollectionOptions{
+	collectionOpts := &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{
 			// Pin the map to the BPF filesystem and configure the
 			// library to automatically re-write it in the BPF
@@ -41,23 +45,44 @@ func LoadEBPFTracker() (func() error, error) {
 			// create it if not.
 			PinPath: pinPath,
 		},
-	}); err != nil {
-		return nil, fmt.Errorf("loading objects: %w", err)
+	}
+	if err := loadBpfObjects(&objs, collectionOpts); err != nil {
+		if !errors.Is(err, ebpf.ErrMapIncompatible) {
+			return nil, fmt.Errorf("loading objects: %w", err)
+		}
+		// try to unpin the maps and load again
+		if err := os.Remove(filepath.Join(pinPath, TCPEventsMap)); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("removing map after incompatibility: %w", err)
+		}
+		if err := os.Remove(filepath.Join(pinPath, PodKubeletAddrsMap)); err != nil && !os.IsNotExist(err) {
+			return nil, fmt.Errorf("removing map after incompatibility: %w", err)
+		}
+		if err := loadBpfObjects(&objs, collectionOpts); err != nil {
+			return nil, fmt.Errorf("loading objects: %w", err)
+		}
 	}
 
 	// in the past we used inet_sock_set_state here but we now use a
 	// kretprobe with inet_csk_accept as inet_sock_set_state is not giving us
 	// reliable PIDs. https://github.com/iovisor/bcc/issues/2304
-	kp, err := link.Kretprobe("inet_csk_accept", objs.KretprobeInetCskAccept, &link.KprobeOptions{})
+	tracker, err := link.Kretprobe("inet_csk_accept", objs.KretprobeInetCskAccept, &link.KprobeOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("linking kprobe: %w", err)
 	}
+	kubeletDetector, err := link.Kprobe("tcp_rcv_state_process", objs.TcpRcvStateProcess, &link.KprobeOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("linking tcp rcv kprobe: %w", err)
+	}
 
 	return func() error {
+		errs := []error{}
 		if err := objs.Close(); err != nil {
-			return err
+			errs = append(errs, err)
 		}
-		return kp.Close()
+		if err := kubeletDetector.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		return errors.Join(append(errs, tracker.Close())...)
 	}, nil
 }
 
@@ -74,11 +99,15 @@ func NewEBPFTracker() (Tracker, error) {
 		resolver = hostResolver{}
 	}
 
+	podKubeletAddrs, err := ebpf.LoadPinnedMap(filepath.Join(activator.MapsPath(), PodKubeletAddrsMap), &ebpf.LoadPinOptions{})
+	if err != nil {
+		return nil, err
+	}
 	tcpEvents, err := ebpf.LoadPinnedMap(filepath.Join(activator.MapsPath(), TCPEventsMap), &ebpf.LoadPinOptions{})
-
 	return &EBPFTracker{
-		PIDResolver: resolver,
-		tcpEvents:   tcpEvents,
+		PIDResolver:     resolver,
+		tcpEvents:       tcpEvents,
+		podKubeletAddrs: podKubeletAddrs,
 	}, err
 }
 
@@ -105,7 +134,8 @@ func (err NoActivityRecordedErr) Error() string {
 
 type EBPFTracker struct {
 	PIDResolver
-	tcpEvents *ebpf.Map
+	tcpEvents       *ebpf.Map
+	podKubeletAddrs *ebpf.Map
 }
 
 // TrackPid puts the pid into the TcpEvents map meaning tcp events of the
@@ -145,6 +175,14 @@ func (c *EBPFTracker) LastActivity(pid uint32) (time.Time, error) {
 
 func (c *EBPFTracker) Close() error {
 	return c.tcpEvents.Close()
+}
+
+func (c *EBPFTracker) PutPodIP(ip uint32) error {
+	val := uint32(0)
+	if err := c.podKubeletAddrs.Put(&ip, &val); err != nil {
+		return fmt.Errorf("unable to put ip %d into bpf map: %w", ip, err)
+	}
+	return nil
 }
 
 // convertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
