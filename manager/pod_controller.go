@@ -2,10 +2,8 @@ package manager
 
 import (
 	"context"
-	"encoding/binary"
 	"fmt"
 	"log/slog"
-	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -13,7 +11,6 @@ import (
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/socket"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -54,7 +51,6 @@ type podReconciler struct {
 	kube     client.Client
 	log      *slog.Logger
 	nodeName string
-	tracker  socket.Tracker
 }
 
 func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, error) {
@@ -62,15 +58,10 @@ func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, err
 	if !ok {
 		return nil, fmt.Errorf("could not find node name, env %s is not set", nodev1.NodeNameEnvKey)
 	}
-	tracker, err := socket.NewEBPFTracker()
-	if err != nil {
-		return nil, err
-	}
 	return &podReconciler{
 		log:      log,
 		kube:     kube,
 		nodeName: nodeName,
-		tracker:  tracker,
 	}, nil
 }
 
@@ -89,18 +80,6 @@ func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request
 			return reconcile.Result{}, nil
 		}
 		return reconcile.Result{}, err
-	}
-
-	// pass the pod IP to the tracker so it can ignore kubelet probes going to
-	// this pod.
-	netIP, err := netip.ParseAddr(pod.Status.PodIP)
-	if err == nil {
-		// TODO: support ipv6-only pods
-		podIPv4 := netIP.As4()
-		if err := r.tracker.PutPodIP(binary.NativeEndian.Uint32(podIPv4[:])); err != nil {
-			// log error but continue as we might want to do other things
-			log.Error("putting pod IP in tracker map", "error", err)
-		}
 	}
 
 	if !r.isMigratable(pod) {

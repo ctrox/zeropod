@@ -50,14 +50,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := manager.AttachRedirectors(ctx, log); err != nil {
-		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
-	}
-
-	cleanSocketTracker, err := socket.LoadEBPFTracker()
+	tracker, cleanSocketTracker, err := socket.LoadEBPFTracker()
 	if err != nil {
 		log.Warn("loading socket tracker failed, scaling down with static duration", "err", err)
 		cleanSocketTracker = func() error { return nil }
+	}
+
+	if err := manager.AttachRedirectors(ctx, log, tracker); err != nil {
+		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
 	}
 
 	mgr, err := newControllerManager()

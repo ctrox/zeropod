@@ -18,12 +18,9 @@ import (
 func TestEBPFTracker(t *testing.T) {
 	require.NoError(t, activator.MountBPFFS(activator.BPFFSPath))
 
-	clean, err := LoadEBPFTracker()
+	tracker, clean, err := LoadEBPFTracker()
 	require.NoError(t, err)
 	defer func() { require.NoError(t, clean()) }()
-
-	tracker, err := NewEBPFTracker()
-	require.NoError(t, err)
 
 	pid := uint32(os.Getpid())
 	require.NoError(t, tracker.TrackPid(pid))

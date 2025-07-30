@@ -1,6 +1,9 @@
 package socket
 
-import "time"
+import (
+	"net/netip"
+	"time"
+)
 
 func NewNoopTracker(scaleDownDuration time.Duration) NoopTracker {
 	return NoopTracker{
@@ -30,6 +33,10 @@ func (n NoopTracker) Close() error {
 	return nil
 }
 
-func (n NoopTracker) PutPodIP(ip uint32) error {
+func (n NoopTracker) PutPodIP(ip netip.Addr) error {
+	return nil
+}
+
+func (n NoopTracker) RemovePodIP(ip netip.Addr) error {
 	return nil
 }

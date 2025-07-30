@@ -125,12 +125,11 @@ func (s *Server) SetPeekBufferSize(size int) {
 
 func (s *Server) listen(ctx context.Context, port uint16) (int, error) {
 	// use a random free port for our proxy
-	addr := "0.0.0.0:0"
 	cfg := net.ListenConfig{}
 
 	var listener net.Listener
 	if err := s.ns.Do(func(_ ns.NetNS) error {
-		l, err := cfg.Listen(ctx, "tcp4", addr)
+		l, err := cfg.Listen(ctx, "tcp", ":0")
 		if err != nil {
 			return fmt.Errorf("unable to listen: %w", err)
 		}
@@ -287,7 +286,7 @@ func (s *Server) connect(ctx context.Context, port uint16) (net.Conn, error) {
 					return err
 				}
 
-				addr, err := net.ResolveTCPAddr("tcp4", fmt.Sprintf("127.0.0.1:%d", backendConnPort))
+				addr, err := net.ResolveTCPAddr("tcp", fmt.Sprintf("localhost:%d", backendConnPort))
 				if err != nil {
 					return err
 				}
@@ -295,7 +294,7 @@ func (s *Server) connect(ctx context.Context, port uint16) (net.Conn, error) {
 					LocalAddr: addr,
 					Timeout:   s.connectTimeout,
 				}
-				backendConn, err = d.Dial("tcp4", fmt.Sprintf("localhost:%d", port))
+				backendConn, err = d.Dial("tcp", fmt.Sprintf("localhost:%d", port))
 				return err
 			}); err != nil {
 				var serr syscall.Errno
@@ -433,7 +432,7 @@ func copy(done chan struct{}, errors chan error, dst io.Writer, src io.Reader) {
 }
 
 func freePort() (int, error) {
-	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", ":0")
 	if err != nil {
 		return 0, err
 	}

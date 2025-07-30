@@ -8,9 +8,15 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
+
+type bpfIpv6Addr struct {
+	_       structs.HostLayout
+	U6Addr8 [16]uint8
+}
 
 // loadBpf returns the embedded CollectionSpec for bpf.
 func loadBpf() (*ebpf.CollectionSpec, error) {
@@ -62,16 +68,15 @@ type bpfProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfMapSpecs struct {
-	PodKubeletAddrs *ebpf.MapSpec `ebpf:"pod_kubelet_addrs"`
-	TcpEvents       *ebpf.MapSpec `ebpf:"tcp_events"`
+	PodKubeletAddrsV4 *ebpf.MapSpec `ebpf:"pod_kubelet_addrs_v4"`
+	PodKubeletAddrsV6 *ebpf.MapSpec `ebpf:"pod_kubelet_addrs_v6"`
+	TcpEvents         *ebpf.MapSpec `ebpf:"tcp_events"`
 }
 
 // bpfVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfVariableSpecs struct {
-	TargMinUs *ebpf.VariableSpec `ebpf:"targ_min_us"`
-	TargTgid  *ebpf.VariableSpec `ebpf:"targ_tgid"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -94,13 +99,15 @@ func (o *bpfObjects) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfMaps struct {
-	PodKubeletAddrs *ebpf.Map `ebpf:"pod_kubelet_addrs"`
-	TcpEvents       *ebpf.Map `ebpf:"tcp_events"`
+	PodKubeletAddrsV4 *ebpf.Map `ebpf:"pod_kubelet_addrs_v4"`
+	PodKubeletAddrsV6 *ebpf.Map `ebpf:"pod_kubelet_addrs_v6"`
+	TcpEvents         *ebpf.Map `ebpf:"tcp_events"`
 }
 
 func (m *bpfMaps) Close() error {
 	return _BpfClose(
-		m.PodKubeletAddrs,
+		m.PodKubeletAddrsV4,
+		m.PodKubeletAddrsV6,
 		m.TcpEvents,
 	)
 }
@@ -109,8 +116,6 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfVariables struct {
-	TargMinUs *ebpf.Variable `ebpf:"targ_min_us"`
-	TargTgid  *ebpf.Variable `ebpf:"targ_tgid"`
 }
 
 // bpfPrograms contains all programs after they have been loaded into the kernel.
