@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager"
 	"github.com/ctrox/zeropod/manager/node"
@@ -18,7 +19,10 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
@@ -30,7 +34,8 @@ var (
 	debug          = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
-	statusLabels = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	statusLabels    = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	probeBinaryName = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
 )
 
 func main() {
@@ -46,14 +51,14 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := manager.AttachRedirectors(ctx, log); err != nil {
-		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
-	}
-
-	cleanSocketTracker, err := socket.LoadEBPFTracker()
+	tracker, cleanSocketTracker, err := socket.LoadEBPFTracker(*probeBinaryName)
 	if err != nil {
 		log.Warn("loading socket tracker failed, scaling down with static duration", "err", err)
 		cleanSocketTracker = func() error { return nil }
+	}
+
+	if err := manager.AttachRedirectors(ctx, log, tracker); err != nil {
+		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
 	}
 
 	mgr, err := newControllerManager()
@@ -138,8 +143,24 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 	if err := v1.AddToScheme(scheme); err != nil {
 		return nil, err
 	}
+	nodeName, ok := os.LookupEnv(nodev1.NodeNameEnvKey)
+	if !ok {
+		return nil, fmt.Errorf("could not find node name, env %s is not set", nodev1.NodeNameEnvKey)
+	}
 	mgr, err := ctrlmanager.New(cfg, ctrlmanager.Options{
 		Scheme: scheme, Metrics: server.Options{BindAddress: "0"},
+		Cache: cache.Options{
+			ByObject: map[client.Object]cache.ByObject{
+				// for pods we're only interested in objects that are running on
+				// the same node as the manager. This will reduce memory usage
+				// as we only keep a subset of all pods in the cache.
+				&corev1.Pod{}: cache.ByObject{
+					Field: fields.SelectorFromSet(fields.Set{
+						"spec.nodeName": nodeName,
+					}),
+				},
+			},
+		},
 	})
 	if err != nil {
 		return nil, err

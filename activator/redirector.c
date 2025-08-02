@@ -6,7 +6,10 @@
 
 char __license[] SEC("license") = "Dual MIT/GPL";
 
-#define TC_ACT_OK 0
+#define TC_ACT_OK   0
+#define ETH_P_IP    0x0800
+#define ETH_P_IPV6  0x86DD
+#define NEXTHDR_TCP 6
 
 struct {
     __uint(type, BPF_MAP_TYPE_LRU_HASH);
@@ -70,7 +73,7 @@ static __always_inline int ingress_redirect(struct tcphdr *tcp) {
     if (new_dest) {
         // check ports which should not be redirected
         if (disabled(sport_h, dport_h)) {
-            // if we can find an acive connection on the source port, we need
+            // if we can find an active connection on the source port, we need
             // to redirect regardless until the connection is closed.
             void *conn_sport = bpf_map_lookup_elem(active_connections_map, &sport_h);
             if (!conn_sport) {
@@ -101,29 +104,69 @@ static __always_inline int egress_redirect(struct tcphdr *tcp) {
     return TC_ACT_OK;
 }
 
-static __always_inline int parse_and_redirect(struct __sk_buff *ctx, bool ingress) {
-    void *data = (void *)(long)ctx->data;
-    void *data_end = (void *)(long)ctx->data_end;
+static __always_inline struct ipv6hdr* ipv6_header(void *data, void *data_end) {
     struct ethhdr *eth = data;
+    struct ipv6hdr *ip6;
 
-    if ((void*)eth + sizeof(*eth) <= data_end) {
-        struct iphdr *ip = data + sizeof(*eth);
+    if (data + sizeof(*eth) + sizeof(*ip6) > data_end) {
+        return NULL;
+    }
 
-        if ((void*)ip + sizeof(*ip) <= data_end) {
-            if (ip->protocol == IPPROTO_TCP) {
-                struct tcphdr *tcp = (void*)ip + sizeof(*ip);
-                if ((void*)tcp + sizeof(*tcp) <= data_end) {
-                    if (ingress) {
-                        return ingress_redirect(tcp);
-                    }
+    if (bpf_ntohs(eth->h_proto) != ETH_P_IPV6) {
+        return NULL;
+    }
 
-                    return egress_redirect(tcp);
+    ip6 = data + sizeof(*eth);
+    return ip6;
+}
+
+static __always_inline struct iphdr* ipv4_header(void *data, void *data_end) {
+    struct ethhdr *eth = data;
+    struct iphdr *ip4;
+
+    if (data + sizeof(*eth) + sizeof(*ip4) > data_end) {
+        return NULL;
+    }
+
+    if (bpf_ntohs(eth->h_proto) != ETH_P_IP) {
+        return NULL;
+    }
+
+    ip4 = data + sizeof(*eth);
+    return ip4;
+}
+
+static __always_inline int parse_and_redirect(struct __sk_buff *ctx, bool ingress) {
+    void *data_end = (void *)(long)ctx->data_end;
+    void *data = (void *)(long)ctx->data;
+    struct tcphdr *tcp = NULL;
+
+    struct iphdr *ip4 = ipv4_header(data, data_end);
+    if (ip4) {
+        if ((void*)ip4 + sizeof(*ip4) <= data_end) {
+            if (ip4->protocol == IPPROTO_TCP) {
+                tcp = (void*)ip4 + sizeof(*ip4);
+            }
+        }
+    } else {
+        struct ipv6hdr *ip6 = ipv6_header(data, data_end);
+        if (ip6) {
+            if ((void*)ip6 + sizeof(*ip6) <= data_end) {
+                if (ip6->nexthdr == NEXTHDR_TCP) {
+                    tcp = (void*)ip6 + sizeof(*ip6);
                 }
             }
         }
     }
 
-    return 0;
+    if ((tcp != NULL) && ((void*)tcp + sizeof(*tcp) <= data_end)) {
+        if (ingress) {
+            return ingress_redirect(tcp);
+        }
+        return egress_redirect(tcp);
+    }
+
+    return TC_ACT_OK;
 }
 
 

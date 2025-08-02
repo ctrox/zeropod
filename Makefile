@@ -60,13 +60,13 @@ push-dev: build-installer build-manager
 	docker push $(MANAGER_IMAGE)
 
 test-e2e:
-	go test -v ./e2e/
+	go test -timeout=30m -v ./e2e/ $(testargs)
 
 bench:
 	go test -bench=. -benchtime=10x -v -run=Bench ./e2e/
 
 test:
-	go test -v -short ./...
+	go test -v -short ./... $(testargs)
 
 # docker-e2e runs the e2e test in a docker container. However, as running the
 # e2e test requires a docker socket (for kind), this mounts the docker socket
@@ -81,7 +81,7 @@ docker-bench: build-test
 # has to have SYS_ADMIN because the test tries to set netns and mount bpffs
 # we use --pid=host to make the ebpf tracker work without a pid resolver
 docker-test:
-	docker run --rm --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host --userns=host -v $(PWD):/app $(TEST_IMAGE) make test
+	docker run --rm --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host --userns=host -v $(PWD):/app $(TEST_IMAGE) go test -v -short ./... $(testargs)
 
 CLANG ?= clang
 CFLAGS := -O2 -g -Wall -Werror
@@ -91,9 +91,11 @@ CFLAGS := -O2 -g -Wall -Werror
 # dependencies installed.
 generate: export BPF_CLANG := $(CLANG)
 generate: export BPF_CFLAGS := $(CFLAGS)
-generate: ttrpc
+generate: ttrpc ebpf
 	go generate ./api/...
-	docker run --rm -v $(PWD):/app:Z --user $(shell id -u):$(shell id -g) --env=BPF_CLANG="$(CLANG)" --env=BPF_CFLAGS="$(CFLAGS)" $(EBPF_IMAGE)
+
+ebpf:
+	docker run --rm -v $(PWD):/app:Z --user $(shell id -u):$(shell id -g) --userns=host --env=BPF_CLANG="$(CLANG)" --env=BPF_CFLAGS="$(CFLAGS)" $(EBPF_IMAGE)
 
 ttrpc:
 	go mod download

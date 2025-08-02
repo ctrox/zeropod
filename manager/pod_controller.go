@@ -21,6 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
@@ -40,6 +41,9 @@ func NewPodController(ctx context.Context, mgr manager.Manager, log *slog.Logger
 	}
 	return c.Watch(source.Kind(
 		mgr.GetCache(), &corev1.Pod{}, &handler.TypedEnqueueRequestForObject[*corev1.Pod]{},
+		predicate.NewTypedPredicateFuncs[*corev1.Pod](func(pod *corev1.Pod) bool {
+			return isZeropod(pod)
+		}),
 	))
 }
 
@@ -112,11 +116,13 @@ func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request
 }
 
 func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
-	if pod.Spec.RuntimeClassName != nil && *pod.Spec.RuntimeClassName != v1.RuntimeClassName {
+	// some of these are already handled by the cache/predicate but there's no
+	// harm in being sure.
+	if pod.Spec.NodeName != r.nodeName {
 		return false
 	}
 
-	if pod.Spec.NodeName != r.nodeName {
+	if !isZeropod(pod) {
 		return false
 	}
 
@@ -135,6 +141,10 @@ func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
 	}
 
 	return true
+}
+
+func isZeropod(pod *corev1.Pod) bool {
+	return pod.Spec.RuntimeClassName != nil && *pod.Spec.RuntimeClassName == v1.RuntimeClassName
 }
 
 func newMigration(pod *corev1.Pod) (*v1.Migration, error) {

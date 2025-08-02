@@ -1,6 +1,9 @@
 package socket
 
-import "time"
+import (
+	"net/netip"
+	"time"
+)
 
 type Tracker interface {
 	PIDResolver
@@ -13,4 +16,9 @@ type Tracker interface {
 	LastActivity(pid uint32) (time.Time, error)
 	// Close the activity tracker.
 	Close() error
+	// PutPodIP inserts a pod IP into the pod-to-kubelet map, helping with
+	// ignoring probes coming from kubelet within the tracker.
+	PutPodIP(ip netip.Addr) error
+	// RemovePodIP removes a pod IP from the pod-to-kubelet map.
+	RemovePodIP(ip netip.Addr) error
 }

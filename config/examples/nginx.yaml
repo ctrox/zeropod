@@ -12,7 +12,6 @@ spec:
       labels:
         app: nginx
       annotations:
-        io.containerd.runc.v2.group: "zeropod"
         zeropod.ctrox.dev/scaledown-duration: 10s
     spec:
       runtimeClassName: zeropod
@@ -21,6 +20,10 @@ spec:
           name: nginx
           ports:
             - containerPort: 80
+          livenessProbe:
+            periodSeconds: 1
+            httpGet:
+              port: 80
           resources:
             requests:
               cpu: 100m

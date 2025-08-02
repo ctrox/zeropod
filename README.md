@@ -204,8 +204,7 @@ kubectl delete -k https://github.com/ctrox/zeropod/config/production
 ## Configuration
 
 A pod can make use of zeropod only if the `runtimeClassName` is set to
-`zeropod`. Apart from that there are two annotations that are currently
-required. See this minimal example of a pod:
+`zeropod`. See this minimal example of a pod:
 
 ```yaml
 apiVersion: v1
@@ -223,8 +222,41 @@ spec:
         - containerPort: 80
 ```
 
-Then there are also a few optional annotations that can be set on the pod to
-tweak the behaviour of zeropod.
+### Probes
+
+Zeropod is able to intercept liveness probes while the container process is
+scaled down to ensure the application is not restored for probes. This just
+works for HTTP and TCP probes, GRPC and exec probes will wake the container up.
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx
+  annotations:
+    zeropod.ctrox.dev/scaledown-duration: 10s
+spec:
+  runtimeClassName: zeropod
+  containers:
+    - name: nginx
+      image: nginx
+      ports:
+        - containerPort: 80
+      livenessProbe:
+        httpGet:
+          port: 80
+```
+
+In this example, the container will be scaled down 10 seconds after starting
+even though we have defined a probe. Zeropod will take care of replying to the
+probe when the container is scaled down. Whenever the container is running, the
+probe traffic will be forwarded to the app just like normal traffic. You can
+also customize the path and the headers of the probe, just be mindful of the
+size of those. To reduce memory usage, by default, zeropod will only read the
+first `1024` bytes of each request to detect an HTTP probe. If the probe is
+larger than that, traffic will just be passed through and the app will be
+restored on each probe request. In that case, it can be increased with the
+[probe buffer size](#zeropodctroxdevprobe-buffer-size) annotation.
 
 ### `zeropod.ctrox.dev/container-names`
 
@@ -280,6 +312,20 @@ the application is stateless and super fast to startup.
 ```yaml
 zeropod.ctrox.dev/disable-checkpointing: "true"
 ```
+
+### `zeropod.ctrox.dev/disable-probe-detection`
+
+Disables the probe detection mechanism. If there are probes defined on a
+container, they will be forwarded to the container just like any traffic and
+will wake it up.
+
+### `zeropod.ctrox.dev/probe-buffer-size`
+
+Configure the buffer size of the probe detector. To be able to detect an HTTP
+liveness/readiness probe, zeropod needs to read a certain amount of bytes from
+the TCP stream of incoming connections. This normally does not need to be
+adjusted as the default should fit most probes and only needs to be increased in
+case the probe contains lots of header data. Defaults to `1024` if unset.
 
 ## Experimental features
 

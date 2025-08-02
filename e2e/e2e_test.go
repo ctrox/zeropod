@@ -12,12 +12,14 @@ import (
 
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager"
+	"github.com/ctrox/zeropod/shim"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 )
 
@@ -33,17 +35,18 @@ func TestE2E(t *testing.T) {
 	}
 
 	cases := map[string]struct {
-		pod            *corev1.Pod
-		svc            *corev1.Service
-		parallelReqs   int
-		sequentialReqs int
-		sequentialWait time.Duration
-		maxReqDuration time.Duration
-		ignoreFirstReq bool
-		keepAlive      bool
-		preDump        bool
-		waitScaledDown bool
-		expectRunning  bool
+		pod              *corev1.Pod
+		svc              *corev1.Service
+		parallelReqs     int
+		sequentialReqs   int
+		sequentialWait   time.Duration
+		maxReqDuration   time.Duration
+		ignoreFirstReq   bool
+		keepAlive        bool
+		preDump          bool
+		waitScaledDown   bool
+		expectRunning    bool
+		expectScaledDown bool
 	}{
 		// note: some of these max request durations are really
 		// system-dependent. It has been tested on a few systems so far and
@@ -130,6 +133,69 @@ func TestE2E(t *testing.T) {
 			maxReqDuration: time.Second,
 			waitScaledDown: true,
 		},
+		"pod with HTTP probe": {
+			pod: testPod(
+				scaleDownAfter(time.Second),
+				addContainer("nginx", "nginx", nil, 80),
+				livenessProbe(&corev1.Probe{
+					InitialDelaySeconds: 5,
+					PeriodSeconds:       1,
+					ProbeHandler: corev1.ProbeHandler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Port: intstr.FromInt(80),
+						},
+					},
+				}),
+			),
+			parallelReqs:     0,
+			sequentialReqs:   0,
+			waitScaledDown:   true,
+			expectRunning:    false,
+			expectScaledDown: true,
+		},
+		"pod with TCP probe": {
+			pod: testPod(
+				scaleDownAfter(time.Second),
+				addContainer("nginx", "nginx", nil, 80),
+				livenessProbe(&corev1.Probe{
+					InitialDelaySeconds: 5,
+					PeriodSeconds:       1,
+					ProbeHandler: corev1.ProbeHandler{
+						TCPSocket: &corev1.TCPSocketAction{
+							Port: intstr.FromInt(80),
+						},
+					},
+				}),
+			),
+			parallelReqs:     0,
+			sequentialReqs:   0,
+			waitScaledDown:   true,
+			expectRunning:    false,
+			expectScaledDown: true,
+		},
+		"pod with large HTTP probe and increased buffer": {
+			pod: testPod(
+				scaleDownAfter(time.Second),
+				annotations(map[string]string{shim.ProbeBufferSizeAnnotationKey: "2048"}),
+				addContainer("nginx", "nginx", nil, 80),
+				livenessProbe(&corev1.Probe{
+					InitialDelaySeconds: 3,
+					PeriodSeconds:       1,
+					ProbeHandler: corev1.ProbeHandler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Port: intstr.FromInt(80),
+							// ensures probe request is bigger than 1024 bytes
+							Path: "/" + strings.Repeat("a", 1025),
+						},
+					},
+				}),
+			),
+			parallelReqs:     0,
+			sequentialReqs:   0,
+			waitScaledDown:   true,
+			expectRunning:    false,
+			expectScaledDown: true,
+		},
 	}
 
 	for name, tc := range cases {
@@ -154,6 +220,10 @@ func TestE2E(t *testing.T) {
 
 			if tc.expectRunning {
 				alwaysRunningFor(t, ctx, e2e.client, tc.pod, time.Second*10)
+			}
+
+			if tc.expectScaledDown {
+				alwaysScaledDownFor(t, ctx, e2e.client, tc.pod, time.Second*10)
 			}
 
 			wg := sync.WaitGroup{}
@@ -267,6 +337,33 @@ func TestE2E(t *testing.T) {
 
 			return labelCount == expectedLabels
 		}, time.Minute, time.Second)
+	})
+
+	t.Run("socket tracker ignores probe", func(t *testing.T) {
+		pod := testPod(
+			scaleDownAfter(time.Second*5),
+			addContainer("nginx", "nginx", nil, 80),
+			livenessProbe(&corev1.Probe{
+				PeriodSeconds: 1,
+				ProbeHandler: corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{
+						Port: intstr.FromInt(80),
+					},
+				},
+			}),
+		)
+		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
+		cleanupService := createServiceAndWait(t, ctx, e2e.client, testService(defaultTargetPort), 1)
+		defer cleanupPod()
+		defer cleanupService()
+		// we expect it to scale down even though a constant livenessProbe is
+		// hitting it
+		waitUntilScaledDown(t, ctx, e2e.client, pod)
+		// make a real request and expect it to scale down again
+		resp, err := c.Get(fmt.Sprintf("http://localhost:%d", e2e.port))
+		require.NoError(t, err)
+		assert.Equal(t, http.StatusOK, resp.StatusCode)
+		waitUntilScaledDown(t, ctx, e2e.client, pod)
 	})
 
 	t.Run("metrics", func(t *testing.T) {

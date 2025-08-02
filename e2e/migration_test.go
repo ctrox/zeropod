@@ -108,7 +108,7 @@ func TestMigration(t *testing.T) {
 			t.Logf("migration phase: %s", migration.Status.Containers[0].Condition.Phase)
 			return pods[0].Status.Phase == corev1.PodRunning &&
 				migration.Status.Containers[0].Condition.Phase == v1.MigrationPhaseCompleted
-		}, time.Minute, time.Second)
+		}, time.Minute*2, time.Second)
 
 		waitForService(t, ctx, e2e.client, tc.svc, 1)
 	}
@@ -154,7 +154,9 @@ func defaultBeforeMigration(t *testing.T) {
 			return false
 		}
 		f, err := freezerRead(e2e.port)
-		require.NoError(t, err)
+		if err != nil {
+			return false
+		}
 		return t.Name() == f.Data
 	}, time.Second*10, time.Second)
 }

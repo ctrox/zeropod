@@ -1,7 +1,10 @@
 package socket
 
 import (
+	"encoding/binary"
+	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -14,26 +17,41 @@ import (
 )
 
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf kprobe.c -- -I/headers
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -target amd64,arm64 -cflags $BPF_CFLAGS bpf kprobe.c -- -I/headers
 
-const TCPEventsMap = "tcp_events"
+const (
+	TCPEventsMap         = "tcp_events"
+	PodKubeletAddrsMapv4 = "pod_kubelet_addrs_v4"
+	PodKubeletAddrsMapv6 = "pod_kubelet_addrs_v6"
+)
+
+var mapNames = []string{
+	TCPEventsMap,
+	PodKubeletAddrsMapv4,
+	PodKubeletAddrsMapv6,
+}
+
+const (
+	probeBinaryNameVariable  = "probe_binary_name"
+	probeBinaryNameMaxLength = 16
+)
 
 // LoadEBPFTracker loads the eBPF program and attaches the kretprobe to track
 // connections system-wide.
-func LoadEBPFTracker() (func() error, error) {
+func LoadEBPFTracker(probeBinaryName string) (Tracker, func() error, error) {
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	pinPath := activator.MapsPath()
 	if err := os.MkdirAll(pinPath, os.ModePerm); err != nil {
-		return nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
+		return nil, nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
 	}
 
 	// Load pre-compiled programs and maps into the kernel.
 	objs := bpfObjects{}
-	if err := loadBpfObjects(&objs, &ebpf.CollectionOptions{
+	collectionOpts := &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{
 			// Pin the map to the BPF filesystem and configure the
 			// library to automatically re-write it in the BPF
@@ -41,24 +59,63 @@ func LoadEBPFTracker() (func() error, error) {
 			// create it if not.
 			PinPath: pinPath,
 		},
-	}); err != nil {
-		return nil, fmt.Errorf("loading objects: %w", err)
+	}
+
+	spec, err := loadBpf()
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading bpf objects: %w", err)
+	}
+
+	if len([]byte(probeBinaryName)) > probeBinaryNameMaxLength {
+		return nil, nil, fmt.Errorf(
+			"probe binary name %s is too long (%d bytes), max is %d bytes",
+			probeBinaryName, len([]byte(probeBinaryName)), probeBinaryNameMaxLength,
+		)
+	}
+	binName := [probeBinaryNameMaxLength]byte{}
+	copy(binName[:], probeBinaryName[:])
+	if err := spec.Variables[probeBinaryNameVariable].Set(binName); err != nil {
+		return nil, nil, fmt.Errorf("setting probe binary variable: %w", err)
+	}
+
+	if err := spec.LoadAndAssign(&objs, collectionOpts); err != nil {
+		if !errors.Is(err, ebpf.ErrMapIncompatible) {
+			return nil, nil, fmt.Errorf("loading objects: %w", err)
+		}
+		// try to unpin the maps and load again
+		for _, mapName := range mapNames {
+			if err := os.Remove(filepath.Join(pinPath, mapName)); err != nil && !os.IsNotExist(err) {
+				return nil, nil, fmt.Errorf("removing map after incompatibility: %w", err)
+			}
+		}
+		if err := loadBpfObjects(&objs, collectionOpts); err != nil {
+			return nil, nil, fmt.Errorf("loading objects: %w", err)
+		}
 	}
 
 	// in the past we used inet_sock_set_state here but we now use a
 	// kretprobe with inet_csk_accept as inet_sock_set_state is not giving us
 	// reliable PIDs. https://github.com/iovisor/bcc/issues/2304
-	kp, err := link.Kretprobe("inet_csk_accept", objs.KretprobeInetCskAccept, &link.KprobeOptions{})
+	tracker, err := link.Kretprobe("inet_csk_accept", objs.KretprobeInetCskAccept, &link.KprobeOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("linking kprobe: %w", err)
+		return nil, nil, fmt.Errorf("linking kprobe: %w", err)
+	}
+	kubeletDetector, err := link.Kprobe("tcp_rcv_state_process", objs.TcpRcvStateProcess, &link.KprobeOptions{})
+	if err != nil {
+		return nil, nil, fmt.Errorf("linking tcp rcv kprobe: %w", err)
 	}
 
-	return func() error {
+	t, err := NewEBPFTracker()
+	return t, func() error {
+		errs := []error{}
 		if err := objs.Close(); err != nil {
-			return err
+			errs = append(errs, err)
 		}
-		return kp.Close()
-	}, nil
+		if err := kubeletDetector.Close(); err != nil {
+			errs = append(errs, err)
+		}
+		return errors.Join(append(errs, tracker.Close())...)
+	}, err
 }
 
 // NewEBPFTracker returns a TCP connection tracker that will keep track of the
@@ -74,11 +131,20 @@ func NewEBPFTracker() (Tracker, error) {
 		resolver = hostResolver{}
 	}
 
+	podKubeletAddrsv4, err := ebpf.LoadPinnedMap(filepath.Join(activator.MapsPath(), PodKubeletAddrsMapv4), &ebpf.LoadPinOptions{})
+	if err != nil {
+		return nil, err
+	}
+	podKubeletAddrsv6, err := ebpf.LoadPinnedMap(filepath.Join(activator.MapsPath(), PodKubeletAddrsMapv6), &ebpf.LoadPinOptions{})
+	if err != nil {
+		return nil, err
+	}
 	tcpEvents, err := ebpf.LoadPinnedMap(filepath.Join(activator.MapsPath(), TCPEventsMap), &ebpf.LoadPinOptions{})
-
 	return &EBPFTracker{
-		PIDResolver: resolver,
-		tcpEvents:   tcpEvents,
+		PIDResolver:       resolver,
+		tcpEvents:         tcpEvents,
+		podKubeletAddrsv4: podKubeletAddrsv4,
+		podKubeletAddrsv6: podKubeletAddrsv6,
 	}, err
 }
 
@@ -105,7 +171,9 @@ func (err NoActivityRecordedErr) Error() string {
 
 type EBPFTracker struct {
 	PIDResolver
-	tcpEvents *ebpf.Map
+	tcpEvents         *ebpf.Map
+	podKubeletAddrsv4 *ebpf.Map
+	podKubeletAddrsv6 *ebpf.Map
 }
 
 // TrackPid puts the pid into the TcpEvents map meaning tcp events of the
@@ -145,6 +213,47 @@ func (c *EBPFTracker) LastActivity(pid uint32) (time.Time, error) {
 
 func (c *EBPFTracker) Close() error {
 	return c.tcpEvents.Close()
+}
+
+// RemovePodIPv4 adds the pod IP to the tracker unless it already exists.
+func (c *EBPFTracker) PutPodIP(ip netip.Addr) error {
+	if ip.Is4() {
+		val := uint32(0)
+		ipv4 := ip.As4()
+		uIP := binary.NativeEndian.Uint32(ipv4[:])
+		if err := c.podKubeletAddrsv4.Update(&uIP, &val, ebpf.UpdateNoExist); err != nil &&
+			!errors.Is(err, ebpf.ErrKeyExist) {
+			return fmt.Errorf("unable to put ipv4 %s into bpf map: %w", ip, err)
+		}
+		return nil
+	}
+
+	val := bpfIpv6Addr{}
+	bpfIP := bpfIpv6Addr{U6Addr8: ip.As16()}
+	if err := c.podKubeletAddrsv6.Update(&bpfIP, &val, ebpf.UpdateNoExist); err != nil &&
+		!errors.Is(err, ebpf.ErrKeyExist) {
+		return fmt.Errorf("unable to put ipv6 %s into bpf map: %w", ip, err)
+	}
+
+	return nil
+}
+
+// RemovePodIPv4 removes the pod IP from the tracker.
+func (c *EBPFTracker) RemovePodIP(ip netip.Addr) error {
+	if ip.Is4() {
+		ipv4 := ip.As4()
+		uIP := binary.NativeEndian.Uint32(ipv4[:])
+		if err := c.podKubeletAddrsv4.Delete(&uIP); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+			return fmt.Errorf("unable to delete ipv4 %s from bpf map: %w", ip, err)
+		}
+		return nil
+	}
+
+	bpfIP := bpfIpv6Addr{U6Addr8: ip.As16()}
+	if err := c.podKubeletAddrsv6.Delete(&bpfIP); err != nil && !errors.Is(err, ebpf.ErrKeyNotExist) {
+		return fmt.Errorf("unable to delete ipv6 %s from bpf map: %w", ip, err)
+	}
+	return nil
 }
 
 // convertBPFTime takes the value of bpf_ktime_get_ns and converts it to a

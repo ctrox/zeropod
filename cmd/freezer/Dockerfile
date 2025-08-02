@@ -7,6 +7,7 @@ RUN go mod download
 
 COPY cmd/freezer cmd/freezer
 
+ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o freezer cmd/freezer/main.go
 
 FROM gcr.io/distroless/static-debian12

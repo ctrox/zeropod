@@ -430,6 +430,14 @@ func resources(res corev1.ResourceRequirements) podOption {
 	}
 }
 
+func livenessProbe(probe *corev1.Probe) podOption {
+	return func(p *pod) {
+		for i := range p.spec.Containers {
+			p.spec.Containers[i].LivenessProbe = probe
+		}
+	}
+}
+
 const agnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.39"
 
 func agnContainer(name string, port int) podOption {
@@ -782,7 +790,17 @@ func alwaysRunningFor(t testing.TB, ctx context.Context, c client.Client, pod *c
 		require.Never(t, func() bool {
 			ok, err := isRunning(ctx, c, pod, container.Name)
 			t.Logf("running: %v: %s", ok, pod.GetLabels()[path.Join(manager.StatusLabelKeyPrefix, container.Name)])
-			return err != nil && !ok
+			return err != nil || !ok
+		}, dur, time.Second)
+	}
+}
+
+func alwaysScaledDownFor(t testing.TB, ctx context.Context, c client.Client, pod *corev1.Pod, dur time.Duration) {
+	for _, container := range pod.Spec.Containers {
+		require.Never(t, func() bool {
+			ok, err := isScaledDown(ctx, c, pod, container.Name)
+			t.Logf("scaled down: %v: %s", ok, pod.GetLabels()[path.Join(manager.StatusLabelKeyPrefix, container.Name)])
+			return err != nil || !ok
 		}, dur, time.Second)
 	}
 }

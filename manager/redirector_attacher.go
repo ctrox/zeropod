@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -18,9 +20,20 @@ import (
 
 type Redirector struct {
 	sync.Mutex
-	activators map[int]*activator.BPF
-	log        *slog.Logger
+	sandboxes map[int]sandbox
+	log       *slog.Logger
+	tracker   socket.Tracker
 }
+
+type sandbox struct {
+	ip        netip.Addr
+	activator *activator.BPF
+}
+
+const (
+	ifaceETH0     = "eth0"
+	ifaceLoopback = "lo"
+)
 
 // AttachRedirectors scans the zeropod maps path in the bpf file system for
 // directories named after the pid of the sandbox container. It does an
@@ -29,10 +42,11 @@ type Redirector struct {
 // can be found it attaches the redirector BPF programs to the network
 // interfaces of the sandbox. The directories are expected to be created by
 // the zeropod shim on startup.
-func AttachRedirectors(ctx context.Context, log *slog.Logger) error {
+func AttachRedirectors(ctx context.Context, log *slog.Logger, tracker socket.Tracker) error {
 	r := &Redirector{
-		activators: make(map[int]*activator.BPF),
-		log:        log,
+		sandboxes: make(map[int]sandbox),
+		log:       log,
+		tracker:   tracker,
 	}
 
 	if _, err := os.Stat(activator.MapsPath()); os.IsNotExist(err) {
@@ -51,6 +65,7 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger) error {
 		r.log.Info("no sandbox pids found")
 	}
 
+	errs := []error{}
 	for _, pid := range pids {
 		if err := statNetNS(pid); os.IsNotExist(err) {
 			r.log.Info("net ns not found, removing leftover pid", "path", netNSPath(pid))
@@ -58,14 +73,12 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger) error {
 			continue
 		}
 
-		if err := r.attachRedirector(pid); err != nil {
-			return err
-		}
+		errs = append(errs, r.attachRedirector(pid))
 	}
 
 	go r.watchForSandboxPids(ctx)
 
-	return nil
+	return errors.Join(errs...)
 }
 
 func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
@@ -83,7 +96,7 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 		select {
 		// watch for events
 		case event := <-watcher.Events:
-			if filepath.Base(event.Name) == socket.TCPEventsMap {
+			if ignoredDir(filepath.Base(event.Name)) {
 				continue
 			}
 
@@ -105,9 +118,9 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 				}
 			case fsnotify.Remove:
 				r.Lock()
-				if act, ok := r.activators[pid]; ok {
-					r.log.Info("cleaning up activator", "pid", pid)
-					if err := act.Cleanup(); err != nil {
+				if sb, ok := r.sandboxes[pid]; ok {
+					r.log.Info("cleaning up redirector", "pid", pid)
+					if err := sb.Remove(r.tracker); err != nil {
 						r.log.Error("error cleaning up redirector", "err", err)
 					}
 				}
@@ -126,25 +139,35 @@ func (r *Redirector) attachRedirector(pid int) error {
 	if err != nil {
 		return fmt.Errorf("unable to initialize BPF: %w", err)
 	}
-	r.Lock()
-	r.activators[pid] = bpf
-	r.Unlock()
 
 	netNS, err := ns.GetNS(netNSPath(pid))
 	if err != nil {
 		return err
 	}
 
+	var sandboxIP netip.Addr
 	if err := netNS.Do(func(nn ns.NetNS) error {
-		//  TODO: is this really always eth0?
+		// TODO: is this really always eth0?
 		// as for loopback, this is required for port-forwarding to work
-		ifaces := []string{"eth0", "lo"}
+		ifaces := []string{ifaceETH0, ifaceLoopback}
 		r.log.Info("attaching redirector for sandbox", "pid", pid, "links", ifaces)
-		return bpf.AttachRedirector(ifaces...)
-	}); err != nil {
+		if err := bpf.AttachRedirector(ifaces...); err != nil {
+			return err
+		}
+
+		sandboxIP, err = getSandboxIP(ifaceETH0)
 		return err
+	}); err != nil {
+		return errors.Join(err, bpf.Cleanup())
 	}
 
+	r.Lock()
+	r.sandboxes[pid] = sandbox{activator: bpf, ip: sandboxIP}
+	r.Unlock()
+
+	if err := r.trackSandboxIP(sandboxIP); err != nil {
+		return fmt.Errorf("tracking sandbox IP: %w", err)
+	}
 	return nil
 }
 
@@ -173,7 +196,7 @@ func (r *Redirector) getSandboxPids() ([]int, error) {
 
 	intPids := make([]int, 0, len(dirs))
 	for _, dir := range dirs {
-		if dir == socket.TCPEventsMap {
+		if ignoredDir(dir) {
 			continue
 		}
 
@@ -192,4 +215,56 @@ func (r *Redirector) getSandboxPids() ([]int, error) {
 	}
 
 	return intPids, nil
+}
+
+func getSandboxIP(ifaceName string) (netip.Addr, error) {
+	ip := netip.Addr{}
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return ip, fmt.Errorf("could not get interface: %w", err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ip, fmt.Errorf("could not get interface addrs: %w", err)
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok {
+			// no need to track link local addresses
+			if ipnet.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			ip, ok = netip.AddrFromSlice(ipnet.IP)
+			if !ok {
+				return ip, fmt.Errorf("unable to convert net.IP to netip.Addr: %s", ipnet.IP)
+			}
+			// use Unmap as the ipv4 might be mapped in v6
+			return ip.Unmap(), nil
+		}
+	}
+	return ip, fmt.Errorf("sandbox IP not found")
+}
+
+// trackSandboxIP passes the pod/sandbox IP to the tracker so it can ignore
+// kubelet probes going to this pod.
+func (r *Redirector) trackSandboxIP(ip netip.Addr) error {
+	if r.tracker == nil {
+		return nil
+	}
+	r.log.Info("tracking sandbox IP", "addr", ip.String())
+	if err := r.tracker.PutPodIP(ip); err != nil {
+		return fmt.Errorf("putting pod IP in tracker map: %w", err)
+	}
+	return nil
+}
+
+func ignoredDir(dir string) bool {
+	return dir == socket.TCPEventsMap || dir == socket.PodKubeletAddrsMapv4 || dir == socket.PodKubeletAddrsMapv6
+}
+
+func (sb sandbox) Remove(tracker socket.Tracker) error {
+	errs := []error{sb.activator.Cleanup()}
+	if tracker != nil {
+		errs = append(errs, tracker.RemovePodIP(sb.ip))
+	}
+	return errors.Join(errs...)
 }
