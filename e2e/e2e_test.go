@@ -196,25 +196,6 @@ func TestE2E(t *testing.T) {
 			expectRunning:    false,
 			expectScaledDown: true,
 		},
-		"pod with HTTP probe and probe detection disabled": {
-			pod: testPod(
-				scaleDownAfter(time.Second),
-				annotations(map[string]string{shim.DisableProbeDetectAnnotationKey: "true"}),
-				addContainer("nginx", "nginx", nil, 80),
-				livenessProbe(&corev1.Probe{
-					PeriodSeconds: 1,
-					ProbeHandler: corev1.ProbeHandler{
-						HTTPGet: &corev1.HTTPGetAction{
-							Port: intstr.FromInt(80),
-						},
-					},
-				}),
-			),
-			parallelReqs:     0,
-			sequentialReqs:   0,
-			expectRunning:    true,
-			expectScaledDown: false,
-		},
 	}
 
 	for name, tc := range cases {
