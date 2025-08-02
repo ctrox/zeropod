@@ -34,7 +34,8 @@ var (
 	debug          = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
-	statusLabels = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	statusLabels    = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	probeBinaryName = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
 )
 
 func main() {
@@ -50,7 +51,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tracker, cleanSocketTracker, err := socket.LoadEBPFTracker()
+	tracker, cleanSocketTracker, err := socket.LoadEBPFTracker(*probeBinaryName)
 	if err != nil {
 		log.Warn("loading socket tracker failed, scaling down with static duration", "err", err)
 		cleanSocketTracker = func() error { return nil }

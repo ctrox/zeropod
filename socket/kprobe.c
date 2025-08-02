@@ -39,6 +39,8 @@ struct {
     __uint(pinning, LIBBPF_PIN_BY_NAME);
 } pod_kubelet_addrs_v6 SEC(".maps");
 
+const volatile char probe_binary_name[TASK_COMM_LEN] = "";
+
 static __always_inline bool ipv6_addr_equal(const struct ipv6_addr *a1, const struct ipv6_addr *a2) {
     #pragma unroll
     for (int i = 0; i < 15; i++) {
@@ -102,7 +104,7 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx) {
 static int find_potential_kubelet_ip(struct sock *sk) {
     char comm[TASK_COMM_LEN];
     bpf_get_current_comm(&comm, sizeof(comm));
-    if ((bpf_strncmp(comm, TASK_COMM_LEN, "kubelet") == 0) || (bpf_strncmp(comm, TASK_COMM_LEN, "k3s") == 0)) {
+    if (bpf_strncmp(comm, TASK_COMM_LEN, (char *)probe_binary_name) == 0) {
         if (BPF_CORE_READ(sk, __sk_common.skc_family) == AF_INET) {
             __be32 saddr = 0;
             __be32 daddr = 0;

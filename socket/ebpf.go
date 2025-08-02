@@ -31,9 +31,14 @@ var mapNames = []string{
 	PodKubeletAddrsMapv6,
 }
 
+const (
+	probeBinaryNameVariable  = "probe_binary_name"
+	probeBinaryNameMaxLength = 16
+)
+
 // LoadEBPFTracker loads the eBPF program and attaches the kretprobe to track
 // connections system-wide.
-func LoadEBPFTracker() (Tracker, func() error, error) {
+func LoadEBPFTracker(probeBinaryName string) (Tracker, func() error, error) {
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, nil, err
@@ -55,7 +60,25 @@ func LoadEBPFTracker() (Tracker, func() error, error) {
 			PinPath: pinPath,
 		},
 	}
-	if err := loadBpfObjects(&objs, collectionOpts); err != nil {
+
+	spec, err := loadBpf()
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading bpf objects: %w", err)
+	}
+
+	if len([]byte(probeBinaryName)) > probeBinaryNameMaxLength {
+		return nil, nil, fmt.Errorf(
+			"probe binary name %s is too long (%d bytes), max is %d bytes",
+			probeBinaryName, len([]byte(probeBinaryName)), probeBinaryNameMaxLength,
+		)
+	}
+	binName := [probeBinaryNameMaxLength]byte{}
+	copy(binName[:], probeBinaryName[:])
+	if err := spec.Variables[probeBinaryNameVariable].Set(binName); err != nil {
+		return nil, nil, fmt.Errorf("setting probe binary variable: %w", err)
+	}
+
+	if err := spec.LoadAndAssign(&objs, collectionOpts); err != nil {
 		if !errors.Is(err, ebpf.ErrMapIncompatible) {
 			return nil, nil, fmt.Errorf("loading objects: %w", err)
 		}
