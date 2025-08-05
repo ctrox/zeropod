@@ -7,7 +7,7 @@ require (
 	github.com/cilium/ebpf v0.19.0
 	github.com/containerd/cgroups/v3 v3.0.3
 	github.com/containerd/containerd/api v1.8.0
-	github.com/containerd/containerd/v2 v2.0.4
+	github.com/containerd/containerd/v2 v2.0.5
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/errdefs/pkg v0.3.0
 	github.com/containerd/fifo v1.1.0
@@ -143,7 +143,7 @@ require (
 	go4.org v0.0.0-20230225012048-214862532bf5 // indirect
 	golang.org/x/mod v0.22.0 // indirect
 	golang.org/x/net v0.38.0 // indirect
-	golang.org/x/oauth2 v0.25.0 // indirect
+	golang.org/x/oauth2 v0.28.0 // indirect
 	golang.org/x/sync v0.12.0 // indirect
 	golang.org/x/term v0.30.0 // indirect
 	golang.org/x/text v0.23.0 // indirect
