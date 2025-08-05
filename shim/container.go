@@ -20,6 +20,7 @@ import (
 	"github.com/ctrox/zeropod/socket"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -116,12 +117,12 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 		c.cfg.ScaleDownDuration = 0
 	}
 	if c.SkipStart() {
-		c.SetScaledDown(true)
+		c.setPhase(v1.ContainerPhase_SCALED_DOWN)
 		if err := c.scaleDown(ctx); err != nil {
 			return err
 		}
 	} else {
-		c.SetScaledDown(false)
+		c.setPhaseNotify(v1.ContainerPhase_RUNNING, 0)
 	}
 	return nil
 }
@@ -189,13 +190,26 @@ func (c *Container) CancelScaleDown() {
 	c.scaleDownTimer.Stop()
 }
 
-func (c *Container) SetScaledDown(scaledDown bool) {
-	c.scaledDown = scaledDown
-	c.metrics.Running = !scaledDown
-	if scaledDown {
-		c.metrics.LastCheckpoint = timestamppb.Now()
-	} else {
+func (c *Container) setPhase(phase v1.ContainerPhase) {
+	switch phase {
+	case v1.ContainerPhase_RUNNING:
 		c.metrics.LastRestore = timestamppb.Now()
+		c.scaledDown = false
+		c.metrics.Running = true
+	case v1.ContainerPhase_SCALED_DOWN:
+		c.metrics.LastCheckpoint = timestamppb.Now()
+		c.scaledDown = true
+		c.metrics.Running = false
+	}
+}
+
+func (c *Container) setPhaseNotify(phase v1.ContainerPhase, duration time.Duration) {
+	c.setPhase(phase)
+	switch phase {
+	case v1.ContainerPhase_RUNNING:
+		c.metrics.LastRestoreDuration = durationpb.New(duration)
+	case v1.ContainerPhase_SCALED_DOWN:
+		c.metrics.LastCheckpointDuration = durationpb.New(duration)
 	}
 	c.sendEvent(c.Status())
 }
@@ -210,15 +224,21 @@ func (c *Container) SkipStart() bool {
 
 func (c *Container) Status() *v1.ContainerStatus {
 	phase := v1.ContainerPhase_RUNNING
+	eventTime := c.metrics.LastRestore
+	eventDuration := c.metrics.LastRestoreDuration
 	if c.ScaledDown() {
 		phase = v1.ContainerPhase_SCALED_DOWN
+		eventTime = c.metrics.LastCheckpoint
+		eventDuration = c.metrics.LastCheckpointDuration
 	}
 	return &v1.ContainerStatus{
-		Id:           c.ID(),
-		Name:         c.cfg.ContainerName,
-		PodName:      c.cfg.PodName,
-		PodNamespace: c.cfg.PodNamespace,
-		Phase:        phase,
+		Id:            c.ID(),
+		Name:          c.cfg.ContainerName,
+		PodName:       c.cfg.PodName,
+		PodNamespace:  c.cfg.PodNamespace,
+		Phase:         phase,
+		EventTime:     eventTime,
+		EventDuration: eventDuration,
 	}
 }
 
@@ -357,7 +377,6 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 	return func() error {
 		log.G(ctx).Printf("got a request")
 
-		beforeRestore := time.Now()
 		restoredContainer, p, err := c.Restore(ctx)
 		if err != nil {
 			if errors.Is(err, ErrAlreadyRestored) {
@@ -374,8 +393,6 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 		if err := c.tracker.TrackPid(uint32(p.Pid())); err != nil {
 			log.G(ctx).Warnf("unable to track pid %d: %s", p.Pid(), err)
 		}
-
-		log.G(ctx).Printf("restored process: %d in %s", p.Pid(), time.Since(beforeRestore))
 
 		return c.ScheduleScaleDown()
 	}

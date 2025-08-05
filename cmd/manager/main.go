@@ -36,6 +36,7 @@ var (
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
 	statusLabels    = flag.Bool("status-labels", false, "update pod labels to reflect container status")
 	probeBinaryName = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
+	statusEvents    = flag.Bool("status-events", false, "create status events to reflect container status")
 )
 
 func main() {
@@ -73,6 +74,9 @@ func main() {
 	}
 	if *inPlaceScaling {
 		podHandlers = append(podHandlers, manager.NewPodScaler(log))
+	}
+	if *statusEvents {
+		podHandlers = append(podHandlers, manager.NewEventCreator(log))
 	}
 
 	col := manager.NewCollector()
