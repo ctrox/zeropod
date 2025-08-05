@@ -14,6 +14,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -147,7 +148,7 @@ func (c *Container) evac(ctx context.Context) error {
 		case <-done:
 			// once checkpointed, consider the container scaled down to ensure
 			// proper exit cleanup
-			c.SetScaledDown(true)
+			c.setPhase(v1.ContainerPhase_SCALED_DOWN)
 			log.G(ctx).Info("done case")
 			return nil
 		}

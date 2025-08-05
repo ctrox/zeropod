@@ -46,6 +46,11 @@ type PodHandlerWithClient interface {
 	InjectClient(v1.ShimClient)
 }
 
+type PodHandlerWithKubeClient interface {
+	PodHandler
+	InjectKubeClient(client.Client)
+}
+
 type subscriber struct {
 	log             *slog.Logger
 	kube            client.Client
@@ -101,6 +106,9 @@ func subscribe(ctx context.Context, sc SubscriberConfig, sock string, handlers [
 	for _, handler := range handlers {
 		if ph, ok := handler.(PodHandlerWithClient); ok {
 			ph.InjectClient(shimClient)
+		}
+		if ph, ok := handler.(PodHandlerWithKubeClient); ok {
+			ph.InjectKubeClient(sc.Kube)
 		}
 	}
 

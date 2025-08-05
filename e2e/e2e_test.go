@@ -366,6 +366,33 @@ func TestE2E(t *testing.T) {
 		waitUntilScaledDown(t, ctx, e2e.client, pod)
 	})
 
+	t.Run("status events", func(t *testing.T) {
+		pod := testPod(scaleDownAfter(time.Second), agnContainer("agn", 8080))
+
+		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
+		defer cleanupPod()
+		waitUntilScaledDown(t, ctx, e2e.client, pod)
+		_, _, err := podExec(e2e.cfg, pod, "date")
+		require.NoError(t, err)
+
+		require.Eventually(t, func() bool {
+			eventList := &corev1.EventList{}
+			if err := e2e.client.List(ctx, eventList); err != nil {
+				return false
+			}
+			eventCount := 0
+			expectedEvents := 2
+			for _, event := range eventList.Items {
+				if event.ReportingController == manager.ControllerName &&
+					event.InvolvedObject.UID == pod.UID {
+					eventCount++
+				}
+			}
+
+			return eventCount == expectedEvents
+		}, time.Minute, time.Second, "2 matching events are expected")
+	})
+
 	t.Run("metrics", func(t *testing.T) {
 		// create two pods to test metric merging
 		runningPod := testPod(scaleDownAfter(time.Hour))

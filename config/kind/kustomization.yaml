@@ -4,6 +4,7 @@ components:
   - ../in-place-scaling
   - ../pod-updater
   - ../status-labels
+  - ../status-events
   - ../migration-manager
 images:
   - name: manager
