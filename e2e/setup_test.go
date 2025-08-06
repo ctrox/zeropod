@@ -438,6 +438,12 @@ func livenessProbe(probe *corev1.Probe) podOption {
 	}
 }
 
+func disableDataMigration() podOption {
+	return annotations(map[string]string{
+		shim.DisableMigrateDataAnnotationKey: "true",
+	})
+}
+
 const agnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.39"
 
 func agnContainer(name string, port int) podOption {
@@ -542,12 +548,18 @@ func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption)
 		},
 		Spec: appsv1.DeploymentSpec{
 			Selector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"app": "zeropod-e2e"},
+				MatchLabels: map[string]string{
+					"app":  "zeropod-e2e",
+					"name": name,
+				},
 			},
 			Replicas: ptr.To(int32(1)),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{"app": "zeropod-e2e"},
+					Labels: map[string]string{
+						"app":  "zeropod-e2e",
+						"name": name,
+					},
 				},
 				Spec: corev1.PodSpec{
 					RuntimeClassName: ptr.To(v1.RuntimeClassName),
@@ -605,9 +617,9 @@ func createDeployAndWait(t testing.TB, ctx context.Context, c client.Client, dep
 	}
 }
 
-func podsOfDeployment(t testing.TB, ctx context.Context, c client.Client, deploy *appsv1.Deployment) []corev1.Pod {
+func podsOfDeployment(t testing.TB, c client.Client, deploy *appsv1.Deployment) []corev1.Pod {
 	podList := &corev1.PodList{}
-	if err := c.List(ctx, podList, client.MatchingLabels(deploy.Spec.Selector.MatchLabels)); err != nil {
+	if err := c.List(t.Context(), podList, client.MatchingLabels(deploy.Spec.Selector.MatchLabels)); err != nil {
 		t.Error(err)
 	}
 
@@ -719,7 +731,7 @@ func podExec(cfg *rest.Config, pod *corev1.Pod, command string) (string, string,
 		Name(pod.Name).
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
-			Command: []string{"/bin/sh", "-c", command},
+			Command: []string{"sh", "-c", command},
 			Stdin:   false,
 			Stdout:  true,
 			Stderr:  true,

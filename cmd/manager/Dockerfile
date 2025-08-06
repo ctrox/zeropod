@@ -1,5 +1,5 @@
 ARG CRIU_IMAGE_NAME=ghcr.io/ctrox/zeropod-criu
-ARG CRIU_VERSION=v4.0
+ARG CRIU_VERSION=v4.1
 
 FROM --platform=$BUILDPLATFORM golang:1.24 AS builder
 

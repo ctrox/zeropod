@@ -1,6 +1,6 @@
 module github.com/ctrox/zeropod
 
-go 1.23.0
+go 1.24.0
 
 require (
 	github.com/checkpoint-restore/go-criu/v7 v7.2.0

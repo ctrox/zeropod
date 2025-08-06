@@ -6,7 +6,7 @@ the last TCP connection. While in scaled down state, it will listen on the same
 port the application inside the container was listening on and will restore the
 container on the first incoming connection. Depending on the memory size of the
 checkpointed program this happens in tens to a few hundred milliseconds,
-virtually unnoticable to the user. As all the memory contents are stored to disk
+virtually unnoticeable to the user. As all the memory contents are stored to disk
 during checkpointing, all state of the application is restored. [It adjusts
 resource requests](#in-place-resource-scaling) in scaled down state in-place if
 the cluster supports it. To prevent huge resource usage spikes when draining a
@@ -283,7 +283,7 @@ zeropod.ctrox.dev/ports-map: "nginx=80,81;sidecar=8080"
 ### `zeropod.ctrox.dev/scaledown-duration`
 
 Configures how long to wait before scaling down again after the last
-connnection. The duration is reset whenever a connection happens. Setting it to
+connection. The duration is reset whenever a connection happens. Setting it to
 0 disables scaling down. If unset it defaults to 1 minute.
 
 ```yaml
@@ -352,6 +352,17 @@ to be enabled in the host kernel (`CONFIG_USERFAULTFD`).
 
 ```yaml
 zeropod.ctrox.dev/live-migrate: "nginx"
+```
+
+### `zeropod.ctrox.dev/disable-migrate-data`
+
+When migrating a pod (regardless of live or scaled down), data that has been
+written to the containers file system will be copied over. This is done by
+copying the upper layer of the container overlayfs. Enabled by default but can
+be disabled with this annotation.
+
+```yaml
+zeropod.ctrox.dev/disable-migrate-data: "true"
 ```
 
 ### `io.containerd.runc.v2.group`

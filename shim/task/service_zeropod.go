@@ -170,7 +170,18 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		zeropodContainer.SetSkipStart(skipStart)
 	}
 
-	return w.service.Create(ctx, r)
+	resp, err := w.service.Create(ctx, r)
+	if err != nil {
+		return nil, err
+	}
+
+	if cfg.AnyMigrationEnabled() && !cfg.DisableMigrateData {
+		if err := zshim.MoveImageToUpperDir(r.ID, r.Checkpoint); err != nil {
+			log.G(ctx).Errorf("restoring container data: %s", err)
+		}
+	}
+
+	return resp, nil
 }
 
 func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.StartResponse, error) {
