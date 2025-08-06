@@ -41,6 +41,8 @@ message ContainerStatus {
 	string pod_name = 3;
 	string pod_namespace = 4;
 	ContainerPhase phase = 5;
+	google.protobuf.Timestamp event_time = 6;
+	google.protobuf.Duration event_duration = 7;
 }
 
 message ContainerMetrics {

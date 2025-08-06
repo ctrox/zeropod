@@ -13,7 +13,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/ctrox/zeropod/activator"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
-	"google.golang.org/protobuf/types/known/durationpb"
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 )
 
 func (c *Container) scaleDown(ctx context.Context) error {
@@ -85,7 +85,7 @@ func (c *Container) kill(ctx context.Context) error {
 	if err := c.process.Kill(ctx, 9, false); err != nil {
 		return err
 	}
-	c.SetScaledDown(true)
+	c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, 0)
 	return nil
 }
 
@@ -153,9 +153,8 @@ func (c *Container) checkpoint(ctx context.Context) error {
 		return err
 	}
 
-	c.SetScaledDown(true)
-	c.metrics.LastCheckpointDuration = durationpb.New(time.Since(beforeCheckpoint))
-	log.G(ctx).Infof("checkpointing done in %s", time.Since(beforeCheckpoint))
+	c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, time.Since(beforeCheckpoint))
+	log.G(ctx).Infof("checkpointing done in %s", c.metrics.LastCheckpointDuration.AsDuration())
 
 	return nil
 }

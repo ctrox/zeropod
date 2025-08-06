@@ -20,10 +20,10 @@ import (
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
-	v1 "github.com/ctrox/zeropod/api/node/v1"
+	nodev1 "github.com/ctrox/zeropod/api/node/v1"
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	crio "github.com/ctrox/zeropod/shim/io"
 	"google.golang.org/protobuf/types/known/anypb"
-	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -66,7 +66,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		Stdout:           c.initialProcess.Stdio().Stdout,
 		Stderr:           c.initialProcess.Stdio().Stderr,
 		ParentCheckpoint: "",
-		Checkpoint:       v1.SnapshotPath(c.ID()),
+		Checkpoint:       nodev1.SnapshotPath(c.ID()),
 	}
 
 	if c.cfg.DisableCheckpointing {
@@ -102,10 +102,10 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 
 		return nil, nil, fmt.Errorf("start failed during restore: %w", err)
 	}
-	c.metrics.LastRestoreDuration = durationpb.New(time.Since(beforeRestore))
 	c.Container = container
 	c.process = p
-	c.SetScaledDown(false)
+	c.setPhaseNotify(v1.ContainerPhase_RUNNING, time.Since(beforeRestore))
+	log.G(ctx).Printf("restored process: %d in %s", p.Pid(), c.metrics.LastRestoreDuration.AsDuration())
 
 	if c.postRestore != nil {
 		c.postRestore(container, handleStarted)
@@ -197,21 +197,21 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 // MigrationRestore requests a restore from the node. If a matching migration is
 // found, it sets the Checkpoint path in the CreateTaskRequest.
 func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *Config) (skipStart bool, err error) {
-	conn, err := net.Dial("unix", v1.SocketPath)
+	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
 		return false, fmt.Errorf("dialing node service: %w", err)
 	}
 	log.G(ctx).Infof("creating restore request for container: %s", cfg.ContainerName)
 
-	restoreReq := &v1.RestoreRequest{
-		MigrationInfo: &v1.MigrationInfo{ImageId: r.ID},
-		PodInfo: &v1.PodInfo{
+	restoreReq := &nodev1.RestoreRequest{
+		MigrationInfo: &nodev1.MigrationInfo{ImageId: r.ID},
+		PodInfo: &nodev1.PodInfo{
 			Name:          cfg.PodName,
 			Namespace:     cfg.PodNamespace,
 			ContainerName: cfg.ContainerName,
 		},
 	}
-	nodeClient := v1.NewNodeClient(ttrpc.NewClient(conn))
+	nodeClient := nodev1.NewNodeClient(ttrpc.NewClient(conn))
 	defer conn.Close()
 	resp, err := nodeClient.Restore(ctx, restoreReq)
 	if err != nil {
@@ -226,8 +226,8 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *Confi
 	log.G(ctx).Infof("restore response: %v", resp.MigrationInfo)
 
 	// TODO: validate that path is valid and contains image
-	r.Checkpoint = v1.SnapshotPath(resp.MigrationInfo.ImageId)
-	log.G(ctx).Infof("setting checkpoint dir for restore: %s", v1.SnapshotPath(resp.MigrationInfo.ImageId))
+	r.Checkpoint = nodev1.SnapshotPath(resp.MigrationInfo.ImageId)
+	log.G(ctx).Infof("setting checkpoint dir for restore: %s", nodev1.SnapshotPath(resp.MigrationInfo.ImageId))
 
 	// we set the criu work path for the live migration to work (the lazy pages
 	// socket needs to be there) and also so the restore stats are stored in the
@@ -287,25 +287,25 @@ func setCriuWorkPath(r *task.CreateTaskRequest, path string) error {
 }
 
 func FinishRestore(ctx context.Context, id string, cfg *Config, startTime time.Time) error {
-	conn, err := net.Dial("unix", v1.SocketPath)
+	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
 		return fmt.Errorf("dialing node service: %w", err)
 	}
 	defer conn.Close()
 
-	restoreReq := &v1.RestoreRequest{
-		PodInfo: &v1.PodInfo{
+	restoreReq := &nodev1.RestoreRequest{
+		PodInfo: &nodev1.PodInfo{
 			Name:          cfg.PodName,
 			Namespace:     cfg.PodNamespace,
 			ContainerName: cfg.ContainerName,
 		},
-		MigrationInfo: &v1.MigrationInfo{
+		MigrationInfo: &nodev1.MigrationInfo{
 			ImageId:      id,
 			RestoreStart: timestamppb.New(startTime),
 			RestoreEnd:   timestamppb.Now(),
 		},
 	}
-	nodeClient := v1.NewNodeClient(ttrpc.NewClient(conn))
+	nodeClient := nodev1.NewNodeClient(ttrpc.NewClient(conn))
 	if _, err := nodeClient.FinishRestore(ctx, restoreReq); err != nil {
 		return err
 	}
