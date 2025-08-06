@@ -186,7 +186,11 @@ func nonLiveAfterMigration(t *testing.T) {
 		if len(pods) == 0 {
 			return true
 		}
-		return pods[0].Labels[path.Join(manager.StatusLabelKeyPrefix, "freezer")] != shimv1.ContainerPhase_SCALED_DOWN.String()
+		status, ok := pods[0].Labels[path.Join(manager.StatusLabelKeyPrefix, "freezer")]
+		if !ok {
+			return false
+		}
+		return status != shimv1.ContainerPhase_SCALED_DOWN.String()
 	}, time.Second*30, time.Second, "container is scaled down after migration")
 	defaultAfterMigration(t)
 }
