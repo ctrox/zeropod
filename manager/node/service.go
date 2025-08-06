@@ -297,6 +297,14 @@ func (ns *nodeService) setMigrationFailed(ctx context.Context, containerName str
 }
 
 func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreRequest) (*nodev1.RestoreResponse, error) {
+	resp, err := ns.finishRestore(ctx, req)
+	if err != nil {
+		ns.log.Error("finishing restore request", "error", err)
+	}
+	return resp, err
+}
+
+func (ns *nodeService) finishRestore(ctx context.Context, req *nodev1.RestoreRequest) (*nodev1.RestoreResponse, error) {
 	ns.log.Info("got finish restore request",
 		"pod_name", req.PodInfo.Name,
 		"pod_namespace", req.PodInfo.Namespace,
