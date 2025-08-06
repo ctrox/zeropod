@@ -286,11 +286,11 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 }
 
 func (ns *nodeService) setMigrationFailed(ctx context.Context, containerName string, migration *v1.Migration) {
-	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) error {
+	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) (bool, error) {
 		setOrUpdateContainerStatus(m, containerName, func(status *v1.MigrationContainerStatus) {
 			status.Condition.Phase = v1.MigrationPhaseFailed
 		})
-		return nil
+		return true, nil
 	}); err != nil {
 		ns.log.Error("failed to update migration status", "container_name", containerName)
 	}
@@ -337,7 +337,7 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 		}
 	}
 
-	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(migration *v1.Migration) error {
+	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(migration *v1.Migration) (bool, error) {
 		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
 			// in case the migration is already set to failed we skip updating it
 			if status.Condition.Phase == v1.MigrationPhaseFailed {
@@ -355,7 +355,7 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 			}
 			status.Condition.Phase = phase
 		})
-		return nil
+		return true, nil
 	}); err != nil {
 		return nil, err
 	}
@@ -532,11 +532,11 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 	}); err != nil {
 		ns.log.Error("prepare evac request failed",
 			"name", migration.Name, "namespace", migration.Namespace, "error", err)
-		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) error {
+		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) (bool, error) {
 			setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
 				status.Condition.Phase = v1.MigrationPhaseUnclaimed
 			})
-			return nil
+			return true, nil
 		}); err != nil {
 			ns.log.Error("failed to update migration status",
 				"name", migration.Name, "namespace", migration.Namespace, "error", err)
@@ -593,7 +593,7 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 		}()
 	}
 
-	if err := ns.updateMigration(ctx, nsName, func(migration *v1.Migration) error {
+	if err := ns.updateMigration(ctx, nsName, func(migration *v1.Migration) (bool, error) {
 		if found := updateContainerSpec(migration, req.PodInfo.ContainerName, func(mc *v1.MigrationContainer) {
 			mc.ImageServer = &v1.MigrationServer{
 				Host: ns.host,
@@ -603,10 +603,10 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 			mc.Ports = req.PodInfo.Ports
 			ns.log.Debug("found our container, setting migration servers")
 		}); !found {
-			return fmt.Errorf("migration does not have image for requested container %s", req.PodInfo.ContainerName)
+			return false, fmt.Errorf("migration does not have image for requested container %s", req.PodInfo.ContainerName)
 		}
 		migration.Spec.LiveMigration = req.MigrationInfo.LiveMigration
-		return nil
+		return true, nil
 	}); err != nil {
 		return nil, err
 	}
@@ -614,12 +614,15 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 		ns.log.Info("set page server in evac", "host", ns.host, "port", pageServer.Port)
 	}
 
-	if err := ns.updateMigrationStatus(ctx, nsName, func(migration *v1.Migration) error {
+	if err := ns.updateMigrationStatus(ctx, nsName, func(migration *v1.Migration) (bool, error) {
+		if getContainerStatus(migration, req.PodInfo.ContainerName).Condition.Phase == v1.MigrationPhaseCompleted {
+			return false, nil
+		}
 		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
 			status.PausedAt = metav1.NewMicroTime(req.MigrationInfo.PausedAt.AsTime())
 			status.Condition.Phase = v1.MigrationPhaseRunning
 		})
-		return nil
+		return true, nil
 	}); err != nil {
 		return nil, err
 	}
@@ -741,7 +744,7 @@ func (ns *nodeService) local(host string) bool {
 	return ns.host == host
 }
 
-type updateFunc func(*v1.Migration) error
+type updateFunc func(*v1.Migration) (updateNeeded bool, err error)
 
 func (ns *nodeService) updateMigration(ctx context.Context, nsName types.NamespacedName, update updateFunc) error {
 	migration := &v1.Migration{}
@@ -749,8 +752,12 @@ func (ns *nodeService) updateMigration(ctx context.Context, nsName types.Namespa
 		if err := ns.kube.Get(ctx, nsName, migration); err != nil {
 			return err
 		}
-		if err := update(migration); err != nil {
+		updateNeeded, err := update(migration)
+		if err != nil {
 			return err
+		}
+		if !updateNeeded {
+			return nil
 		}
 		return ns.kube.Update(ctx, migration)
 	})
@@ -762,10 +769,17 @@ func (ns *nodeService) updateMigrationStatus(ctx context.Context, nsName types.N
 		if err := ns.kube.Get(ctx, nsName, migration); err != nil {
 			return err
 		}
-		if err := update(migration); err != nil {
+		updateNeeded, err := update(migration)
+		if err != nil {
 			return err
 		}
-		return ns.kube.Status().Update(ctx, migration)
+		if !updateNeeded {
+			return nil
+		}
+		if err := ns.kube.Status().Update(ctx, migration); err != nil {
+			return err
+		}
+		return nil
 	})
 }
 
@@ -777,6 +791,15 @@ func updateContainerSpec(migration *v1.Migration, containerName string, updateFu
 		}
 	}
 	return false
+}
+
+func getContainerStatus(migration *v1.Migration, containerName string) v1.MigrationContainerStatus {
+	for i, container := range migration.Status.Containers {
+		if container.Name == containerName {
+			return migration.Status.Containers[i]
+		}
+	}
+	return v1.MigrationContainerStatus{}
 }
 
 func setOrUpdateContainerStatus(migration *v1.Migration, containerName string, updateFunc func(*v1.MigrationContainerStatus)) {
