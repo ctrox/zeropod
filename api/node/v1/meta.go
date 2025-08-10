@@ -8,6 +8,7 @@ const (
 	SocketPath               = runPath + "node.sock"
 	imagesPath               = varPath + "i/"
 	SnapshotSuffix           = "snapshot"
+	UpperSuffix              = "upper"
 	WorkDirSuffix            = "work"
 	MigrateAnnotationKey     = "zeropod.ctrox.dev/migrate"
 	LiveMigrateAnnotationKey = "zeropod.ctrox.dev/live-migrate"
@@ -26,6 +27,10 @@ func WorkDirPath(id string) string {
 
 func SnapshotPath(id string) string {
 	return filepath.Join(ImagePath(id), SnapshotSuffix)
+}
+
+func UpperPath(id string) string {
+	return filepath.Join(ImagePath(id), SnapshotSuffix, UpperSuffix)
 }
 
 func LazyPagesSocket(id string) string {

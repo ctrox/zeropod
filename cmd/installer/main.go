@@ -86,6 +86,7 @@ network-lock skip
     "zeropod.ctrox.dev/live-migrate",
     "zeropod.ctrox.dev/disable-probe-detection",
     "zeropod.ctrox.dev/probe-buffer-size",
+    "zeropod.ctrox.dev/disable-migrate-data",
     "io.containerd.runc.v2.group"
   ]
 
@@ -108,6 +109,7 @@ network-lock skip
     "zeropod.ctrox.dev/live-migrate",
     "zeropod.ctrox.dev/disable-probe-detection",
     "zeropod.ctrox.dev/probe-buffer-size",
+    "zeropod.ctrox.dev/disable-migrate-data",
     "io.containerd.runc.v2.group"
   ]
 

@@ -2,7 +2,9 @@ package e2e
 
 import (
 	"context"
+	"fmt"
 	"path"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,22 +17,23 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
+type testCase struct {
+	deploy                *appsv1.Deployment
+	svc                   *corev1.Service
+	sameNode              bool
+	migrationCount        int
+	liveMigration         bool
+	expectDataNotMigrated bool
+	beforeMigration       func(t *testing.T)
+	afterMigration        func(t *testing.T, tc testCase)
+}
+
 func TestMigration(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping e2e test")
 	}
 	e2e := setupOnce(t)
 	ctx := context.Background()
-
-	type testCase struct {
-		deploy          *appsv1.Deployment
-		svc             *corev1.Service
-		sameNode        bool
-		migrationCount  int
-		liveMigration   bool
-		beforeMigration func(t *testing.T)
-		afterMigration  func(t *testing.T)
-	}
 	cases := map[string]testCase{
 		"same-node live migration": {
 			deploy:         freezerDeployment("same-node-live-migration", "default", 256, liveMigrateAnnotation("freezer")),
@@ -54,27 +57,33 @@ func TestMigration(t *testing.T) {
 			migrationCount: 1,
 		},
 		"same-node non-live migration": {
-			deploy:          freezerDeployment("same-node-migration", "default", 1, migrateAnnotation("freezer"), scaleDownAfter(time.Second*5)),
-			svc:             testService(8080),
-			sameNode:        true,
-			liveMigration:   false,
-			migrationCount:  1,
-			beforeMigration: nonLiveBeforeMigration,
-			afterMigration:  nonLiveAfterMigration,
+			deploy:         freezerDeployment("same-node-migration", "default", 1, migrateAnnotation("freezer"), scaleDownAfter(time.Second)),
+			svc:            testService(8080),
+			sameNode:       true,
+			liveMigration:  false,
+			migrationCount: 1,
+			afterMigration: nonLiveAfterMigration,
 		},
 		"cross-node non-live migration": {
-			deploy:          freezerDeployment("same-node-migration", "default", 1, migrateAnnotation("freezer"), scaleDownAfter(time.Second*5)),
-			svc:             testService(8080),
-			sameNode:        false,
-			liveMigration:   false,
-			migrationCount:  1,
-			beforeMigration: nonLiveBeforeMigration,
-			afterMigration:  nonLiveAfterMigration,
+			deploy:         freezerDeployment("cross-node-migration", "default", 1, migrateAnnotation("freezer"), scaleDownAfter(time.Second)),
+			svc:            testService(8080),
+			sameNode:       false,
+			liveMigration:  false,
+			migrationCount: 1,
+			afterMigration: nonLiveAfterMigration,
+		},
+		"data migration disabled": {
+			deploy:                freezerDeployment("data-migration-disabled", "default", 1, liveMigrateAnnotation("freezer"), disableDataMigration()),
+			svc:                   testService(8080),
+			sameNode:              true,
+			liveMigration:         true,
+			expectDataNotMigrated: true,
+			migrationCount:        1,
 		},
 	}
 
 	migrate := func(t *testing.T, ctx context.Context, e2e *e2eConfig, tc testCase) {
-		pods := podsOfDeployment(t, ctx, e2e.client, tc.deploy)
+		pods := podsOfDeployment(t, e2e.client, tc.deploy)
 		if len(pods) < 1 {
 			t.Fatal("expected at least one pod in the deployment")
 		}
@@ -87,10 +96,12 @@ func TestMigration(t *testing.T) {
 			uncordon := cordonNode(t, ctx, e2e.client, pod.Spec.NodeName)
 			defer uncordon()
 		}
-
-		assert.NoError(t, e2e.client.Delete(ctx, &pod))
+		if !tc.liveMigration {
+			waitUntilScaledDown(t, ctx, e2e.client, &pod)
+		}
+		require.NoError(t, e2e.client.Delete(ctx, &pod))
 		assert.Eventually(t, func() bool {
-			pods := podsOfDeployment(t, ctx, e2e.client, tc.deploy)
+			pods := podsOfDeployment(t, e2e.client, tc.deploy)
 			if len(pods) != 1 {
 				return false
 			}
@@ -133,6 +144,7 @@ func TestMigration(t *testing.T) {
 			for range tc.migrationCount {
 				tc.beforeMigration(t)
 				checkCtx, cancel := context.WithCancel(ctx)
+				writePodData(t, migrationPod(t, tc.deploy))
 				defer cancel()
 				if tc.liveMigration {
 					go func() {
@@ -142,10 +154,50 @@ func TestMigration(t *testing.T) {
 				}
 				migrate(t, ctx, e2e, tc)
 				cancel()
-				tc.afterMigration(t)
+				tc.afterMigration(t, tc)
+				if tc.expectDataNotMigrated {
+					_, err := readPodData(t, migrationPod(t, tc.deploy))
+					assert.Error(t, err)
+				} else {
+					data, err := readPodDataEventually(t, migrationPod(t, tc.deploy))
+					assert.NoError(t, err)
+					assert.Equal(t, t.Name(), strings.TrimSpace(data))
+				}
 			}
 		})
 	}
+}
+
+func migrationPod(t testing.TB, deploy *appsv1.Deployment) *corev1.Pod {
+	pods := podsOfDeployment(t, e2e.client, deploy)
+	if len(pods) != 1 {
+		t.Errorf("pod of deployment %s not found", deploy.Name)
+	}
+	return &pods[0]
+}
+
+func writePodData(t testing.TB, pod *corev1.Pod) {
+	assert.Eventually(t, func() bool {
+		_, _, err := podExec(e2e.cfg, pod, fmt.Sprintf("echo %s > /containerdata", t.Name()))
+		return err == nil
+	}, time.Second*10, time.Second)
+}
+
+func readPodData(t testing.TB, pod *corev1.Pod) (string, error) {
+	data, _, err := podExec(e2e.cfg, pod, "cat /containerdata")
+	return data, err
+}
+
+func readPodDataEventually(t testing.TB, pod *corev1.Pod) (string, error) {
+	var data string
+	var err error
+	if !assert.Eventually(t, func() bool {
+		data, err = readPodData(t, pod)
+		return err == nil
+	}, time.Second*10, time.Second) {
+		return "", err
+	}
+	return data, nil
 }
 
 func defaultBeforeMigration(t *testing.T) {
@@ -161,7 +213,7 @@ func defaultBeforeMigration(t *testing.T) {
 	}, time.Second*10, time.Second)
 }
 
-func defaultAfterMigration(t *testing.T) {
+func defaultAfterMigration(t *testing.T, _ testCase) {
 	f, err := freezerRead(e2e.port)
 	require.NoError(t, err)
 	t.Logf("freeze duration: %s", f.LastFreezeDuration)
@@ -169,20 +221,9 @@ func defaultAfterMigration(t *testing.T) {
 	assert.Less(t, f.LastFreezeDuration, time.Second, "freeze duration")
 }
 
-func nonLiveBeforeMigration(t *testing.T) {
-	defaultBeforeMigration(t)
-	require.Eventually(t, func() bool {
-		pods := podsOfDeployment(t, context.Background(), e2e.client, freezerDeployment("same-node-migration", "default", 1))
-		if len(pods) == 0 {
-			return false
-		}
-		return pods[0].Labels[path.Join(manager.StatusLabelKeyPrefix, "freezer")] == shimv1.ContainerPhase_SCALED_DOWN.String()
-	}, time.Second*30, time.Second, "container is scaled down before migration")
-}
-
-func nonLiveAfterMigration(t *testing.T) {
+func nonLiveAfterMigration(t *testing.T, tc testCase) {
 	require.Never(t, func() bool {
-		pods := podsOfDeployment(t, context.Background(), e2e.client, freezerDeployment("same-node-migration", "default", 1))
+		pods := podsOfDeployment(t, e2e.client, tc.deploy)
 		if len(pods) == 0 {
 			return true
 		}
@@ -192,5 +233,5 @@ func nonLiveAfterMigration(t *testing.T) {
 		}
 		return status != shimv1.ContainerPhase_SCALED_DOWN.String()
 	}, time.Second*30, time.Second, "container is scaled down after migration")
-	defaultAfterMigration(t)
+	defaultAfterMigration(t, tc)
 }

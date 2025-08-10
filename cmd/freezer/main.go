@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -68,7 +71,16 @@ func main() {
 		fmt.Fprintf(w, "%s", freezeJSON)
 	})
 
-	go http.ListenAndServe(":8080", nil)
+	lc := net.ListenConfig{}
+	// disable multipath TCP for now since it's not supported by CRIU
+	lc.SetMultipathTCP(false)
+
+	ln, err := lc.Listen(context.Background(), "tcp", ":8080")
+	if err != nil {
+		slog.Error("tcp listen", "err", err)
+		os.Exit(1)
+	}
+	go http.Serve(ln, nil)
 	for {
 		since := time.Since(f.LastObservation)
 		if since > time.Millisecond*50 {

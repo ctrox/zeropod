@@ -25,6 +25,7 @@ const (
 	LiveMigrateAnnotationKey         = "zeropod.ctrox.dev/live-migrate"
 	DisableProbeDetectAnnotationKey  = "zeropod.ctrox.dev/disable-probe-detection"
 	ProbeBufferSizeAnnotationKey     = "zeropod.ctrox.dev/probe-buffer-size"
+	DisableMigrateDataAnnotationKey  = "zeropod.ctrox.dev/disable-migrate-data"
 	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
 	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
 	CRIPodNameAnnotation             = "io.kubernetes.cri.sandbox-name"
@@ -55,6 +56,7 @@ type Config struct {
 	ContainerdNamespace   string
 	DisableProbeDetection bool
 	ProbeBufferSize       int
+	DisableMigrateData    bool
 	spec                  *specs.Spec
 }
 
@@ -157,6 +159,15 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 
+	disableMigrateDataValue := spec.Annotations[DisableMigrateDataAnnotationKey]
+	disableMigrateData := false
+	if disableMigrateDataValue != "" {
+		disableMigrateData, err = strconv.ParseBool(disableMigrateDataValue)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	return &Config{
 		Ports:                 containerPorts,
 		ScaleDownDuration:     dur,
@@ -173,6 +184,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ContainerdNamespace:   ns,
 		DisableProbeDetection: disableProbeDetection,
 		ProbeBufferSize:       probeBufferSize,
+		DisableMigrateData:    disableMigrateData,
 		spec:                  spec,
 	}, nil
 }

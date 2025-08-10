@@ -2,11 +2,13 @@ package shim
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
@@ -15,6 +17,7 @@ import (
 	"github.com/containerd/ttrpc"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/prometheus/procfs"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -140,6 +143,8 @@ func (c *Container) evac(ctx context.Context) error {
 			return fmt.Errorf("failed checkpointing: %w", err)
 		case <-lazyStarted:
 			log.G(ctx).Info("successful started lazy checkpointing")
+			c.prepareMigrateData(ctx)
+
 			log.G(ctx).Infof("making evac request with image ID: %s", c.ID())
 			evacReq.MigrationInfo.PausedAt = timestamppb.New(pausedAt)
 			if _, err := nodeClient.Evac(ctx, evacReq); err != nil {
@@ -205,9 +210,89 @@ func (c *Container) evacScaledDown(ctx context.Context) error {
 	if _, err := nodeClient.PrepareEvac(ctx, evacReq); err != nil {
 		return fmt.Errorf("requesting evac: %w", err)
 	}
+	c.prepareMigrateData(ctx)
 
 	if _, err := nodeClient.Evac(ctx, evacReq); err != nil {
 		return fmt.Errorf("requesting evac: %w", err)
 	}
 	return nil
+}
+
+func (c *Container) prepareMigrateData(ctx context.Context) {
+	if c.cfg.DisableMigrateData {
+		return
+	}
+	// for now we allow this to fail and continue with the migration since
+	// it could be unreliable and is not strictly required to migrate
+	// (although this depends on the application).
+	if err := moveUpperDirToImage(c.ID()); err != nil {
+		log.G(ctx).Errorf("adding container data to image: %s", err)
+	}
+}
+
+// moveUpperDirToImage finds the overlayfs upper directory of the container and
+// moves it to the snapshot upper dir to be transferred by the evac. Only call
+// this once the container is either stopped or frozen.
+func moveUpperDirToImage(containerID string) error {
+	upper, err := findUpperDir(containerID)
+	if err != nil {
+		return fmt.Errorf("finding upper storage dir: %w", err)
+	}
+	to := nodev1.UpperPath(containerID)
+	if err := os.MkdirAll(to, 0644); err != nil {
+		return err
+	}
+
+	return renameAllSubDirs(upper, to)
+}
+
+// MoveImageToUpperDir does the same as moveUpperDirToImage but in reverse
+func MoveImageToUpperDir(containerID, imageDir string) error {
+	upper, err := findUpperDir(containerID)
+	if err != nil {
+		return fmt.Errorf("finding upper storage dir: %w", err)
+	}
+
+	return renameAllSubDirs(filepath.Join(imageDir, nodev1.UpperSuffix), upper)
+}
+
+func renameAllSubDirs(from, to string) error {
+	dirs, err := os.ReadDir(from)
+	if err != nil {
+		return err
+	}
+
+	var errs []error
+	for _, dir := range dirs {
+		errs = append(errs, os.Rename(filepath.Join(from, dir.Name()), filepath.Join(to, dir.Name())))
+	}
+
+	return errors.Join(errs...)
+}
+
+func findUpperDir(containerID string) (string, error) {
+	p, err := procfs.NewFS("/proc")
+	if err != nil {
+		return "", fmt.Errorf("new procfs: %w", err)
+	}
+
+	proc, err := p.Self()
+	if err != nil {
+		return "", fmt.Errorf("getting process info: %w", err)
+	}
+
+	mountInfo, err := proc.MountInfo()
+	if err != nil {
+		return "", fmt.Errorf("getting mount info: %w", err)
+	}
+
+	for _, mount := range mountInfo {
+		if strings.Contains(mount.MountPoint, containerID) {
+			if v, ok := mount.SuperOptions["upperdir"]; ok {
+				return v, nil
+			}
+		}
+	}
+
+	return "", fmt.Errorf("upper dir not found for container %s", containerID)
 }
