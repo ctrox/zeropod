@@ -26,7 +26,7 @@ type Redirector struct {
 }
 
 type sandbox struct {
-	ip        netip.Addr
+	ips       []netip.Addr
 	activator *activator.BPF
 }
 
@@ -145,7 +145,7 @@ func (r *Redirector) attachRedirector(pid int) error {
 		return err
 	}
 
-	var sandboxIP netip.Addr
+	var sandboxIPs []netip.Addr
 	if err := netNS.Do(func(nn ns.NetNS) error {
 		// TODO: is this really always eth0?
 		// as for loopback, this is required for port-forwarding to work
@@ -155,18 +155,20 @@ func (r *Redirector) attachRedirector(pid int) error {
 			return err
 		}
 
-		sandboxIP, err = getSandboxIP(ifaceETH0)
+		sandboxIPs, err = getSandboxIPs(ifaceETH0)
 		return err
 	}); err != nil {
 		return errors.Join(err, bpf.Cleanup())
 	}
 
 	r.Lock()
-	r.sandboxes[pid] = sandbox{activator: bpf, ip: sandboxIP}
+	r.sandboxes[pid] = sandbox{activator: bpf, ips: sandboxIPs}
 	r.Unlock()
 
-	if err := r.trackSandboxIP(sandboxIP); err != nil {
-		return fmt.Errorf("tracking sandbox IP: %w", err)
+	for _, ip := range sandboxIPs {
+		if err := r.trackSandboxIP(ip); err != nil {
+			return fmt.Errorf("tracking sandbox IP: %w", err)
+		}
 	}
 	return nil
 }
@@ -217,15 +219,15 @@ func (r *Redirector) getSandboxPids() ([]int, error) {
 	return intPids, nil
 }
 
-func getSandboxIP(ifaceName string) (netip.Addr, error) {
-	ip := netip.Addr{}
+func getSandboxIPs(ifaceName string) ([]netip.Addr, error) {
+	ips := []netip.Addr{}
 	iface, err := net.InterfaceByName(ifaceName)
 	if err != nil {
-		return ip, fmt.Errorf("could not get interface: %w", err)
+		return ips, fmt.Errorf("could not get interface: %w", err)
 	}
 	addrs, err := iface.Addrs()
 	if err != nil {
-		return ip, fmt.Errorf("could not get interface addrs: %w", err)
+		return ips, fmt.Errorf("could not get interface addrs: %w", err)
 	}
 	for _, addr := range addrs {
 		if ipnet, ok := addr.(*net.IPNet); ok {
@@ -233,15 +235,18 @@ func getSandboxIP(ifaceName string) (netip.Addr, error) {
 			if ipnet.IP.IsLinkLocalUnicast() {
 				continue
 			}
-			ip, ok = netip.AddrFromSlice(ipnet.IP)
+			ip, ok := netip.AddrFromSlice(ipnet.IP)
 			if !ok {
-				return ip, fmt.Errorf("unable to convert net.IP to netip.Addr: %s", ipnet.IP)
+				return ips, fmt.Errorf("unable to convert net.IP to netip.Addr: %s", ipnet.IP)
 			}
 			// use Unmap as the ipv4 might be mapped in v6
-			return ip.Unmap(), nil
+			ips = append(ips, ip.Unmap())
 		}
 	}
-	return ip, fmt.Errorf("sandbox IP not found")
+	if len(ips) == 0 {
+		return ips, fmt.Errorf("sandbox IPs not found")
+	}
+	return ips, nil
 }
 
 // trackSandboxIP passes the pod/sandbox IP to the tracker so it can ignore
@@ -264,7 +269,9 @@ func ignoredDir(dir string) bool {
 func (sb sandbox) Remove(tracker socket.Tracker) error {
 	errs := []error{sb.activator.Cleanup()}
 	if tracker != nil {
-		errs = append(errs, tracker.RemovePodIP(sb.ip))
+		for _, ip := range sb.ips {
+			errs = append(errs, tracker.RemovePodIP(ip))
+		}
 	}
 	return errors.Join(errs...)
 }
