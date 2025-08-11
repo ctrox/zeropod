@@ -2,11 +2,11 @@ resources:
 - ../base
 # pod-updater is required if status-labels or in-place-scaling is enabled
 components:
+- ../in-place-scaling
 - ../pod-updater
 - ../status-labels
+- ../status-events
 - ../migration-manager
-# uncommment to enable in-place-scaling
-# - ../in-place-scaling
 images:
 - name: installer
   newName: ghcr.io/ctrox/zeropod-installer
