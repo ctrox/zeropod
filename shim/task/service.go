@@ -682,10 +682,8 @@ func (s *service) processExits() {
 
 		for _, cp := range cps {
 			if ip, ok := cp.Process.(*process.Init); ok {
-				log.G(s.context).Info("handling init exit")
 				s.handleInitExit(e, cp.Container, ip)
 			} else {
-				log.G(s.context).Info("handling process exit")
 				s.handleProcessExit(e, cp.Container, cp.Process)
 			}
 		}
