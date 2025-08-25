@@ -14,8 +14,9 @@ PKG=github.com/ctrox/zeropod
 CONTAINERD_PKG=github.com/containerd/containerd
 VERSION ?= $(shell git describe --match 'v[0-9]*' --dirty='.m' --always --tags)
 REVISION=$(shell git rev-parse HEAD)$(shell if ! git diff --no-ext-diff --quiet --exit-code; then echo .m; fi)
-LDFLAGS=-s -w
-SHIM_LDFLAGS=-X $(CONTAINERD_PKG)/version.Version=$(VERSION) -X $(CONTAINERD_PKG)/version.Revision=$(REVISION) -X $(CONTAINERD_PKG)/version.Package=$(PKG) $(LDFLAGS)
+SHIM_EXTLDFLAGS="-static" -s -w
+SHIM_TAGS="no_grpc"
+SHIM_LDFLAGS=-X $(CONTAINERD_PKG)/version.Version=$(VERSION) -X $(CONTAINERD_PKG)/version.Revision=$(REVISION) -X $(CONTAINERD_PKG)/version.Package=$(PKG) -extldflags ${SHIM_EXTLDFLAGS}
 GOARCH ?= $(shell go env GOARCH)
 
 # build-kind can be used for fast local development. It just builds and
@@ -35,7 +36,7 @@ install-manager: build-manager
 	kubectl --context kind-kind -n zeropod-system delete pods -l app.kubernetes.io/name=zeropod-node
 
 build:
-	CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -ldflags '${SHIM_LDFLAGS}' -o containerd-shim-zeropod-v2 cmd/shim/main.go
+	CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -ldflags '${SHIM_LDFLAGS}' -tags ${SHIM_TAGS} -o containerd-shim-zeropod-v2 cmd/shim/main.go
 
 logs:
 	docker exec kind-worker journalctl -fu containerd & docker exec kind-worker2 journalctl -fu containerd
