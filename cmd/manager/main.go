@@ -9,6 +9,9 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	goruntime "runtime"
+	"runtime/debug"
 	"syscall"
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
@@ -31,23 +34,57 @@ import (
 var (
 	metricsAddr    = flag.String("metrics-addr", ":8080", "address of the metrics server")
 	nodeServerAddr = flag.String("node-server-addr", ":8090", "address of the node server")
-	debug          = flag.Bool("debug", false, "enable debug logs")
+	debugFlag      = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
 	statusLabels    = flag.Bool("status-labels", false, "update pod labels to reflect container status")
 	probeBinaryName = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
 	statusEvents    = flag.Bool("status-events", false, "create status events to reflect container status")
+	versionFlag     = flag.Bool("version", false, "output version and exit")
+
+	version   = ""
+	revision  = ""
+	goVersion = goruntime.Version()
 )
+
+func init() {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+
+	if version == "" {
+		version = info.Main.Version
+	}
+
+	for _, kv := range info.Settings {
+		switch kv.Key {
+		case "vcs.revision":
+			revision = kv.Value
+		}
+	}
+}
 
 func main() {
 	flag.Parse()
 
+	if *versionFlag {
+		printVersion()
+		os.Exit(0)
+	}
+
 	opts := &slog.HandlerOptions{Level: slog.LevelInfo}
-	if *debug {
+	if *debugFlag {
 		opts.Level = slog.LevelDebug
 	}
 	log := slog.New(slog.NewJSONHandler(os.Stdout, opts))
-	log.Info("starting manager", "metrics-addr", *metricsAddr)
+	log.Info("starting manager",
+		"metrics-addr", *metricsAddr,
+		"node-server-addr", *nodeServerAddr,
+		"version", version,
+		"revision", revision,
+		"go", goVersion,
+	)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -97,7 +134,8 @@ func main() {
 		registry,
 		promhttp.HandlerOpts{
 			EnableOpenMetrics: true,
-		}))
+		}),
+	)
 	server := &http.Server{Addr: *metricsAddr, Handler: mux}
 
 	go func() {
@@ -170,4 +208,12 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 		return nil, err
 	}
 	return mgr, nil
+}
+
+func printVersion() {
+	fmt.Printf("%s:\n", filepath.Base(os.Args[0]))
+	fmt.Println("  Version: ", version)
+	fmt.Println("  Revision:", revision)
+	fmt.Println("  Go version:", goVersion)
+	fmt.Println("")
 }
