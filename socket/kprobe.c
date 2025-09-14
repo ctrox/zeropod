@@ -51,6 +51,24 @@ static __always_inline bool ipv6_addr_equal(const struct ipv6_addr *a1, const st
     return true;
 }
 
+static __always_inline bool is_v4_mapped_v6(__u8 addr[16]) {
+    return (addr[0] == 0 && addr[1] == 0 &&
+        addr[2] == 0 && addr[3] == 0 &&
+        addr[4] == 0 && addr[5] == 0 &&
+        addr[6] == 0 && addr[7] == 0 &&
+        addr[8] == 0 && addr[9] == 0 &&
+        addr[10] == 0xff && addr[11] == 0xff);
+}
+
+static __always_inline __be32 extract_v4_from_v6(__u8 addr[16]) {
+    __be32 ipv4;
+    ipv4 = addr[15];
+    ipv4 = (ipv4 << 8) + addr[14];
+    ipv4 = (ipv4 << 8) + addr[13];
+    ipv4 = (ipv4 << 8) + addr[12];
+    return ipv4;
+}
+
 SEC("kretprobe/inet_csk_accept")
 int kretprobe__inet_csk_accept(struct pt_regs *ctx) {
     struct task_struct* task = (struct task_struct*)bpf_get_current_task_btf();
@@ -90,6 +108,15 @@ int kretprobe__inet_csk_accept(struct pt_regs *ctx) {
         struct ipv6_addr daddr;
         BPF_CORE_READ_INTO(&pod_addr, sk, __sk_common.skc_v6_rcv_saddr.in6_u);
         BPF_CORE_READ_INTO(&daddr, sk, __sk_common.skc_v6_daddr.in6_u);
+        if (is_v4_mapped_v6(pod_addr.u6_addr8)) {
+            void *addrs = &pod_kubelet_addrs_v4;
+            __be32 pod_addr_v4 = extract_v4_from_v6(pod_addr.u6_addr8);
+            __be32 daddr_v4 = extract_v4_from_v6(daddr.u6_addr8);
+            __be32 *kubelet_addr = bpf_map_lookup_elem(addrs, &pod_addr_v4);
+            if (kubelet_addr && *kubelet_addr == daddr_v4) {
+                return 0;
+            }
+        }
         void *addrs = &pod_kubelet_addrs_v6;
         struct ipv6_addr *kubelet_addr = bpf_map_lookup_elem(addrs, &pod_addr);
         if (kubelet_addr && ipv6_addr_equal(kubelet_addr, &daddr)) {

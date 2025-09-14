@@ -342,18 +342,19 @@ func TestE2E(t *testing.T) {
 	t.Run("socket tracker ignores probe", func(t *testing.T) {
 		pod := testPod(
 			scaleDownAfter(time.Second*5),
-			addContainer("nginx", "nginx", nil, 80),
+			// we use agn as it uses a v6 TCP socket so we can test ipv4 mapped v6 addresses
+			agnContainer("agn", 8080),
 			livenessProbe(&corev1.Probe{
 				PeriodSeconds: 1,
 				ProbeHandler: corev1.ProbeHandler{
 					HTTPGet: &corev1.HTTPGetAction{
-						Port: intstr.FromInt(80),
+						Port: intstr.FromInt(8080),
 					},
 				},
 			}),
 		)
 		cleanupPod := createPodAndWait(t, ctx, e2e.client, pod)
-		cleanupService := createServiceAndWait(t, ctx, e2e.client, testService(defaultTargetPort), 1)
+		cleanupService := createServiceAndWait(t, ctx, e2e.client, testService(8080), 1)
 		defer cleanupPod()
 		defer cleanupService()
 		// we expect it to scale down even though a constant livenessProbe is
