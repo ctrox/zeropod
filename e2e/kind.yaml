@@ -6,16 +6,16 @@ featureGates:
   InPlacePodVerticalScalingAllocatedStatus: true
 nodes:
   - role: control-plane
-    image: kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f
+    image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
   - role: worker
-    image: kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f
+    image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
     extraMounts:
       - hostPath: /proc
         containerPath: /host/proc
     labels:
       zeropod.ctrox.dev/node: "true"
   - role: worker
-    image: kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f
+    image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
     extraMounts:
       - hostPath: /proc
         containerPath: /host/proc
