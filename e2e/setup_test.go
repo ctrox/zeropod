@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
 	nodev1 "k8s.io/api/node/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -142,6 +143,7 @@ func setup(t testing.TB) *e2eConfig {
 	require.NoError(t, corev1.AddToScheme(scheme))
 	require.NoError(t, nodev1.AddToScheme(scheme))
 	require.NoError(t, appsv1.AddToScheme(scheme))
+	require.NoError(t, discoveryv1.AddToScheme(scheme))
 	require.NoError(t, v1.AddToScheme(scheme))
 	client, err := client.New(cfg, client.Options{Scheme: scheme})
 	require.NoError(t, err)
@@ -644,25 +646,27 @@ func createServiceAndWait(t testing.TB, ctx context.Context, client client.Clien
 	}
 }
 
-func waitForService(t testing.TB, ctx context.Context, client client.Client, svc *corev1.Service, replicas int) {
+func waitForService(t testing.TB, ctx context.Context, c client.Client, svc *corev1.Service, replicas int) {
 	if !assert.Eventually(t, func() bool {
-		endpoints := &corev1.Endpoints{}
-		if err := client.Get(ctx, objectName(svc), endpoints); err != nil {
+		endpointSliceList := &discoveryv1.EndpointSliceList{}
+		if err := c.List(ctx, endpointSliceList, client.MatchingLabels{"kubernetes.io/service-name": svc.Name}); err != nil {
+			return false
+		}
+		if len(endpointSliceList.Items) == 0 {
+			return false
+		}
+		if len(endpointSliceList.Items[0].Endpoints) == 0 {
 			return false
 		}
 
-		if len(endpoints.Subsets) == 0 {
-			return false
-		}
-
-		return len(endpoints.Subsets[0].Addresses) == replicas
+		return len(endpointSliceList.Items[0].Endpoints) == replicas
 	}, time.Minute, time.Second, "waiting for service endpoints to be ready") {
-		endpoints := &corev1.Endpoints{}
-		if err := client.Get(ctx, objectName(svc), endpoints); err == nil {
-			if len(endpoints.Subsets) > 0 {
-				t.Logf("service did not get ready: expected %d addresses, got %d", replicas, len(endpoints.Subsets[0].Addresses))
+		endpointSliceList := &discoveryv1.EndpointSliceList{}
+		if err := c.List(ctx, endpointSliceList, client.MatchingLabels{"kubernetes.io/service-name": svc.Name}); err == nil {
+			if len(endpointSliceList.Items) > 0 {
+				t.Logf("service did not get ready: expected %d addresses, got %d", replicas, len(endpointSliceList.Items[0].Endpoints))
+				t.Logf("endpoints: %v", endpointSliceList.Items[0].Endpoints)
 			}
-			t.Logf("endpoints: %v", endpoints)
 
 			commandArgs := []string{"exec", "zeropod-e2e-control-plane", "journalctl", "-u", "containerd"}
 			out, err := exec.Command("docker", commandArgs...).CombinedOutput()
