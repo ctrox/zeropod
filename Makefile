@@ -5,7 +5,7 @@ INSTALLER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-installer:$(TAG)
 MANAGER_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-manager:$(TAG)
 TEST_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-test:$(TAG)
 # includes fix for https://github.com/checkpoint-restore/criu/issues/2532
-CRIU_VERSION := v4.1
+CRIU_VERSION := 116991736c7641258a5b7f53f5079b90fc80b99e
 CRIU_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-criu:$(CRIU_VERSION)
 DOCKER_SOCK := /var/run/docker.sock
 EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:$(TAG)
