@@ -667,13 +667,7 @@ func waitForService(t testing.TB, ctx context.Context, c client.Client, svc *cor
 				t.Logf("service did not get ready: expected %d addresses, got %d", replicas, len(endpointSliceList.Items[0].Endpoints))
 				t.Logf("endpoints: %v", endpointSliceList.Items[0].Endpoints)
 			}
-
-			commandArgs := []string{"exec", "zeropod-e2e-control-plane", "journalctl", "-u", "containerd"}
-			out, err := exec.Command("docker", commandArgs...).CombinedOutput()
-			if err != nil {
-				t.Logf("error getting containerd logs: %s", err)
-			}
-			t.Logf("containerd logs: %s", out)
+			printContainerdLogs(t, "zeropod-e2e-worker", "zeropod-e2e-worker2")
 		}
 	}
 	// we give it some more time before returning just to make sure it's
