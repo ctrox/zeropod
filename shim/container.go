@@ -77,12 +77,11 @@ func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, cr *syn
 		return nil, fmt.Errorf("unable to get log path: %w", err)
 	}
 
-	runcVersion := ""
 	vers, err := (&runcC.Runc{}).Version(ctx)
 	if err != nil {
 		log.G(ctx).Warnf("unable to get runc version: %s", err)
-		runcVersion = vers.Runc
 	}
+	log.G(ctx).Debugf("configuring zeropod shim with runc version %q", vers.Runc)
 
 	c := &Container{
 		id:                r.ID,
@@ -96,7 +95,7 @@ func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, cr *syn
 		events:            events,
 		checkpointedPIDs:  map[int]struct{}{},
 		metrics:           newMetrics(cfg, true),
-		runcVersion:       runcVersion,
+		runcVersion:       vers.Runc,
 	}
 	return c, nil
 }
