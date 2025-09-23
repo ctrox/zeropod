@@ -106,7 +106,7 @@ func (c *Container) evac(ctx context.Context) error {
 			checkpointCtx, c.ID(), &runcC.CheckpointOpts{
 				ImagePath:                nodev1.SnapshotPath(c.ID()),
 				CriuPageServer:           fmt.Sprintf("%s:12345", nodev1.LazyPagesSocket(c.ID())),
-				AllowOpenTCP:             true,
+				AllowOpenTCP:             false,
 				AllowExternalUnixSockets: true,
 				AllowTerminal:            false,
 				FileLocks:                true,
@@ -114,6 +114,7 @@ func (c *Container) evac(ctx context.Context) error {
 				WorkDir:                  nodev1.WorkDirPath(c.ID()),
 				LazyPages:                true,
 				StatusFile:               statusWrite,
+				ExtraArgs:                c.checkpointExtraArgs(),
 			}); err != nil {
 			errChan <- err
 			return
