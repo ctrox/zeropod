@@ -13,6 +13,7 @@ import (
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/errdefs"
+	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
@@ -56,6 +57,7 @@ type Container struct {
 	checkpointRestore *sync.Mutex
 	evacuation        sync.Once
 	metrics           *v1.ContainerMetrics
+	runcVersion       string
 }
 
 func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, cr *sync.Mutex, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
@@ -75,6 +77,13 @@ func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, cr *syn
 		return nil, fmt.Errorf("unable to get log path: %w", err)
 	}
 
+	runcVersion := ""
+	vers, err := (&runcC.Runc{}).Version(ctx)
+	if err != nil {
+		log.G(ctx).Warnf("unable to get runc version: %s", err)
+		runcVersion = vers.Runc
+	}
+
 	c := &Container{
 		id:                r.ID,
 		createOpts:        r.Options,
@@ -87,6 +96,7 @@ func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, cr *syn
 		events:            events,
 		checkpointedPIDs:  map[int]struct{}{},
 		metrics:           newMetrics(cfg, true),
+		runcVersion:       runcVersion,
 	}
 	return c, nil
 }

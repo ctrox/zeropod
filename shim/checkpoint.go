@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
@@ -108,11 +110,12 @@ func (c *Container) checkpoint(ctx context.Context) error {
 
 	opts := &runcC.CheckpointOpts{
 		WorkDir:                  workDir,
-		AllowOpenTCP:             true,
+		AllowOpenTCP:             false,
 		AllowExternalUnixSockets: true,
 		AllowTerminal:            false,
 		FileLocks:                true,
 		EmptyNamespaces:          []string{},
+		ExtraArgs:                c.checkpointExtraArgs(),
 	}
 
 	if c.cfg.PreDump {
@@ -157,4 +160,26 @@ func (c *Container) checkpoint(ctx context.Context) error {
 	log.G(ctx).Infof("checkpointing done in %s", c.metrics.LastCheckpointDuration.AsDuration())
 
 	return nil
+}
+
+const checkpointArgSkipTCPInFlight = "--tcp-skip-in-flight"
+
+func (c *Container) checkpointExtraArgs() []string {
+	def := []string{}
+	spl := strings.Split(c.runcVersion, ".")
+	if len(spl) < 2 {
+		return def
+	}
+	maj, err := strconv.Atoi(spl[0])
+	if err != nil {
+		return def
+	}
+	min, err := strconv.Atoi(spl[1])
+	if err != nil {
+		return def
+	}
+	if maj == 1 && min >= 3 || maj > 1 {
+		return []string{checkpointArgSkipTCPInFlight}
+	}
+	return def
 }
