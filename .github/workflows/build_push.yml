@@ -63,5 +63,4 @@ jobs:
           tags: ${{ steps.meta_manager.outputs.tags }}
           labels: ${{ steps.meta_manager.outputs.labels }}
           build-args: |
-            CRIU_IMAGE_NAME=${{ env.REGISTRY }}/${{ env.CRIU_IMAGE_NAME }}
-            CRIU_VERSION=${{ env.CRIU_VERSION }}
+            CRIU_IMAGE=${{ env.REGISTRY }}/${{ env.CRIU_IMAGE_NAME }}:${{ env.CRIU_VERSION }}
