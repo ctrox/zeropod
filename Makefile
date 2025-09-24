@@ -95,7 +95,7 @@ generate: export BPF_CFLAGS := $(CFLAGS)
 generate: ttrpc ebpf
 	go generate ./api/...
 
-ebpf:
+ebpf: ebpf-built-or-build-ebpf
 	docker run --rm -v $(PWD):/app:Z --user $(shell id -u):$(shell id -g) --userns=host --env=BPF_CLANG="$(CLANG)" --env=BPF_CFLAGS="$(CFLAGS)" $(EBPF_IMAGE)
 
 ttrpc:
@@ -110,6 +110,10 @@ ttrpc:
 
 # to improve reproducibility of the bpf builds, we dump the vmlinux.h and
 # store it compressed in git instead of dumping it during the build.
-update-vmlinux:
+
+update-vmlinux: ebpf-built-or-build-ebpf
 	docker run --rm -v $(PWD):/app:Z --entrypoint /bin/sh --user $(shell id -u):$(shell id -g) $(EBPF_IMAGE) \
 		-c "bpftool btf dump file /sys/kernel/btf/vmlinux format c" | gzip > socket/vmlinux.h.gz
+
+ebpf-built-or-build-ebpf:
+	docker image inspect $(EBPF_IMAGE) || $(MAKE) build-ebpf
