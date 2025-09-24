@@ -110,6 +110,6 @@ ttrpc:
 
 # to improve reproducibility of the bpf builds, we dump the vmlinux.h and
 # store it compressed in git instead of dumping it during the build.
-update-vmlinux:
+update-vmlinux: build-ebpf
 	docker run --rm -v $(PWD):/app:Z --entrypoint /bin/sh --user $(shell id -u):$(shell id -g) $(EBPF_IMAGE) \
 		-c "bpftool btf dump file /sys/kernel/btf/vmlinux format c" | gzip > socket/vmlinux.h.gz
