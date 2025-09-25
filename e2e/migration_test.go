@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"os/exec"
 	"path"
 	"strings"
 	"testing"
@@ -115,6 +116,9 @@ func TestMigration(t *testing.T) {
 			if !tc.liveMigration {
 				require.False(t, migration.Spec.LiveMigration)
 			}
+			if migration.Status.Containers[0].Condition.Phase == v1.MigrationPhaseFailed {
+				printContainerdLogs(t, "zeropod-e2e-worker", "zeropod-e2e-worker2")
+			}
 			require.NotEqual(t, v1.MigrationPhaseFailed, migration.Status.Containers[0].Condition.Phase)
 			t.Logf("migration phase: %s", migration.Status.Containers[0].Condition.Phase)
 			return pods[0].Status.Phase == corev1.PodRunning &&
@@ -166,6 +170,18 @@ func TestMigration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func printContainerdLogs(t testing.TB, nodes ...string) {
+	for _, node := range nodes {
+		commandArgs := []string{"exec", node, "journalctl", "-u", "containerd"}
+		out, err := exec.Command("docker", commandArgs...).CombinedOutput()
+		if err != nil {
+			t.Logf("error getting containerd logs: %s", err)
+		}
+		t.Logf("node %s containerd logs: %s", node, out)
+	}
+
 }
 
 func migrationPod(t testing.TB, deploy *appsv1.Deployment) *corev1.Pod {
