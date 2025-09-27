@@ -102,6 +102,9 @@ func (s *Server) Started() bool {
 }
 
 func (s *Server) Reset() error {
+	if !s.Started() {
+		return nil
+	}
 	for _, port := range s.ports {
 		if err := s.enableRedirect(port); err != nil {
 			return err
@@ -111,6 +114,9 @@ func (s *Server) Reset() error {
 }
 
 func (s *Server) DisableRedirects() error {
+	if !s.Started() {
+		return nil
+	}
 	for _, port := range s.ports {
 		if err := s.disableRedirect(port); err != nil {
 			return err
