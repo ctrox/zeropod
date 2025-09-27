@@ -3,6 +3,8 @@ package v1
 import (
 	"fmt"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -115,4 +117,26 @@ type MigrationList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []Migration `json:"items"`
+}
+
+// MatchesPod checks if the migration would be a match for this pod.
+func (mig Migration) MatchesPod(pod *corev1.Pod) bool {
+	return mig.Spec.PodTemplateHash == pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey]
+}
+
+// Claim sets the target pod and node to claim the migration
+func (mig *Migration) Claim(targetPodName, targetNodeName string) {
+	mig.Spec.TargetPod = targetPodName
+	mig.Spec.TargetNode = targetNodeName
+}
+
+// ClaimedAndMatchesPod indicates the migration has been claimed and targets our
+// pod.
+func (mig Migration) ClaimedAndMatchesPod(pod *corev1.Pod) bool {
+	return mig.Spec.TargetPod == pod.Name && mig.Claimed()
+}
+
+// Claimed indicates if this migration already has been claimed
+func (mig Migration) Claimed() bool {
+	return mig.Spec.TargetNode != ""
 }

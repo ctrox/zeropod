@@ -25,7 +25,6 @@ import (
 	"github.com/klauspost/compress/zstd"
 	"github.com/mholt/archives"
 	"google.golang.org/protobuf/types/known/emptypb"
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -396,18 +395,13 @@ func (ns *nodeService) findMatchingMigration(ctx context.Context, pod *corev1.Po
 				return err
 			}
 			for _, mig := range migrationList.Items {
-				// if the target pod is the same as ours, it's our
-				// migration but it has already been claimed.
-				if mig.Spec.TargetPod == pod.Name && mig.Spec.TargetNode != "" {
+				if mig.ClaimedAndMatchesPod(pod) {
 					migration = &mig
 					return nil
 				}
 
-				if matchingMigration(pod, mig) {
-					// in order to claim the migration, we need to set the target node and
-					// successfully update it.
-					mig.Spec.TargetNode = ns.nodeName
-					mig.Spec.TargetPod = pod.Name
+				if mig.MatchesPod(pod) && !mig.Claimed() {
+					mig.Claim(pod.Name, ns.nodeName)
 					if err := ns.kube.Update(ctx, &mig); err != nil {
 						// if we get a conflict it means this migration has
 						// already been claimed by another node. We continue to
@@ -426,11 +420,6 @@ func (ns *nodeService) findMatchingMigration(ctx context.Context, pod *corev1.Po
 		return nil, fmt.Errorf("timeout waiting for restore: %w", err)
 	}
 	return migration, nil
-}
-
-func matchingMigration(pod *corev1.Pod, migration v1.Migration) bool {
-	return migration.Spec.TargetNode == "" &&
-		migration.Spec.PodTemplateHash == pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey]
 }
 
 func (ns *nodeService) pullImage(ctx context.Context, nodeClient nodev1.NodeClient, id string) error {
@@ -536,8 +525,8 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 			perr = err
 			return
 		}
-		if migration.Spec.TargetNode != "" {
-			ns.log.Info("migration is claimed")
+		if migration.Claimed() {
+			ns.log.Info("migration is claimed for evac")
 			done = true
 		}
 		return

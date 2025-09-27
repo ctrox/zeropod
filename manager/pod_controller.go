@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"time"
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
@@ -66,8 +67,6 @@ func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, err
 }
 
 func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
-	log := r.log.With("req", request)
-
 	if err := r.kube.Get(ctx, request.NamespacedName, &v1.Migration{}); err == nil {
 		// migration already exists, there's nothing for us to do
 		return reconcile.Result{}, nil
@@ -82,40 +81,35 @@ func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request
 		return reconcile.Result{}, err
 	}
 
-	if !r.isMigratable(pod) {
-		return reconcile.Result{}, nil
-	}
-
-	migration, err := newMigration(pod)
-	if err != nil {
-		return reconcile.Result{}, fmt.Errorf("initializing migration object: %w", err)
-	}
-	if err := r.kube.Create(ctx, migration); err != nil {
-		if !errors.IsAlreadyExists(err) {
-			return reconcile.Result{}, fmt.Errorf("creating migration object: %w", err)
+	if r.isMigrationSource(pod) {
+		if err := r.prepareMigrationSource(ctx, pod); err != nil {
+			return reconcile.Result{}, fmt.Errorf("preparing migration source: %w", err)
 		}
 	}
-	log.Info("created migration for pod", "pod_name", pod.Name, "pod_namespace", pod.Namespace)
 
-	for _, container := range migration.Spec.Containers {
-		migration.Status.Containers = append(migration.Status.Containers, v1.MigrationContainerStatus{
-			Name: container.Name,
-			Condition: v1.MigrationCondition{
-				Phase: v1.MigrationPhasePending,
-			},
-		})
-	}
-	if err := r.kube.Status().Update(ctx, migration); err != nil {
-		// updating the status to pending is just cosmetic, we don't want to
-		// slow down the process by retrying here.
-		log.Warn("setting migration status failed, ignoring")
-		return reconcile.Result{}, nil
+	if r.isMigrationTarget(pod) {
+		requeue, err := r.prepareMigrationTarget(ctx, pod)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("preparing migration target: %w", err)
+		}
+		return reconcile.Result{Requeue: requeue}, nil
 	}
 
 	return reconcile.Result{}, nil
 }
 
-func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
+func (r podReconciler) isMigrationSource(pod *corev1.Pod) bool {
+	return r.isMigrationCandidate(pod) && pod.DeletionTimestamp != nil
+}
+
+func (r podReconciler) isMigrationTarget(pod *corev1.Pod) bool {
+	return r.isMigrationCandidate(pod) &&
+		pod.DeletionTimestamp == nil &&
+		pod.Spec.NodeName != "" &&
+		time.Since(pod.CreationTimestamp.Time) < time.Minute
+}
+
+func (r podReconciler) isMigrationCandidate(pod *corev1.Pod) bool {
 	// some of these are already handled by the cache/predicate but there's no
 	// harm in being sure.
 	if pod.Spec.NodeName != r.nodeName {
@@ -123,10 +117,6 @@ func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
 	}
 
 	if !isZeropod(pod) {
-		return false
-	}
-
-	if pod.DeletionTimestamp == nil {
 		return false
 	}
 
@@ -141,6 +131,63 @@ func (r podReconciler) isMigratable(pod *corev1.Pod) bool {
 	}
 
 	return true
+}
+
+func (r podReconciler) prepareMigrationSource(ctx context.Context, pod *corev1.Pod) error {
+	log := r.log.With("pod_name", pod.Name, "pod_namespace", pod.Namespace)
+	migration, err := newMigration(pod)
+	if err != nil {
+		return fmt.Errorf("initializing migration object: %w", err)
+	}
+	if err := r.kube.Create(ctx, migration); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			return fmt.Errorf("creating migration object: %w", err)
+		}
+	}
+	log.Info("created migration for pod")
+
+	for _, container := range migration.Spec.Containers {
+		migration.Status.Containers = append(migration.Status.Containers, v1.MigrationContainerStatus{
+			Name: container.Name,
+			Condition: v1.MigrationCondition{
+				Phase: v1.MigrationPhasePending,
+			},
+		})
+	}
+	if err := r.kube.Status().Update(ctx, migration); err != nil {
+		// updating the status to pending is just cosmetic, we don't want to
+		// slow down the process by retrying here.
+		log.Warn("setting migration status failed, ignoring")
+		return nil
+	}
+	return nil
+}
+
+func (r podReconciler) prepareMigrationTarget(ctx context.Context, pod *corev1.Pod) (requeue bool, err error) {
+	log := r.log.With("pod_name", pod.Name, "pod_namespace", pod.Namespace)
+	migrationList := &v1.MigrationList{}
+	if err := r.kube.List(ctx, migrationList, client.InNamespace(pod.Namespace)); err != nil {
+		return false, err
+	}
+	for _, mig := range migrationList.Items {
+		if mig.ClaimedAndMatchesPod(pod) {
+			log.Debug("no need to claim migration in controller, already claimed")
+			return false, nil
+		}
+		if mig.MatchesPod(pod) && !mig.Claimed() {
+			mig.Claim(pod.Name, pod.Spec.NodeName)
+			if err := r.kube.Update(ctx, &mig); err != nil {
+				if errors.IsConflict(err) {
+					log.Warn("conflict claiming migration, requeueing")
+					return true, nil
+				}
+				return false, fmt.Errorf("failed to claim migration: %w", err)
+			}
+			log.Info("claimed migration in controller")
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func isZeropod(pod *corev1.Pod) bool {
