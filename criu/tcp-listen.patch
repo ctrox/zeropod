@@ -1,0 +1,27 @@
+workaround for https://github.com/checkpoint-restore/criu/issues/2764
+diff --git a/criu/sockets.c b/criu/sockets.c
+index e4adae03c..fa3c3646d 100644
+--- a/criu/sockets.c
++++ b/criu/sockets.c
+@@ -889,9 +889,7 @@ int collect_sockets(struct ns_id *ns)
+ 	req.r.i.sdiag_protocol = IPPROTO_TCP;
+ 	req.r.i.idiag_ext = 0;
+ 	/* Only listening and established sockets supported yet */
+-	req.r.i.idiag_states = (1 << TCP_LISTEN) | (1 << TCP_ESTABLISHED) | (1 << TCP_FIN_WAIT1) |
+-			       (1 << TCP_FIN_WAIT2) | (1 << TCP_CLOSE_WAIT) | (1 << TCP_LAST_ACK) | (1 << TCP_CLOSING) |
+-			       (1 << TCP_SYN_SENT);
++	req.r.i.idiag_states	= 1 << TCP_LISTEN;
+ 	tmp = do_collect_req(nl, &req, sizeof(req), inet_receive_one, collect_err, ns, &req.r.i);
+ 	if (tmp)
+ 		err = tmp;
+@@ -935,9 +933,7 @@ int collect_sockets(struct ns_id *ns)
+ 	req.r.i.sdiag_protocol = IPPROTO_TCP;
+ 	req.r.i.idiag_ext = 0;
+ 	/* Only listening sockets supported yet */
+-	req.r.i.idiag_states = (1 << TCP_LISTEN) | (1 << TCP_ESTABLISHED) | (1 << TCP_FIN_WAIT1) |
+-			       (1 << TCP_FIN_WAIT2) | (1 << TCP_CLOSE_WAIT) | (1 << TCP_LAST_ACK) | (1 << TCP_CLOSING) |
+-			       (1 << TCP_SYN_SENT);
++	req.r.i.idiag_states	= 1 << TCP_LISTEN;
+ 	tmp = do_collect_req(nl, &req, sizeof(req), inet_receive_one, collect_err, ns, &req.r.i);
+ 	if (tmp)
+ 		err = tmp;
