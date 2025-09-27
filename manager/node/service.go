@@ -47,6 +47,9 @@ const (
 	pagesTransferTimeout = time.Minute * 5
 	caCertFile           = "/tls/ca.crt"
 	caKeyFile            = "/tls/ca.key"
+
+	migrationClaimTimeout = time.Second * 10
+	migrationReadyTimeout = time.Minute * 5
 )
 
 var ErrLiveMigrationNotSupported = errors.New("live migration is not supported on this node")
@@ -210,13 +213,22 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		ns.log.Error("timeout waiting for matching migration", "error", err)
 		return nil, fmt.Errorf("timeout waiting for matching migration: %w", err)
 	}
-	ns.log.Info("claimed migration", "name", migration.Name, "namespace", migration.Namespace)
+	ns.log.Info("found matching migration", "name", migration.Name, "namespace", migration.Namespace)
+
+	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		migration.Spec.RestoreReady = true
+		return ns.kube.Update(ctx, migration)
+	}); err != nil {
+		ns.log.Error("updating migration to be ready for restore failed", "error", err)
+		return nil, fmt.Errorf("unable to update migration to be ready for restore: %w", err)
+	}
+	ns.log.Info("updated migration to be ready for restore", "name", migration.Name, "namespace", migration.Namespace)
 
 	// wait for the page server to be set by the evac
 	container := v1.MigrationContainer{}
 	pCtx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
-	if err := wait.PollUntilContextCancel(pCtx, time.Millisecond*10, true, func(ctx context.Context) (done bool, perr error) {
+	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (done bool, perr error) {
 		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
 			perr = err
 			return
@@ -514,9 +526,9 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 		},
 	}
 	// wait for the migration to be claimed
-	pCtx, cancel := context.WithTimeout(ctx, time.Second*10)
+	pCtx, cancel := context.WithTimeout(ctx, migrationClaimTimeout)
 	defer cancel()
-	if err := wait.PollUntilContextCancel(pCtx, time.Millisecond*10, true, func(ctx context.Context) (done bool, perr error) {
+	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (done bool, perr error) {
 		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
 			if kerrors.IsNotFound(err) {
 				return
@@ -544,6 +556,18 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 		return nil, err
 	}
 
+	ns.log.Info("waiting for migration restore to be ready")
+	readyCtx, cancel := context.WithTimeout(ctx, migrationReadyTimeout)
+	defer cancel()
+	if err := pollUntilContextCancel(readyCtx, func(ctx context.Context) (done bool, perr error) {
+		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
+			perr = err
+			return
+		}
+		return migration.Spec.RestoreReady, nil
+	}); err != nil {
+		return nil, err
+	}
 	ns.log.Info("evac prepare done")
 
 	return &nodev1.EvacResponse{}, nil
@@ -812,4 +836,11 @@ func setOrUpdateContainerStatus(migration *v1.Migration, containerName string, u
 	status := v1.MigrationContainerStatus{Name: containerName}
 	updateFunc(&status)
 	migration.Status.Containers = append(migration.Status.Containers, status)
+}
+
+// pollUntilContextCancel wraps wait.PollUntilContextCancel with some defaults.
+// It has a low interval of 10 milliseconds to be able to have very little delay
+// on certain events and calls the condition immediately.
+func pollUntilContextCancel(ctx context.Context, condition wait.ConditionWithContextFunc) error {
+	return wait.PollUntilContextCancel(ctx, time.Millisecond*10, true, condition)
 }

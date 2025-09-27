@@ -23,6 +23,9 @@ type MigrationSpec struct {
 	// pages, which might result in a slower migration.
 	// +optional
 	LiveMigration bool `json:"liveMigration"`
+	// RestoreReady indicates the shim is up and running and is ready to restore
+	// so checkpointing can be started on the other side.
+	RestoreReady bool `json:"restoreReady"`
 	// SourceNode of the pod to be migrated
 	SourceNode string `json:"sourceNode"`
 	// TargetNode of the pod to be migrated
