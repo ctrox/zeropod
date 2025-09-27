@@ -230,8 +230,17 @@ func defaultBeforeMigration(t *testing.T) {
 }
 
 func defaultAfterMigration(t *testing.T, _ testCase) {
-	f, err := freezerRead(e2e.port)
-	require.NoError(t, err)
+	var f *freeze
+	var err error
+	if !assert.Eventually(t, func() bool {
+		// allow read errors just after migration as for a short time the k8s
+		// endpoints might not be available.
+		f, err = freezerRead(e2e.port)
+		return err == nil
+	}, time.Second*5, time.Second) {
+		t.Error(err)
+		return
+	}
 	t.Logf("freeze duration: %s", f.LastFreezeDuration)
 	assert.Equal(t, t.Name(), f.Data, "freezer memory has persisted migration")
 	assert.Less(t, f.LastFreezeDuration, time.Second, "freeze duration")
