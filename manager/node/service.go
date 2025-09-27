@@ -107,7 +107,7 @@ func NewServer(addr string, kube client.Client, log *slog.Logger) (*Server, erro
 
 	nodev1.RegisterNodeService(s, &nodeService{
 		kube:                   kube,
-		log:                    log,
+		log:                    log.With("node", nodeName),
 		host:                   host,
 		nodeName:               nodeName,
 		port:                   listener.Addr().(*net.TCPAddr).Port,
@@ -193,10 +193,10 @@ var findMigrationBackoff = wait.Backoff{
 }
 
 func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) (*nodev1.RestoreResponse, error) {
-	ns.log.Info("got restore request",
-		"pod_name", req.PodInfo.Name,
-		"pod_namespace", req.PodInfo.Namespace,
+	log := ns.log.With("pod_name", req.PodInfo.Name,
+		"namespace", req.PodInfo.Namespace,
 		"container_name", req.PodInfo.ContainerName)
+	log.Info("got restore request")
 
 	pod := &corev1.Pod{}
 	nsName := types.NamespacedName{
@@ -209,19 +209,19 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 
 	migration, err := ns.findMatchingMigration(ctx, pod)
 	if err != nil {
-		ns.log.Error("timeout waiting for matching migration", "error", err)
+		log.Error("timeout waiting for matching migration", "error", err)
 		return nil, fmt.Errorf("timeout waiting for matching migration: %w", err)
 	}
-	ns.log.Info("found matching migration", "name", migration.Name, "namespace", migration.Namespace)
+	log.Info("found matching migration", "name", migration.Name)
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		migration.Spec.RestoreReady = true
 		return ns.kube.Update(ctx, migration)
 	}); err != nil {
-		ns.log.Error("updating migration to be ready for restore failed", "error", err)
+		log.Error("updating migration to be ready for restore failed", "error", err)
 		return nil, fmt.Errorf("unable to update migration to be ready for restore: %w", err)
 	}
-	ns.log.Info("updated migration to be ready for restore", "name", migration.Name, "namespace", migration.Namespace)
+	log.Info("updated migration to be ready for restore", "name", migration.Name)
 
 	// wait for the page server to be set by the evac
 	container := v1.MigrationContainer{}
@@ -244,11 +244,11 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		return
 	}); err != nil {
 		ns.setMigrationFailed(ctx, req.PodInfo.ContainerName, migration)
-		ns.log.Error("migration servers unset", "container_name", req.PodInfo.ContainerName)
+		log.Error("migration servers unset", "container_name", req.PodInfo.ContainerName)
 		return nil, fmt.Errorf("migration servers are not set on migration: %s", migration.Name)
 	}
 
-	ns.log.Info("done waiting for migration servers", "container_name", req.PodInfo.ContainerName)
+	log.Info("done waiting for migration servers", "container_name", req.PodInfo.ContainerName)
 
 	if !ns.local(container.ImageServer.Host) {
 		conn, err := tls.Dial("tcp", container.ImageServer.Address(), ns.tlsConfig)
@@ -256,26 +256,26 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 			return nil, fmt.Errorf("dialing node service: %w", err)
 		}
 		nodeClient := nodev1.NewNodeClient(ttrpc.NewClient(conn))
-		ns.log.Info("pulling image as it's not local",
+		log.Info("pulling image as it's not local",
 			"remote_host", container.ImageServer.Host, "remote_port", container.ImageServer.Port)
 		if err := ns.pullImage(ctx, nodeClient, container.ID); err != nil {
-			ns.log.Error("pulling image", "error", err)
+			log.Error("pulling image", "error", err)
 			return nil, err
 		}
 	}
 
 	if err := os.Rename(nodev1.ImagePath(container.ID), nodev1.ImagePath(req.MigrationInfo.ImageId)); err != nil {
-		ns.log.Error("renaming image path", "error", err)
+		log.Error("renaming image path", "error", err)
 		return nil, err
 	}
 	if migration.Spec.LiveMigration {
 		if !ns.liveMigrationSupported {
 			ns.setMigrationFailed(ctx, req.PodInfo.ContainerName, migration)
-			ns.log.Error(ErrLiveMigrationNotSupported.Error())
+			log.Error(ErrLiveMigrationNotSupported.Error())
 			return nil, ErrLiveMigrationNotSupported
 		}
 
-		ns.log.Info("starting page server for migration", "name", migration.Name, "namespace", migration.Namespace)
+		log.Info("starting page server for migration", "name", migration.Name)
 
 		if _, err := ns.NewCriuLazyPages(ctx, &nodev1.CriuLazyPagesRequest{
 			Address:        container.PageServer.Host,
@@ -308,10 +308,10 @@ func (ns *nodeService) setMigrationFailed(ctx context.Context, containerName str
 }
 
 func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreRequest) (*nodev1.RestoreResponse, error) {
-	ns.log.Info("got finish restore request",
-		"pod_name", req.PodInfo.Name,
-		"pod_namespace", req.PodInfo.Namespace,
+	log := ns.log.With("pod_name", req.PodInfo.Name,
+		"namespace", req.PodInfo.Namespace,
 		"container_name", req.PodInfo.ContainerName)
+	log.Info("got finish restore request")
 
 	migrationList := &v1.MigrationList{}
 	if err := ns.kube.List(ctx, migrationList, client.InNamespace(req.PodInfo.Namespace)); err != nil {
@@ -333,18 +333,18 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 	if len(migration.Spec.Containers) > 0 && migration.Spec.LiveMigration {
 		defer func() {
 			if err := os.RemoveAll(nodev1.ImagePath(req.MigrationInfo.ImageId)); err != nil {
-				ns.log.Error("cleaning up image path", "error", err)
+				log.Error("cleaning up image path", "error", err)
 			}
 		}()
 		restoreStats, err := getRestoreStats(req.MigrationInfo.ImageId)
 		if err != nil {
-			ns.log.Error("unable to read criu restore stats", "error", err)
+			log.Error("unable to read criu restore stats", "error", err)
 			phase = v1.MigrationPhaseFailed
 		} else {
 			if restoreStats.RestoreTime != nil {
 				restoreDur = time.Microsecond * time.Duration(*restoreStats.RestoreTime)
 			}
-			ns.log.Info("restore stats", "restore_dur", restoreDur, "pages_restored", restoreStats.PagesRestored)
+			log.Info("restore stats", "restore_dur", restoreDur, "pages_restored", restoreStats.PagesRestored)
 		}
 	}
 
@@ -465,7 +465,8 @@ func (ns *nodeService) pullImage(ctx context.Context, nodeClient nodev1.NodeClie
 
 	ns.log.Info("done pulling image",
 		"elapsed", time.Since(beforePull).String(),
-		"transferred_bytes", transferredBytes)
+		"transferred_bytes", transferredBytes,
+		"id", id)
 	return nil
 }
 
@@ -503,10 +504,10 @@ func extract(ctx context.Context, id string, reader io.ReadCloser) error {
 }
 
 func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest) (*nodev1.EvacResponse, error) {
-	ns.log.Info("got evac preparation request",
-		"pod_name", req.PodInfo.Name,
-		"pod_namespace", req.PodInfo.Namespace,
+	log := ns.log.With("pod_name", req.PodInfo.Name,
+		"namespace", req.PodInfo.Namespace,
 		"container_name", req.PodInfo.ContainerName)
+	log.Info("got evac preparation request")
 
 	migration := &v1.Migration{
 		ObjectMeta: metav1.ObjectMeta{
@@ -526,26 +527,24 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 			return
 		}
 		if migration.Claimed() {
-			ns.log.Info("migration is claimed for evac")
+			log.Info("migration is claimed for evac")
 			done = true
 		}
 		return
 	}); err != nil {
-		ns.log.Error("prepare evac request failed",
-			"name", migration.Name, "namespace", migration.Namespace, "error", err)
+		log.Error("prepare evac request failed", "name", migration.Name, "error", err)
 		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) (bool, error) {
 			setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
 				status.Condition.Phase = v1.MigrationPhaseUnclaimed
 			})
 			return true, nil
 		}); err != nil {
-			ns.log.Error("failed to update migration status",
-				"name", migration.Name, "namespace", migration.Namespace, "error", err)
+			log.Error("failed to update migration status", "name", migration.Name, "error", err)
 		}
 		return nil, err
 	}
 
-	ns.log.Info("waiting for migration restore to be ready")
+	log.Info("waiting for migration restore to be ready")
 	readyCtx, cancel := context.WithTimeout(ctx, migrationReadyTimeout)
 	defer cancel()
 	if err := pollUntilContextCancel(readyCtx, func(ctx context.Context) (done bool, perr error) {
@@ -557,16 +556,16 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 	}); err != nil {
 		return nil, err
 	}
-	ns.log.Info("evac prepare done")
+	log.Info("evac prepare done")
 
 	return &nodev1.EvacResponse{}, nil
 }
 
 func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*nodev1.EvacResponse, error) {
-	ns.log.Info("got evac request",
-		"pod_name", req.PodInfo.Name,
-		"pod_namespace", req.PodInfo.Namespace,
-		"container_name", req.PodInfo.ContainerName,
+	log := ns.log.With("pod_name", req.PodInfo.Name,
+		"namespace", req.PodInfo.Namespace,
+		"container_name", req.PodInfo.ContainerName)
+	log.Info("got evac request",
 		"image_id", req.MigrationInfo.ImageId)
 
 	pod := &corev1.Pod{}
@@ -581,28 +580,28 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 	var pageServer *v1.MigrationServer
 	if req.MigrationInfo.LiveMigration {
 		if !ns.liveMigrationSupported {
-			ns.log.Error(ErrLiveMigrationNotSupported.Error())
+			log.Error(ErrLiveMigrationNotSupported.Error())
 			return nil, ErrLiveMigrationNotSupported
 		}
 		tlsConfig := ns.tlsConfig
 		if !ns.pageServerTLS {
 			tlsConfig = nil
 		}
-		psp := newPageServerProxy("0.0.0.0:0", nodev1.LazyPagesSocket(req.MigrationInfo.ImageId), tlsConfig, nil, ns.log)
+		psp := newPageServerProxy("0.0.0.0:0", nodev1.LazyPagesSocket(req.MigrationInfo.ImageId), tlsConfig, nil, log)
 		pspContext, cancel := context.WithTimeout(context.Background(), pagesTransferTimeout)
 		if err := psp.Start(pspContext); err != nil {
-			ns.log.Error("page server src proxy", "error", err)
+			log.Error("page server src proxy", "error", err)
 		}
 		pageServer = &v1.MigrationServer{
 			Host: ns.host, Port: psp.Port(),
 		}
-		ns.log.Info("started page server src proxy", "port", psp.Port(), "tls", ns.pageServerTLS)
+		log.Info("started page server src proxy", "port", psp.Port(), "tls", ns.pageServerTLS)
 		go func() {
 			if err := psp.Wait(); err != nil {
-				ns.log.Error("page server src proxy", "error", err)
+				log.Error("page server src proxy", "error", err)
 			}
 			cancel()
-			ns.log.Info("page server src proxy closed")
+			log.Info("page server src proxy closed")
 		}()
 	}
 
@@ -614,7 +613,7 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 			}
 			mc.PageServer = pageServer
 			mc.Ports = req.PodInfo.Ports
-			ns.log.Debug("found our container, setting migration servers")
+			log.Debug("found our container, setting migration servers")
 		}); !found {
 			return false, fmt.Errorf("migration does not have image for requested container %s", req.PodInfo.ContainerName)
 		}
@@ -624,7 +623,7 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 		return nil, err
 	}
 	if pageServer != nil {
-		ns.log.Info("set page server in evac", "host", ns.host, "port", pageServer.Port)
+		log.Info("set page server in evac", "host", ns.host, "port", pageServer.Port)
 	}
 
 	if err := ns.updateMigrationStatus(ctx, nsName, func(migration *v1.Migration) (bool, error) {
@@ -696,9 +695,10 @@ var imageIDRegexp = regexp.MustCompile("^[A-Fa-f0-9]{64}$")
 
 // PullImage allows the caller to pull a compressed image from the server
 func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageRequest, imageStream nodev1.Node_PullImageServer) error {
-	ns.log.Info("got pull image request", "image_id", req.ImageId)
+	log := ns.log.With("image_id", req.ImageId)
+	log.Info("got pull image request")
 	if !imageIDRegexp.MatchString(req.ImageId) {
-		ns.log.Error("requested image_id is invalid", "image_id", req.ImageId)
+		log.Error("requested image_id is invalid")
 		return fmt.Errorf("invalid image_id requested: %s", req.ImageId)
 	}
 
