@@ -11,8 +11,10 @@ import (
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -20,7 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func TestPodReconciler(t *testing.T) {
+func TestPodReconcilerMigrationSource(t *testing.T) {
 	slog.SetLogLoggerLevel(slog.LevelDebug)
 	scheme := runtime.NewScheme()
 	require.NoError(t, corev1.AddToScheme(scheme))
@@ -52,7 +54,7 @@ func TestPodReconciler(t *testing.T) {
 			expectedContainerID: "imageid",
 			deletePod:           true,
 			nodeName:            "node1",
-			expectedMigration:   false,
+			expectedMigration:   true,
 		},
 		"pod with live migration and running": {
 			pod:                 enableLiveMigration(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING)),
@@ -116,6 +118,98 @@ func TestPodReconciler(t *testing.T) {
 	}
 }
 
+func TestPodReconcilerMigrationTarget(t *testing.T) {
+	slog.SetLogLoggerLevel(slog.LevelDebug)
+	scheme := runtime.NewScheme()
+	require.NoError(t, corev1.AddToScheme(scheme))
+	require.NoError(t, v1.AddToScheme(scheme))
+	ctx := context.Background()
+
+	for name, tc := range map[string]struct {
+		pod               *corev1.Pod
+		existingMigration *v1.Migration
+		expectClaimed     bool
+		nodeName          string
+		expectedRequeue   bool
+		deletePod         bool
+	}{
+		"pending pod should claim migration with matching hash": {
+			pod:               setPhase(setPodTemplateHash(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING), "hash"), corev1.PodPending),
+			existingMigration: newTestMigration("hash"),
+			expectClaimed:     true,
+			expectedRequeue:   false,
+			nodeName:          "node1",
+		},
+		"another pending pod should claim migration with matching hash": {
+			pod:               setPhase(setPodTemplateHash(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING), "hashb"), corev1.PodPending),
+			existingMigration: newTestMigration("hashb"),
+			expectClaimed:     true,
+			expectedRequeue:   false,
+			nodeName:          "node1",
+		},
+		"pending pod should not claim migration with non-matching hash": {
+			pod:               setPhase(setPodTemplateHash(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING), "different"), corev1.PodPending),
+			existingMigration: newTestMigration("hash2"),
+			expectClaimed:     false,
+			expectedRequeue:   false,
+			nodeName:          "node1",
+		},
+		"pod with empty node should not claim migration with matching hash": {
+			pod:               setPhase(setPodTemplateHash(newMigratePod("", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING), "hash3"), corev1.PodPending),
+			existingMigration: newTestMigration("hash3"),
+			expectClaimed:     false,
+			expectedRequeue:   false,
+			nodeName:          "node1",
+		},
+		"running pod should not claim migration with matching hash": {
+			pod:               setPhase(setPodTemplateHash(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING), "hash4"), corev1.PodRunning),
+			existingMigration: newTestMigration("hash4"),
+			expectClaimed:     false,
+			expectedRequeue:   false,
+			nodeName:          "node1",
+		},
+		"deleting pod should not claim migration with matching hash": {
+			pod:               setPhase(setPodTemplateHash(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING), "hash5"), corev1.PodPending),
+			existingMigration: newTestMigration("hash5"),
+			deletePod:         true,
+			expectClaimed:     false,
+			expectedRequeue:   false,
+			nodeName:          "node1",
+		},
+	} {
+		kube := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&v1.Migration{}).Build()
+		t.Run(name, func(t *testing.T) {
+			require.NoError(t, kube.Create(ctx, tc.existingMigration))
+			t.Setenv(nodev1.NodeNameEnvKey, tc.nodeName)
+			r, err := newPodReconciler(kube, slog.Default())
+			require.NoError(t, err)
+
+			require.NoError(t, kube.Create(ctx, tc.pod))
+			if tc.deletePod {
+				// set a finalizer to simulate deletion
+				tc.pod.SetFinalizers([]string{"foo"})
+				require.NoError(t, kube.Update(ctx, tc.pod))
+				require.NoError(t, kube.Delete(ctx, tc.pod))
+			}
+
+			res, err := r.Reconcile(ctx, reconcile.Request{
+				NamespacedName: client.ObjectKeyFromObject(tc.pod),
+			})
+			assert.NoError(t, err)
+			assert.Equal(t, tc.expectedRequeue, res.Requeue)
+
+			require.NoError(t, kube.Get(ctx, client.ObjectKeyFromObject(tc.existingMigration), tc.existingMigration))
+			if tc.expectClaimed {
+				assert.Equal(t, tc.pod.Name, tc.existingMigration.Spec.TargetPod)
+				assert.Equal(t, tc.pod.Spec.NodeName, tc.existingMigration.Spec.TargetNode)
+			} else {
+				assert.Empty(t, tc.existingMigration.Spec.TargetPod)
+				assert.Empty(t, tc.existingMigration.Spec.TargetNode)
+			}
+		})
+	}
+}
+
 func newMigratePod(nodeName, runtimeClassName string, phase shimv1.ContainerPhase) *corev1.Pod {
 	pod := newPod(corev1.ResourceList{})
 	pod.Name = ""
@@ -135,7 +229,32 @@ func newMigratePod(nodeName, runtimeClassName string, phase shimv1.ContainerPhas
 	return pod
 }
 
+func newTestMigration(podTemplateHash string) *v1.Migration {
+	return &v1.Migration{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: "sourcepod-",
+			Namespace:    "default",
+		},
+		Spec: v1.MigrationSpec{
+			SourcePod:       "sourcepod",
+			SourceNode:      "sourcenode",
+			PodTemplateHash: podTemplateHash,
+			Containers:      []v1.MigrationContainer{},
+		},
+	}
+}
+
 func enableLiveMigration(pod *corev1.Pod) *corev1.Pod {
 	pod.Annotations[nodev1.LiveMigrateAnnotationKey] = pod.Spec.Containers[0].Name
+	return pod
+}
+
+func setPodTemplateHash(pod *corev1.Pod, podTemplateHash string) *corev1.Pod {
+	pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey] = podTemplateHash
+	return pod
+}
+
+func setPhase(pod *corev1.Pod, phase corev1.PodPhase) *corev1.Pod {
+	pod.Status.Phase = phase
 	return pod
 }

@@ -107,6 +107,11 @@ spec:
                   PodTemplateHash of the source pod. This is used to find a suitable target
                   pod.
                 type: string
+              restoreReady:
+                description: |-
+                  RestoreReady indicates the shim is up and running and is ready to restore
+                  so checkpointing can be started on the other side.
+                type: boolean
               sourceNode:
                 description: SourceNode of the pod to be migrated
                 type: string
@@ -122,6 +127,7 @@ spec:
             required:
             - containers
             - podTemplateHash
+            - restoreReady
             - sourceNode
             type: object
           status:
