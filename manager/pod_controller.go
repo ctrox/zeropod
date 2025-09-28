@@ -6,12 +6,9 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
-	"path"
-	"time"
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
-	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -106,7 +103,7 @@ func (r podReconciler) isMigrationTarget(pod *corev1.Pod) bool {
 	return r.isMigrationCandidate(pod) &&
 		pod.DeletionTimestamp == nil &&
 		pod.Spec.NodeName != "" &&
-		time.Since(pod.CreationTimestamp.Time) < time.Minute
+		pod.Status.Phase == corev1.PodPending
 }
 
 func (r podReconciler) isMigrationCandidate(pod *corev1.Pod) bool {
@@ -120,17 +117,7 @@ func (r podReconciler) isMigrationCandidate(pod *corev1.Pod) bool {
 		return false
 	}
 
-	if !anyMigrationEnabled(pod) {
-		return false
-	}
-
-	if !hasScaledDownContainer(pod) && !liveMigrationEnabled(pod) {
-		r.log.Info("skipping pod with no scaled down containers and live migration disabled",
-			"pod_name", pod.Name, "pod_namespace", pod.Namespace)
-		return false
-	}
-
-	return true
+	return anyMigrationEnabled(pod)
 }
 
 func (r podReconciler) prepareMigrationSource(ctx context.Context, pod *corev1.Pod) error {
@@ -187,7 +174,7 @@ func (r podReconciler) prepareMigrationTarget(ctx context.Context, pod *corev1.P
 			return false, nil
 		}
 	}
-	return true, nil
+	return false, nil
 }
 
 func isZeropod(pod *corev1.Pod) bool {
@@ -219,17 +206,6 @@ func newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 			Containers:      containers,
 		},
 	}, nil
-}
-
-func hasScaledDownContainer(pod *corev1.Pod) bool {
-	for _, container := range pod.Spec.Containers {
-		if k, ok := pod.Labels[path.Join(StatusLabelKeyPrefix, container.Name)]; ok {
-			if k == shimv1.ContainerPhase_SCALED_DOWN.String() {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func anyMigrationEnabled(pod *corev1.Pod) bool {
