@@ -348,8 +348,8 @@ func (ns *nodeService) FinishRestore(ctx context.Context, req *nodev1.RestoreReq
 		}
 	}
 
-	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(migration *v1.Migration) (bool, error) {
-		setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
+	if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) (bool, error) {
+		setOrUpdateContainerStatus(m, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
 			// in case the migration is already set to failed we skip updating it
 			if status.Condition.Phase == v1.MigrationPhaseFailed {
 				return
@@ -534,7 +534,7 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 	}); err != nil {
 		log.Error("prepare evac request failed", "name", migration.Name, "error", err)
 		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) (bool, error) {
-			setOrUpdateContainerStatus(migration, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
+			setOrUpdateContainerStatus(m, req.PodInfo.ContainerName, func(status *v1.MigrationContainerStatus) {
 				status.Condition.Phase = v1.MigrationPhaseUnclaimed
 			})
 			return true, nil
