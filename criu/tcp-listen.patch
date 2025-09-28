@@ -1,0 +1,52 @@
+workaround for https://github.com/checkpoint-restore/criu/issues/2764
+diff --git a/criu/include/sockets.h b/criu/include/sockets.h
+index 6c81d3edd..66187fe72 100644
+--- a/criu/include/sockets.h
++++ b/criu/include/sockets.h
+@@ -19,6 +19,7 @@ struct cr_img;
+ struct socket_desc {
+ 	unsigned int family;
+ 	unsigned int ino;
++	unsigned int state;
+ 	struct socket_desc *next;
+ 	struct ns_id *sk_ns;
+ 	int already_dumped;
+diff --git a/criu/sk-inet.c b/criu/sk-inet.c
+index 422edc656..85c0a4160 100644
+--- a/criu/sk-inet.c
++++ b/criu/sk-inet.c
+@@ -674,6 +674,7 @@ int inet_collect_one(struct nlmsghdr *h, int family, int type, struct ns_id *ns)
+ 	d->src_port = ntohs(m->id.idiag_sport);
+ 	d->dst_port = ntohs(m->id.idiag_dport);
+ 	d->state = m->idiag_state;
++	d->sd.state = m->idiag_state;
+ 	d->rqlen = m->idiag_rqueue;
+ 	d->wqlen = m->idiag_wqueue;
+ 	memcpy(d->src_addr, m->id.idiag_src, sizeof(u32) * 4);
+diff --git a/criu/sockets.c b/criu/sockets.c
+index e4adae03c..35787d5e3 100644
+--- a/criu/sockets.c
++++ b/criu/sockets.c
+@@ -429,11 +429,22 @@ static struct socket_desc *sockets[SK_HASH_SIZE];
+ struct socket_desc *lookup_socket_ino(unsigned int ino, int family)
+ {
+ 	struct socket_desc *sd;
++	int found = 0;
+ 
+ 	pr_debug("Searching for socket %#x family %d\n", ino, family);
+ 
+ 	for (sd = sockets[ino % SK_HASH_SIZE]; sd; sd = sd->next) {
+ 		if (sd->ino == ino) {
++			found++;
++		}
++	}
++
++	for (sd = sockets[ino % SK_HASH_SIZE]; sd; sd = sd->next) {
++		if (sd->ino == ino) {
++			if (found > 1 && sd->state != TCP_LISTEN) {
++				pr_info("skipping socket in state %-16s %#x family %d\n", ___tcp_state_name(sd->state), ino, family);
++				continue;
++			}
+ 			BUG_ON(sd->family != family);
+ 			return sd;
+ 		}
