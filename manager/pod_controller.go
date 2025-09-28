@@ -204,6 +204,7 @@ func newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 			SourceNode:      pod.Spec.NodeName,
 			PodTemplateHash: pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey],
 			Containers:      containers,
+			LiveMigration:   liveMigrationEnabled(pod),
 		},
 	}, nil
 }
