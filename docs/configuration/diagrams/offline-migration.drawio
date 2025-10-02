@@ -1,0 +1,46 @@
+<mxfile host="app.diagrams.net" agent="Mozilla/5.0 (X11; Linux i686; rv:132.0) Gecko/20100101 Firefox/132.0" version="26.0.16">
+  <diagram name="Page-1" id="S3Romfl9XJvJNEUoPPOx">
+    <mxGraphModel dx="1418" dy="1131" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="700" pageHeight="500" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-2" value="Node a" style="swimlane;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#A8DADC;strokeColor=#457B9D;fontColor=#1D3557;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="-242" y="-23" width="200" height="265" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-1" value="deleted Pod" style="rounded=1;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#A8DADC;strokeColor=#457B9D;fontColor=#1D3557;" vertex="1" parent="nSVk_hhTxszxVaa_JyYo-2">
+          <mxGeometry x="40" y="61" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-13" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;shim&lt;/span&gt;" style="edgeStyle=none;curved=1;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=1;entryDx=0;entryDy=0;fontSize=12;startSize=8;endSize=8;endArrow=none;startFill=0;labelBackgroundColor=none;strokeColor=#457B9D;fontColor=default;" edge="1" parent="nSVk_hhTxszxVaa_JyYo-2" source="nSVk_hhTxszxVaa_JyYo-5" target="nSVk_hhTxszxVaa_JyYo-1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-5" value="zeropod-node" style="rounded=1;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#A8DADC;strokeColor=#457B9D;fontColor=#1D3557;" vertex="1" parent="nSVk_hhTxszxVaa_JyYo-2">
+          <mxGeometry x="40" y="157" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-6" value="Node b" style="swimlane;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#A8DADC;strokeColor=#457B9D;fontColor=#1D3557;rounded=1;" vertex="1" parent="1">
+          <mxGeometry x="190" y="-23" width="200" height="265" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-14" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;shim&lt;/span&gt;" style="edgeStyle=none;curved=1;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=12;startSize=8;endSize=8;endArrow=none;startFill=0;labelBackgroundColor=none;strokeColor=#457B9D;fontColor=default;" edge="1" parent="nSVk_hhTxszxVaa_JyYo-6" source="nSVk_hhTxszxVaa_JyYo-7" target="nSVk_hhTxszxVaa_JyYo-8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-7" value="fresh Pod" style="rounded=1;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#A8DADC;strokeColor=#457B9D;fontColor=#1D3557;" vertex="1" parent="nSVk_hhTxszxVaa_JyYo-6">
+          <mxGeometry x="40" y="61" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-8" value="zeropod-node" style="rounded=1;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#A8DADC;strokeColor=#457B9D;fontColor=#1D3557;" vertex="1" parent="nSVk_hhTxszxVaa_JyYo-6">
+          <mxGeometry x="40" y="157" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-11" value="Migration CR" style="rounded=1;whiteSpace=wrap;html=1;labelBackgroundColor=none;fillColor=#A8DADC;strokeColor=#457B9D;fontColor=#1D3557;" vertex="1" parent="1">
+          <mxGeometry x="15" y="256" width="120" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-12" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;creates&lt;/span&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=12;startSize=8;endSize=8;exitX=0.5;exitY=1;exitDx=0;exitDy=0;labelBackgroundColor=none;strokeColor=#457B9D;fontColor=default;curved=0;" edge="1" parent="1" source="nSVk_hhTxszxVaa_JyYo-5" target="nSVk_hhTxszxVaa_JyYo-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-16" value="&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;claims&lt;/span&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;fontSize=12;startSize=8;endSize=8;labelBackgroundColor=none;strokeColor=#457B9D;fontColor=default;curved=0;" edge="1" parent="1" source="nSVk_hhTxszxVaa_JyYo-8" target="nSVk_hhTxszxVaa_JyYo-11">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="nSVk_hhTxszxVaa_JyYo-17" value="&lt;div&gt;&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;checkpoint pull&lt;/span&gt;&lt;/div&gt;&lt;div&gt;&lt;span style=&quot;background-color: light-dark(#ffffff, var(--ge-dark-color, #121212));&quot;&gt;(over pod network+mTLS)&lt;/span&gt;&lt;/div&gt;" style="edgeStyle=none;curved=1;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=12;startSize=8;endSize=8;labelBackgroundColor=none;strokeColor=#457B9D;fontColor=default;" edge="1" parent="1" source="nSVk_hhTxszxVaa_JyYo-5" target="nSVk_hhTxszxVaa_JyYo-8">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
