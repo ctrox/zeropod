@@ -18,7 +18,6 @@ import (
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager"
 	"github.com/ctrox/zeropod/manager/node"
-	"github.com/ctrox/zeropod/socket"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	corev1 "k8s.io/api/core/v1"
@@ -89,13 +88,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	tracker, cleanSocketTracker, err := socket.LoadEBPFTracker(*probeBinaryName)
-	if err != nil {
-		log.Warn("loading socket tracker failed, scaling down with static duration", "err", err)
-		cleanSocketTracker = func() error { return nil }
-	}
-
-	if err := manager.AttachRedirectors(ctx, log, tracker); err != nil {
+	if err := manager.AttachRedirectors(ctx, log, *probeBinaryName); err != nil {
 		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
 	}
 
@@ -167,7 +160,6 @@ func main() {
 
 	<-ctx.Done()
 	log.Info("stopping manager")
-	cleanSocketTracker()
 	if err := server.Shutdown(ctx); err != nil {
 		log.Error("shutting down server", "err", err)
 	}

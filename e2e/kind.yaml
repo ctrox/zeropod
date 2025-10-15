@@ -9,15 +9,9 @@ nodes:
     image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
   - role: worker
     image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
-    extraMounts:
-      - hostPath: /proc
-        containerPath: /host/proc
     labels:
       zeropod.ctrox.dev/node: "true"
   - role: worker
     image: kindest/node:v1.34.0@sha256:7416a61b42b1662ca6ca89f02028ac133a309a2a30ba309614e8ec94d976dc5a
-    extraMounts:
-      - hostPath: /proc
-        containerPath: /host/proc
     labels:
       zeropod.ctrox.dev/node: "true"

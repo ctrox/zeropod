@@ -2,7 +2,6 @@ package shim
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -13,39 +12,17 @@ import (
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
-	"github.com/ctrox/zeropod/activator"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 )
 
 func (c *Container) scaleDown(ctx context.Context) error {
-	if err := c.startActivator(ctx); err != nil {
-		if errors.Is(err, errNoPortsDetected) {
-			retryIn := c.scaleDownRetry()
-			log.G(ctx).Infof("no ports detected, rescheduling scale down in %s", retryIn)
-			return c.scheduleScaleDownIn(retryIn)
-		}
-
-		if errors.Is(err, activator.ErrMapNotFound) {
-			retryIn := c.scaleDownRetry()
-			log.G(ctx).Infof("activator is not ready, rescheduling scale down in %s", retryIn)
-			return c.scheduleScaleDownIn(retryIn)
-		}
-
-		return err
+	if c.ScaledDown() {
+		return nil
 	}
 
 	if err := c.activator.Reset(); err != nil {
 		return err
-	}
-
-	if err := c.tracker.RemovePid(uint32(c.process.Pid())); err != nil {
-		// key could not exist, just log the error for now
-		log.G(ctx).Warnf("unable to remove pid %d: %s", c.process.Pid(), err)
-	}
-
-	if c.ScaledDown() {
-		return nil
 	}
 
 	if c.cfg.DisableCheckpointing {
@@ -60,22 +37,6 @@ func (c *Container) scaleDown(ctx context.Context) error {
 	}
 
 	return nil
-}
-
-// scaleDownRetry returns the duration in which the next scaledown should be
-// retried. It backs off exponentially with an initial wait of 1 second.
-func (c *Container) scaleDownRetry() time.Duration {
-	const initial, max = time.Second, time.Minute * 5
-	c.scaleDownBackoff = c.scaleDownBackoff * 2
-	if c.scaleDownBackoff >= max {
-		c.scaleDownBackoff = max
-	}
-
-	if c.scaleDownBackoff == 0 {
-		c.scaleDownBackoff = initial
-	}
-
-	return c.scaleDownBackoff
 }
 
 func (c *Container) kill(ctx context.Context) error {

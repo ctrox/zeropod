@@ -8,9 +8,15 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
+
+type bpfIpv6Addr struct {
+	_       structs.HostLayout
+	U6Addr8 [16]uint8
+}
 
 // loadBpf returns the embedded CollectionSpec for bpf.
 func loadBpf() (*ebpf.CollectionSpec, error) {
@@ -66,12 +72,16 @@ type bpfMapSpecs struct {
 	DisableRedirect   *ebpf.MapSpec `ebpf:"disable_redirect"`
 	EgressRedirects   *ebpf.MapSpec `ebpf:"egress_redirects"`
 	IngressRedirects  *ebpf.MapSpec `ebpf:"ingress_redirects"`
+	KubeletAddrsV4    *ebpf.MapSpec `ebpf:"kubelet_addrs_v4"`
+	KubeletAddrsV6    *ebpf.MapSpec `ebpf:"kubelet_addrs_v6"`
+	SocketTracker     *ebpf.MapSpec `ebpf:"socket_tracker"`
 }
 
 // bpfVariableSpecs contains global variables before they are loaded into the kernel.
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfVariableSpecs struct {
+	ProbeBinaryName *ebpf.VariableSpec `ebpf:"probe_binary_name"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -98,6 +108,9 @@ type bpfMaps struct {
 	DisableRedirect   *ebpf.Map `ebpf:"disable_redirect"`
 	EgressRedirects   *ebpf.Map `ebpf:"egress_redirects"`
 	IngressRedirects  *ebpf.Map `ebpf:"ingress_redirects"`
+	KubeletAddrsV4    *ebpf.Map `ebpf:"kubelet_addrs_v4"`
+	KubeletAddrsV6    *ebpf.Map `ebpf:"kubelet_addrs_v6"`
+	SocketTracker     *ebpf.Map `ebpf:"socket_tracker"`
 }
 
 func (m *bpfMaps) Close() error {
@@ -106,6 +119,9 @@ func (m *bpfMaps) Close() error {
 		m.DisableRedirect,
 		m.EgressRedirects,
 		m.IngressRedirects,
+		m.KubeletAddrsV4,
+		m.KubeletAddrsV6,
+		m.SocketTracker,
 	)
 }
 
@@ -113,6 +129,7 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfVariables struct {
+	ProbeBinaryName *ebpf.Variable `ebpf:"probe_binary_name"`
 }
 
 // bpfPrograms contains all programs after they have been loaded into the kernel.

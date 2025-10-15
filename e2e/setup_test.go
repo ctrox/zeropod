@@ -166,10 +166,6 @@ func startKind(t testing.TB, name, kubeconfig string, port int) (c *rest.Config,
 	// container pids)
 	extraMounts := []v1alpha4.Mount{
 		{
-			HostPath:      "/proc",
-			ContainerPath: "/host/proc",
-		},
-		{
 			HostPath:      activator.BPFFSPath,
 			ContainerPath: activator.BPFFSPath,
 		},
