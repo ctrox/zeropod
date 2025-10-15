@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,7 +19,6 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/socket"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -43,9 +43,9 @@ type Container struct {
 	skipStart        bool
 	netNS            ns.NetNS
 	scaleDownTimer   *time.Timer
-	scaleDownBackoff time.Duration
+	initTimer        *time.Timer
+	initBackoff      time.Duration
 	platform         stdio.Platform
-	tracker          socket.Tracker
 	preRestore       func() HandleStartedFunc
 	postRestore      func(*runc.Container, HandleStartedFunc)
 	events           chan *v1.ContainerStatus
@@ -111,17 +111,7 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 	c.process = p
 	c.initialProcess = p
 
-	tracker, err := socket.NewEBPFTracker()
-	if err != nil {
-		log.G(ctx).Warnf("creating ebpf tracker failed, falling back to noop tracker: %s", err)
-		tracker = socket.NewNoopTracker(c.cfg.ScaleDownDuration)
-	}
-	c.tracker = tracker
-
-	if err := tracker.TrackPid(uint32(p.Pid())); err != nil {
-		log.G(ctx).Warnf("tracking pid failed: %s", err)
-	}
-	if err := c.initActivator(ctx); err != nil {
+	if err := c.initActivator(ctx, c.SkipStart()); err != nil {
 		log.G(ctx).Warnf("activator init failed, disabling scale down: %s", err)
 		c.cfg.ScaleDownDuration = 0
 	}
@@ -155,8 +145,13 @@ func (c *Container) scheduleScaleDownIn(in time.Duration) error {
 
 	log.G(c.context).Infof("scheduling scale down in %s", in)
 	timer := time.AfterFunc(in, func() {
-		last, err := c.tracker.LastActivity(uint32(c.process.Pid()))
-		if errors.Is(err, socket.NoActivityRecordedErr{}) {
+		if !c.activator.Started() {
+			log.G(c.context).Infof("activator not ready, delaying scale down by %s", c.initBackoff)
+			c.scaleDownTimer.Reset(c.initBackoff)
+			return
+		}
+		last, err := c.lastActivity()
+		if errors.Is(err, activator.NoActivityRecordedErr{}) {
 			log.G(c.context).Info(err)
 		} else if err != nil {
 			log.G(c.context).Warnf("unable to get last TCP activity from tracker: %s", err)
@@ -300,15 +295,8 @@ func (c *Container) DeleteCheckpointedPID(pid int) {
 }
 
 func (c *Container) Stop(ctx context.Context) {
+	c.cancelInit()
 	c.CancelScaleDown()
-	if c.tracker != nil {
-		if err := c.tracker.RemovePid(uint32(c.process.Pid())); err != nil {
-			log.G(ctx).Warnf("unable to remove pid from tracker: %s", err)
-		}
-		if err := c.tracker.Close(); err != nil {
-			log.G(ctx).Warnf("unable to close tracker: %s", err)
-		}
-	}
 	status := c.Status()
 	status.Phase = v1.ContainerPhase_STOPPING
 	c.sendEvent(status)
@@ -327,27 +315,15 @@ func (c *Container) RegisterPostRestore(f func(*runc.Container, HandleStartedFun
 	c.postRestore = f
 }
 
-var errNoPortsDetected = errors.New("no listening ports detected")
+func (c *Container) initActivator(ctx context.Context, enableRedirects bool) error {
+	c.cancelInit()
 
-func (c *Container) initActivator(ctx context.Context) error {
-	// we already have an activator
-	if c.activator != nil {
-		return nil
-	}
-
-	srv, err := activator.NewServer(ctx, c.netNS)
-	if err != nil {
-		return err
-	}
-	c.activator = srv
-
-	return nil
-}
-
-// startActivator starts the activator
-func (c *Container) startActivator(ctx context.Context) error {
-	if c.activator.Started() {
-		return nil
+	if c.activator == nil {
+		act, err := activator.NewServer(ctx, c.netNS)
+		if err != nil {
+			return err
+		}
+		c.activator = act
 	}
 
 	if len(c.cfg.Ports) == 0 {
@@ -356,22 +332,67 @@ func (c *Container) startActivator(ctx context.Context) error {
 		ports, err := listeningPortsDeep(c.initialProcess.Pid())
 		if err != nil || len(ports) == 0 {
 			// our initialProcess might not even be running yet, so finding the listening
-			// ports might fail in various ways. We return errNoPortsDetected so the
-			// caller can retry later.
-			return errNoPortsDetected
+			// ports might fail in various ways. We schedule a retry.
+			retryIn := c.initRetry()
+			log.G(ctx).Infof("no ports detected, retrying init in %s", retryIn)
+			c.retryInitIn(retryIn, enableRedirects)
+			return nil
 		}
 
 		c.cfg.Ports = ports
 	}
 
 	log.G(ctx).Infof("starting activator with ports: %v", c.cfg.Ports)
+	if err := c.startActivator(ctx, c.cfg.Ports...); err != nil {
+		if errors.Is(err, activator.ErrMapNotFound) {
+			c.retryInitIn(c.initRetry(), enableRedirects)
+			return nil
+		}
+		return err
+	}
 
-	// create a new context in order to not run into deadline of parent context
-	ctx = log.WithLogger(context.Background(), log.G(ctx).WithField("runtime", RuntimeName))
+	if enableRedirects {
+		return c.activator.Reset()
+	}
+	return nil
+}
 
-	log.G(ctx).Infof("starting activator with config: %v", c.cfg)
+// initRetry returns the duration in which the next init should be retried. It
+// backs off exponentially with an initial wait of 100 milliseconds.
+func (c *Container) initRetry() time.Duration {
+	const initial, max = time.Millisecond * 100, time.Minute * 5
+	c.initBackoff = min(max, c.initBackoff*2)
 
-	if err := c.activator.Start(ctx, c.cfg.Ports, c.detectProbe(ctx), c.restoreHandler(ctx)); err != nil {
+	if c.initBackoff == 0 {
+		c.initBackoff = initial
+	}
+
+	return c.initBackoff
+}
+
+func (c *Container) retryInitIn(in time.Duration, enableRedirects bool) {
+	log.G(c.context).Infof("scheduling init in %s", in)
+	timer := time.AfterFunc(in, func() {
+		if err := c.initActivator(c.context, enableRedirects); err != nil {
+			log.G(c.context).Warnf("error initializing activator: %s", err)
+		}
+	})
+	c.initTimer = timer
+}
+
+func (c *Container) cancelInit() {
+	if c.initTimer == nil {
+		return
+	}
+	c.initTimer.Stop()
+}
+
+// startActivator starts the activator
+func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
+	if c.activator.Started() {
+		return nil
+	}
+	if err := c.activator.Start(c.context, c.detectProbe(c.context), c.restoreHandler(c.context), ports...); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}
@@ -379,7 +400,6 @@ func (c *Container) startActivator(ctx context.Context) error {
 		log.G(ctx).Errorf("failed to start activator: %s", err)
 		return err
 	}
-
 	log.G(ctx).Printf("activator started")
 	return nil
 }
@@ -388,7 +408,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 	return func() error {
 		log.G(ctx).Printf("got a request")
 
-		restoredContainer, p, err := c.Restore(ctx)
+		restoredContainer, _, err := c.Restore(ctx)
 		if err != nil {
 			if errors.Is(err, ErrAlreadyRestored) {
 				log.G(ctx).Info("container is already restored, ignoring request")
@@ -401,12 +421,29 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 		}
 		c.Container = restoredContainer
 
-		if err := c.tracker.TrackPid(uint32(p.Pid())); err != nil {
-			log.G(ctx).Warnf("unable to track pid %d: %s", p.Pid(), err)
-		}
-
 		return c.ScheduleScaleDown()
 	}
+}
+
+// lastActivity returns a [time.Time] of the last recorded network activity on
+// any port of the container.
+func (c *Container) lastActivity() (time.Time, error) {
+	if c.activator == nil {
+		return time.Time{}, activator.NoActivityRecordedErr{}
+	}
+	act := []time.Time{}
+	for _, port := range c.cfg.Ports {
+		last, err := c.activator.LastActivity(port)
+		if err != nil {
+			return time.Time{}, err
+		}
+		act = append(act, last)
+	}
+	if len(act) == 0 {
+		return time.Time{}, activator.NoActivityRecordedErr{}
+	}
+	slices.SortFunc(act, func(a, b time.Time) int { return a.Compare(b) })
+	return act[len(act)-1], nil
 }
 
 func (c *Container) GetMetrics() *v1.ContainerMetrics {

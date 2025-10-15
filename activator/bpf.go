@@ -3,6 +3,7 @@ package activator
 import (
 	"fmt"
 	"log/slog"
+	"maps"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,7 +18,14 @@ import (
 // $BPF_CLANG and $BPF_CFLAGS are set by the Makefile.
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf redirector.c -- -I/headers
 
-const BPFFSPath = "/sys/fs/bpf"
+const (
+	BPFFSPath                = "/sys/fs/bpf"
+	probeBinaryNameVariable  = "probe_binary_name"
+	probeBinaryNameMaxLength = 16
+	SocketTrackerMap         = "socket_tracker"
+	PodKubeletAddrsMapv4     = "kubelet_addrs_v4"
+	PodKubeletAddrsMapv6     = "kubelet_addrs_v6"
+)
 
 type BPF struct {
 	pid     int
@@ -27,7 +35,27 @@ type BPF struct {
 	log     *slog.Logger
 }
 
-func InitBPF(pid int, log *slog.Logger) (*BPF, error) {
+type BPFConfig struct {
+	mapSizes map[string]uint32
+}
+
+type BPFOpts func(cfg *BPFConfig)
+
+func OverrideMapSize(mapSizes map[string]uint32) BPFOpts {
+	return func(cfg *BPFConfig) {
+		maps.Copy(cfg.mapSizes, mapSizes)
+	}
+}
+
+func InitBPF(pid int, log *slog.Logger, probeBinaryName string, opts ...BPFOpts) (*BPF, error) {
+	cfg := &BPFConfig{
+		mapSizes: map[string]uint32{
+			SocketTrackerMap: 128,
+		},
+	}
+	for _, opt := range opts {
+		opt(cfg)
+	}
 	// Allow the current process to lock memory for eBPF resources.
 	if err := rlimit.RemoveMemlock(); err != nil {
 		return nil, err
@@ -40,8 +68,28 @@ func InitBPF(pid int, log *slog.Logger) (*BPF, error) {
 		return nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
 	}
 
+	spec, err := loadBpf()
+	if err != nil {
+		return nil, fmt.Errorf("loading bpf objects: %w", err)
+	}
+
+	if len([]byte(probeBinaryName)) > probeBinaryNameMaxLength {
+		return nil, fmt.Errorf(
+			"probe binary name %s is too long (%d bytes), max is %d bytes",
+			probeBinaryName, len([]byte(probeBinaryName)), probeBinaryNameMaxLength,
+		)
+	}
+	binName := [probeBinaryNameMaxLength]byte{}
+	copy(binName[:], probeBinaryName[:])
+	if err := spec.Variables[probeBinaryNameVariable].Set(binName); err != nil {
+		return nil, fmt.Errorf("setting probe binary variable: %w", err)
+	}
+
+	for mapName, size := range cfg.mapSizes {
+		spec.Maps[mapName].MaxEntries = size
+	}
 	objs := bpfObjects{}
-	if err := loadBpfObjects(&objs, &ebpf.CollectionOptions{
+	if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{
 			PinPath: path,
 		},
