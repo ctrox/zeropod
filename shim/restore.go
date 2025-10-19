@@ -30,6 +30,7 @@ import (
 var (
 	ErrAlreadyRestored      = errors.New("container is already restored")
 	ErrRestoreRequestFailed = errors.New("restore request failed")
+	ErrRestoreDial          = errors.New("failed to connect to node socket")
 )
 
 func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
@@ -199,7 +200,7 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *Config) (skipStart bool, err error) {
 	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
-		return false, fmt.Errorf("dialing node service: %w", err)
+		return false, fmt.Errorf("%w: dialing node service: %w", ErrRestoreDial, err)
 	}
 	log.G(ctx).Infof("creating restore request for container: %s", cfg.ContainerName)
 
