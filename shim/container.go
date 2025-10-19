@@ -126,7 +126,7 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 		c.cfg.ScaleDownDuration = 0
 	}
 	if c.SkipStart() {
-		c.setPhase(v1.ContainerPhase_SCALED_DOWN)
+		c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, 0)
 		if err := c.scaleDown(ctx); err != nil {
 			return err
 		}
