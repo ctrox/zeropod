@@ -46,10 +46,10 @@ important ones:
   [activation sequence](#activation-sequence) for more details.
 * All subsequent connections go directly to the application without any
   proxying and performance impact.
-* An eBPF probe is used to track the last TCP activity on the running
-  application. This helps zeropod delay checkpointing if there is recent
-  activity. This avoids too much flapping on a service that is frequently
-  used.
+* The redirector eBPF program is also used to track the last TCP activity
+  targeting the running application. This helps zeropod delay checkpointing if
+  there is recent activity. This avoids too much flapping on a service that is
+  frequently used.
 * To the container runtime (e.g. Kubernetes), the container appears to be
   running even though the process is technically not. This is required to
   prevent the runtime from trying to restart the container.
