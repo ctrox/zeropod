@@ -109,8 +109,8 @@ func (ps *PodScaler) initialRequests(container corev1.Container, podAnnotations 
 	}
 
 	containerMemory := containerResource{}
-	if memortReq, ok := podAnnotations[MemoryAnnotationKey]; ok {
-		if err := json.Unmarshal([]byte(memortReq), &containerMemory); err != nil {
+	if memoryReq, ok := podAnnotations[MemoryAnnotationKey]; ok {
+		if err := json.Unmarshal([]byte(memoryReq), &containerMemory); err != nil {
 			return nil, err
 		}
 	}

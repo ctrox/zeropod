@@ -26,7 +26,7 @@ var ballast []byte
 // amount of memory and constantly stores a timestamp in memory. If the last
 // timestamp is older than 50 Milliseconds it will detect that as a "freeze". It
 // also exposes a simple HTTP API to get the last freeze and duration and an
-// endpoint to set some string data, used to store aribtrary state.
+// endpoint to set some string data, used to store arbitrary state.
 func main() {
 	mem := flag.Int("memory", 0, "memory to allocate in MiB")
 	flag.Parse()
@@ -95,7 +95,7 @@ func main() {
 func allocateMemory(mem int) {
 	slog.Info("allocating memory", "bytes", mem<<20)
 	// we don't really care about the randomness too much, we want something
-	// quick that isn't so easily compressable.
+	// quick that isn't so easily compressible.
 	r := rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
 	ballast = make([]byte, mem<<20)
 	for i := range len(ballast) {
