@@ -14,15 +14,14 @@ import (
 
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
-	"github.com/ctrox/zeropod/socket"
 	"github.com/fsnotify/fsnotify"
 )
 
 type Redirector struct {
 	sync.Mutex
-	sandboxes map[int]sandbox
-	log       *slog.Logger
-	tracker   socket.Tracker
+	sandboxes       map[int]sandbox
+	log             *slog.Logger
+	probeBinaryName string
 }
 
 type sandbox struct {
@@ -42,11 +41,11 @@ const (
 // can be found it attaches the redirector BPF programs to the network
 // interfaces of the sandbox. The directories are expected to be created by
 // the zeropod shim on startup.
-func AttachRedirectors(ctx context.Context, log *slog.Logger, tracker socket.Tracker) error {
+func AttachRedirectors(ctx context.Context, log *slog.Logger, probeBinaryName string) error {
 	r := &Redirector{
-		sandboxes: make(map[int]sandbox),
-		log:       log,
-		tracker:   tracker,
+		sandboxes:       make(map[int]sandbox),
+		log:             log,
+		probeBinaryName: probeBinaryName,
 	}
 
 	if _, err := os.Stat(activator.MapsPath()); os.IsNotExist(err) {
@@ -120,7 +119,7 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 				r.Lock()
 				if sb, ok := r.sandboxes[pid]; ok {
 					r.log.Info("cleaning up redirector", "pid", pid)
-					if err := sb.Remove(r.tracker); err != nil {
+					if err := sb.Remove(); err != nil {
 						r.log.Error("error cleaning up redirector", "err", err)
 					}
 				}
@@ -135,7 +134,7 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 }
 
 func (r *Redirector) attachRedirector(pid int) error {
-	bpf, err := activator.InitBPF(pid, r.log)
+	bpf, err := activator.InitBPF(pid, r.log, r.probeBinaryName)
 	if err != nil {
 		return fmt.Errorf("unable to initialize BPF: %w", err)
 	}
@@ -165,11 +164,6 @@ func (r *Redirector) attachRedirector(pid int) error {
 	r.sandboxes[pid] = sandbox{activator: bpf, ips: sandboxIPs}
 	r.Unlock()
 
-	for _, ip := range sandboxIPs {
-		if err := r.trackSandboxIP(ip); err != nil {
-			return fmt.Errorf("tracking sandbox IP: %w", err)
-		}
-	}
 	return nil
 }
 
@@ -249,29 +243,13 @@ func getSandboxIPs(ifaceName string) ([]netip.Addr, error) {
 	return ips, nil
 }
 
-// trackSandboxIP passes the pod/sandbox IP to the tracker so it can ignore
-// kubelet probes going to this pod.
-func (r *Redirector) trackSandboxIP(ip netip.Addr) error {
-	if r.tracker == nil {
-		return nil
-	}
-	r.log.Info("tracking sandbox IP", "addr", ip.String())
-	if err := r.tracker.PutPodIP(ip); err != nil {
-		return fmt.Errorf("putting pod IP in tracker map: %w", err)
-	}
-	return nil
-}
-
 func ignoredDir(dir string) bool {
-	return dir == socket.TCPEventsMap || dir == socket.PodKubeletAddrsMapv4 || dir == socket.PodKubeletAddrsMapv6
+	return dir == activator.SocketTrackerMap ||
+		dir == activator.PodKubeletAddrsMapv4 ||
+		dir == activator.PodKubeletAddrsMapv6
 }
 
-func (sb sandbox) Remove(tracker socket.Tracker) error {
+func (sb sandbox) Remove() error {
 	errs := []error{sb.activator.Cleanup()}
-	if tracker != nil {
-		for _, ip := range sb.ips {
-			errs = append(errs, tracker.RemovePodIP(ip))
-		}
-	}
 	return errors.Join(errs...)
 }

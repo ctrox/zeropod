@@ -217,15 +217,12 @@ func readPodDataEventually(t testing.TB, pod *corev1.Pod) (string, error) {
 }
 
 func defaultBeforeMigration(t *testing.T) {
-	assert.Eventually(t, func() bool {
-		if err := freezerWrite(t.Name(), e2e.port); err != nil {
-			return false
-		}
+	assert.EventuallyWithT(t, func(c *assert.CollectT) {
+		assert.NoError(c, freezerWrite(t.Name(), e2e.port))
 		f, err := freezerRead(e2e.port)
-		if err != nil {
-			return false
+		if assert.NoError(c, err) {
+			assert.Equal(c, t.Name(), f.Data)
 		}
-		return t.Name() == f.Data
 	}, time.Second*10, time.Second)
 }
 

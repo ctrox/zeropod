@@ -54,7 +54,7 @@ build-test:
 	docker build --load -t $(TEST_IMAGE) -f e2e/Dockerfile .
 
 build-ebpf:
-	docker build --load -t $(EBPF_IMAGE) -f socket/Dockerfile .
+	docker build --load -t $(EBPF_IMAGE) -f activator/Dockerfile .
 
 push-dev: build-installer build-manager
 	docker push $(INSTALLER_IMAGE)
@@ -80,8 +80,7 @@ docker-bench: build-test
 	docker run --rm --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make bench
 
 # has to have SYS_ADMIN because the test tries to set netns and mount bpffs
-# we use --pid=host to make the ebpf tracker work without a pid resolver
-docker-test:
+docker-test: build-test
 	docker run --rm --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host --userns=host -v $(PWD):/app $(TEST_IMAGE) go test -v -short ./... $(testargs)
 
 CLANG ?= clang
@@ -113,7 +112,7 @@ ttrpc:
 
 update-vmlinux: ebpf-built-or-build-ebpf
 	docker run --rm -v $(PWD):/app:Z --entrypoint /bin/sh --user $(shell id -u):$(shell id -g) $(EBPF_IMAGE) \
-		-c "bpftool btf dump file /sys/kernel/btf/vmlinux format c" | gzip > socket/vmlinux.h.gz
+		-c "bpftool btf dump file /sys/kernel/btf/vmlinux format c" | gzip > activator/vmlinux.h.gz
 
 ebpf-built-or-build-ebpf:
 	docker image inspect $(EBPF_IMAGE) || $(MAKE) build-ebpf
