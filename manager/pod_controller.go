@@ -165,7 +165,7 @@ func (r podReconciler) prepareMigrationTarget(ctx context.Context, pod *corev1.P
 			mig.Claim(pod.Name, pod.Spec.NodeName)
 			if err := r.kube.Update(ctx, &mig); err != nil {
 				if errors.IsConflict(err) {
-					log.Warn("conflict claiming migration, requeueing")
+					log.Warn("conflict claiming migration, requeuing")
 					return true, nil
 				}
 				return false, fmt.Errorf("failed to claim migration: %w", err)
