@@ -152,8 +152,9 @@ func (s *Server) listen(ctx context.Context, port uint16) (int, error) {
 
 	log.G(ctx).Debugf("listening on %s in ns %s", listener.Addr(), s.ns.Path())
 
-	s.wg.Add(1)
-	go s.serve(ctx, listener, port)
+	s.wg.Go(func() {
+		s.serve(ctx, listener, port)
+	})
 
 	tcpAddr, ok := listener.Addr().(*net.TCPAddr)
 	if !ok {
@@ -183,7 +184,6 @@ func (s *Server) Stop(ctx context.Context) {
 }
 
 func (s *Server) serve(ctx context.Context, listener net.Listener, port uint16) {
-	defer s.wg.Done()
 	wg := sync.WaitGroup{}
 
 	for {
@@ -203,12 +203,10 @@ func (s *Server) serve(ctx context.Context, listener net.Listener, port uint16) 
 				return
 			}
 		} else {
-			wg.Add(1)
-			go func() {
+			wg.Go(func() {
 				log.G(ctx).Debug("accepting connection")
 				s.handleConnection(ctx, conn, port)
-				wg.Done()
-			}()
+			})
 		}
 	}
 }
