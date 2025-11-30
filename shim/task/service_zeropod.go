@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/containerd/cgroups/v3"
+	cgroupv2stats "github.com/containerd/cgroups/v3/cgroup2/stats"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
@@ -22,6 +23,8 @@ import (
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+
+	"github.com/containerd/typeurl/v2"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	zshim "github.com/ctrox/zeropod/shim"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -311,6 +314,35 @@ func (w *wrapper) Update(ctx context.Context, r *taskAPI.UpdateTaskRequest) (*em
 
 	log.G(ctx).Infof("ignoring update for scaled down zeropod: %s", zeropodContainer.ID())
 	return &emptypb.Empty{}, nil
+}
+
+func (w *wrapper) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.StatsResponse, error) {
+	zeropodContainer, ok := w.getZeropodContainer(r.ID)
+	if ok && zeropodContainer.ScaledDown() {
+		return scaledDownStats()
+	}
+	return w.service.Stats(ctx, r)
+}
+
+func scaledDownStats() (*taskAPI.StatsResponse, error) {
+	// if everything is zero, the metrics server discards the metrics so we set
+	// 1 for cpu/memory usage.
+	metrics := &cgroupv2stats.Metrics{
+		CPU: &cgroupv2stats.CPUStat{
+			UsageUsec: 1,
+		},
+		Memory: &cgroupv2stats.MemoryStat{
+			Usage: 1,
+		},
+	}
+
+	data, err := typeurl.MarshalAny(metrics)
+	if err != nil {
+		return nil, err
+	}
+	return &taskAPI.StatsResponse{
+		Stats: typeurl.MarshalProto(data),
+	}, nil
 }
 
 func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Empty, error) {
