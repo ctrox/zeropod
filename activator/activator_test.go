@@ -179,6 +179,7 @@ func TestActivator(t *testing.T) {
 			}
 			assert.NoError(t, s.Reset())
 			s.Stop(t.Context())
+			bpf.Cleanup()
 		})
 	}
 }
