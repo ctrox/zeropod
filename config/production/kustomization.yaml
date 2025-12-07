@@ -10,10 +10,10 @@ components:
 images:
 - name: installer
   newName: ghcr.io/ctrox/zeropod-installer
-  newTag: v0.9.0
+  newTag: v0.9.1
 - name: manager
   newName: ghcr.io/ctrox/zeropod-manager
-  newTag: v0.9.0
+  newTag: v0.9.1
 patches:
 - patch: |-
     - op: add
