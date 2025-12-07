@@ -33,6 +33,7 @@ func TestE2E(t *testing.T) {
 	c := &http.Client{
 		Timeout: time.Second * 10,
 	}
+	defaultScaleDownAfter := scaleDownAfter(time.Second)
 
 	cases := map[string]struct {
 		pod              *corev1.Pod
@@ -53,7 +54,7 @@ func TestE2E(t *testing.T) {
 		// they should leave enough headroom but the tests could be flaky
 		// because of that.
 		"without pre-dump": {
-			pod:            testPod(scaleDownAfter(time.Second)),
+			pod:            testPod(defaultScaleDownAfter),
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			preDump:        false,
@@ -61,7 +62,7 @@ func TestE2E(t *testing.T) {
 			waitScaledDown: true,
 		},
 		"with pre-dump": {
-			pod:            testPod(preDump(true), scaleDownAfter(time.Second)),
+			pod:            testPod(preDump(true), defaultScaleDownAfter),
 			parallelReqs:   1,
 			sequentialReqs: 1,
 			preDump:        true,
@@ -74,7 +75,7 @@ func TestE2E(t *testing.T) {
 		// that the socket tracking does not work as it means the container
 		// has checkpointed.
 		"socket tracking": {
-			pod:            testPod(scaleDownAfter(time.Second)),
+			pod:            testPod(defaultScaleDownAfter),
 			parallelReqs:   1,
 			sequentialReqs: 20,
 			keepAlive:      false,
@@ -98,7 +99,7 @@ func TestE2E(t *testing.T) {
 			expectRunning:  true,
 		},
 		"pod with multiple containers": {
-			pod:            testPod(agnContainer("c1", 8080), agnContainer("c2", 8081), scaleDownAfter(time.Second)),
+			pod:            testPod(agnContainer("c1", 8080), agnContainer("c2", 8081), defaultScaleDownAfter),
 			svc:            testService(8081),
 			parallelReqs:   1,
 			sequentialReqs: 1,
@@ -112,6 +113,13 @@ func TestE2E(t *testing.T) {
 				agnContainer("c3", 8082),
 				containerNamesAnnotation("c1,c3"),
 				portsAnnotation("c1=8080;c3=8082"),
+				readinessProbe(&corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Port: intstr.FromInt(8082),
+						},
+					},
+				}, 2),
 			),
 			svc:            testService(8082),
 			parallelReqs:   1,
@@ -119,14 +127,14 @@ func TestE2E(t *testing.T) {
 			maxReqDuration: time.Second,
 		},
 		"parallel requests": {
-			pod:            testPod(scaleDownAfter(time.Second)),
+			pod:            testPod(defaultScaleDownAfter),
 			parallelReqs:   10,
 			sequentialReqs: 5,
 			maxReqDuration: time.Second,
 			waitScaledDown: true,
 		},
 		"parallel requests with keepalive": {
-			pod:            testPod(scaleDownAfter(time.Second)),
+			pod:            testPod(defaultScaleDownAfter),
 			parallelReqs:   10,
 			sequentialReqs: 5,
 			keepAlive:      true,
@@ -199,7 +207,6 @@ func TestE2E(t *testing.T) {
 	}
 
 	for name, tc := range cases {
-		tc := tc
 		t.Run(name, func(t *testing.T) {
 			if tc.preDump && runtime.GOARCH == "arm64" {
 				t.Skip("skipping pre-dump test as it's not supported on arm64")
@@ -341,7 +348,7 @@ func TestE2E(t *testing.T) {
 
 	t.Run("socket tracker ignores probe", func(t *testing.T) {
 		pod := testPod(
-			scaleDownAfter(time.Second*5),
+			defaultScaleDownAfter,
 			// we use agn as it uses a v6 TCP socket so we can test ipv4 mapped v6 addresses
 			agnContainer("agn", 8080),
 			livenessProbe(&corev1.Probe{

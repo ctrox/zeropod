@@ -134,9 +134,7 @@ func TestActivator(t *testing.T) {
 
 			startServer(t, ctx, s, uint16(port), &tc)
 			for i := 0; i < tc.parallelReqs; i++ {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
+				wg.Go(func() {
 					host := "127.0.0.1"
 					if tc.ipv6 {
 						host = "[::1]"
@@ -159,7 +157,7 @@ func TestActivator(t *testing.T) {
 					assert.Equal(t, tc.expectedCode, resp.StatusCode)
 					assert.Equal(t, tc.expectedBody, string(b))
 					t.Log(string(b))
-				}()
+				})
 			}
 			wg.Wait()
 			var key uint16
