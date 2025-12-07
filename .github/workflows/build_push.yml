@@ -10,7 +10,7 @@ env:
   INSTALLER_IMAGE_NAME: ${{ github.repository }}-installer
   MANAGER_IMAGE_NAME: ${{ github.repository }}-manager
   CRIU_IMAGE_NAME: ${{ github.repository }}-criu
-  CRIU_VERSION: 116991736c7641258a5b7f53f5079b90fc80b99e
+  CRIU_VERSION: v4.2
 
 jobs:
   push_to_registry:

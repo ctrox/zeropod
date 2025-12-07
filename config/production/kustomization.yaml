@@ -18,7 +18,7 @@ patches:
 - patch: |-
     - op: add
       path: /spec/template/spec/initContainers/0/args/-
-      value: -criu-image=ghcr.io/ctrox/zeropod-criu:116991736c7641258a5b7f53f5079b90fc80b99e
+      value: -criu-image=ghcr.io/ctrox/zeropod-criu:v4.2
   target:
     kind: DaemonSet
 apiVersion: kustomize.config.k8s.io/v1beta1
