@@ -45,7 +45,7 @@ struct {
 } active_connections SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_HASH);
     __uint(max_entries, 128); // allows for 128 different ports in a single pod
     __type(key, __be16);   // dport
     __type(value, __u64); // ktime ns of the last tracked event
