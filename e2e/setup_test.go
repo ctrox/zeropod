@@ -694,13 +694,13 @@ func endpointsReady(endpoints []discoveryv1.Endpoint) bool {
 
 func cordonNode(t testing.TB, ctx context.Context, client client.Client, name string) (uncordon func()) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
-	retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	assert.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := client.Get(ctx, objectName(node), node); err != nil {
 			return err
 		}
 		node.Spec.Unschedulable = true
 		return client.Update(ctx, node)
-	})
+	}))
 	return func() {
 		uncordonNode(t, ctx, client, name)
 	}
@@ -708,13 +708,13 @@ func cordonNode(t testing.TB, ctx context.Context, client client.Client, name st
 
 func uncordonNode(t testing.TB, ctx context.Context, client client.Client, name string) {
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
-	retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	assert.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		if err := client.Get(ctx, objectName(node), node); err != nil {
 			return err
 		}
 		node.Spec.Unschedulable = false
 		return client.Update(ctx, node)
-	})
+	}))
 }
 
 func cordonOtherNodes(t testing.TB, ctx context.Context, client client.Client, name string) (uncordon func()) {
@@ -725,9 +725,13 @@ func cordonOtherNodes(t testing.TB, ctx context.Context, client client.Client, n
 		if node.Name == name {
 			continue
 		}
-		require.NoError(t, client.Get(ctx, objectName(&node), &node))
-		node.Spec.Unschedulable = true
-		require.NoError(t, client.Update(ctx, &node))
+		assert.NoError(t, retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+			if err := client.Get(ctx, objectName(&node), &node); err != nil {
+				return err
+			}
+			node.Spec.Unschedulable = true
+			return client.Update(ctx, &node)
+		}))
 		uncordonFuncs = append(uncordonFuncs, func() {
 			uncordonNode(t, ctx, client, node.Name)
 		})
