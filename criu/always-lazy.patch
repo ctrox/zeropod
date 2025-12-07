@@ -1,10 +1,10 @@
 diff --git a/criu/cr-service.c b/criu/cr-service.c
-index 61a04c5ff..c0cce482e 100644
+index dccf4ef38..bb30c4c98 100644
 --- a/criu/cr-service.c
 +++ b/criu/cr-service.c
-@@ -285,6 +285,12 @@ int exec_rpc_query_external_files(char *name, int sk)
- 
- static char images_dir[PATH_MAX];
+@@ -393,6 +393,12 @@ static int setup_logging_from_req(CriuOpts *req, bool output_changed_by_rpc_conf
+ 	return 0;
+ }
  
 +bool file_exists(char *filename)
 +{
@@ -15,24 +15,24 @@ index 61a04c5ff..c0cce482e 100644
  static int setup_opts_from_req(int sk, CriuOpts *req)
  {
  	struct ucred ids;
-@@ -293,6 +299,7 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
- 	char images_dir_path[PATH_MAX];
- 	char work_dir_path[PATH_MAX];
+@@ -400,6 +406,7 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
+ 	socklen_t ids_len = sizeof(struct ucred);
+ 	char images_dir_path[PATH_MAX] = "";
  	char status_fd[PATH_MAX];
 +	char lazy_pages_socket_path[PATH_MAX];
  	bool output_changed_by_rpc_conf = false;
  	bool work_changed_by_rpc_conf = false;
  	bool imgs_changed_by_rpc_conf = false;
-@@ -554,6 +561,14 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
+@@ -522,6 +529,14 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
  		opts.lazy_pages = req->lazy_pages;
  	}
  
-+	strcpy(lazy_pages_socket_path, images_dir);
-+	strcat(lazy_pages_socket_path, "/lazy-pages.socket");
-+
-+	if (file_exists(lazy_pages_socket_path)) {
-+		// always enable lazy-pages if the socket exists
-+		opts.lazy_pages = true;
++	if (resolve_images_dir_path(lazy_pages_socket_path, imgs_changed_by_rpc_conf, req, ids.pid) == 0) {
++		strcat(lazy_pages_socket_path, "/lazy-pages.socket");
++		if (file_exists(lazy_pages_socket_path)) {
++			// always enable lazy-pages if the socket exists
++			opts.lazy_pages = true;
++		}
 +	}
 +
  	if (req->has_pre_dump_mode) {
