@@ -437,6 +437,12 @@ func livenessProbe(probe *corev1.Probe) podOption {
 	}
 }
 
+func readinessProbe(probe *corev1.Probe, index int) podOption {
+	return func(p *pod) {
+		p.spec.Containers[index].StartupProbe = probe
+	}
+}
+
 func disableDataMigration() podOption {
 	return annotations(map[string]string{
 		shim.DisableMigrateDataAnnotationKey: "true",
@@ -656,7 +662,11 @@ func waitForService(t testing.TB, ctx context.Context, c client.Client, svc *cor
 			return false
 		}
 
-		return len(endpointSliceList.Items[0].Endpoints) == replicas
+		if len(endpointSliceList.Items[0].Endpoints) != replicas {
+			return false
+		}
+
+		return endpointsReady(endpointSliceList.Items[0].Endpoints)
 	}, time.Minute, time.Second, "waiting for service endpoints to be ready") {
 		endpointSliceList := &discoveryv1.EndpointSliceList{}
 		if err := c.List(ctx, endpointSliceList, client.MatchingLabels{"kubernetes.io/service-name": svc.Name}); err == nil {
@@ -670,6 +680,16 @@ func waitForService(t testing.TB, ctx context.Context, c client.Client, svc *cor
 	// we give it some more time before returning just to make sure it's
 	// really ready to receive requests.
 	time.Sleep(time.Millisecond * 500)
+}
+
+func endpointsReady(endpoints []discoveryv1.Endpoint) bool {
+	ready := 0
+	for _, endpoint := range endpoints {
+		if endpoint.Conditions.Ready != nil && *endpoint.Conditions.Ready {
+			ready++
+		}
+	}
+	return ready == len(endpoints)
 }
 
 func cordonNode(t testing.TB, ctx context.Context, client client.Client, name string) (uncordon func()) {

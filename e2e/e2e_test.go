@@ -33,7 +33,7 @@ func TestE2E(t *testing.T) {
 	c := &http.Client{
 		Timeout: time.Second * 10,
 	}
-	defaultScaleDownAfter := scaleDownAfter(time.Second * 5)
+	defaultScaleDownAfter := scaleDownAfter(time.Second)
 
 	cases := map[string]struct {
 		pod              *corev1.Pod
@@ -113,6 +113,13 @@ func TestE2E(t *testing.T) {
 				agnContainer("c3", 8082),
 				containerNamesAnnotation("c1,c3"),
 				portsAnnotation("c1=8080;c3=8082"),
+				readinessProbe(&corev1.Probe{
+					ProbeHandler: corev1.ProbeHandler{
+						HTTPGet: &corev1.HTTPGetAction{
+							Port: intstr.FromInt(8082),
+						},
+					},
+				}, 2),
 			),
 			svc:            testService(8082),
 			parallelReqs:   1,
