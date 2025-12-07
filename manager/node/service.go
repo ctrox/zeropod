@@ -227,21 +227,20 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 	container := v1.MigrationContainer{}
 	pCtx, cancel := context.WithTimeout(ctx, time.Second*10)
 	defer cancel()
-	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (done bool, perr error) {
+	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (bool, error) {
 		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
-			perr = err
-			return
+			return false, err
 		}
 		for _, ctr := range migration.Spec.Containers {
 			if ctr.Name == req.PodInfo.ContainerName {
 				if (migration.Spec.LiveMigration && ctr.PageServer != nil && ctr.ImageServer != nil) ||
 					ctr.ImageServer != nil {
 					container = ctr
-					done = true
+					return true, nil
 				}
 			}
 		}
-		return
+		return false, nil
 	}); err != nil {
 		ns.setMigrationFailed(ctx, req.PodInfo.ContainerName, migration)
 		log.Error("migration servers unset", "container_name", req.PodInfo.ContainerName)
@@ -518,19 +517,18 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 	// wait for the migration to be claimed
 	pCtx, cancel := context.WithTimeout(ctx, migrationClaimTimeout)
 	defer cancel()
-	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (done bool, perr error) {
+	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (bool, error) {
 		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
 			if kerrors.IsNotFound(err) {
-				return
+				return false, nil
 			}
-			perr = err
-			return
+			return false, err
 		}
 		if migration.Claimed() {
 			log.Info("migration is claimed for evac")
-			done = true
+			return true, nil
 		}
-		return
+		return false, nil
 	}); err != nil {
 		log.Error("prepare evac request failed", "name", migration.Name, "error", err)
 		if err := ns.updateMigrationStatus(ctx, client.ObjectKeyFromObject(migration), func(m *v1.Migration) (bool, error) {
@@ -547,10 +545,9 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 	log.Info("waiting for migration restore to be ready")
 	readyCtx, cancel := context.WithTimeout(ctx, migrationReadyTimeout)
 	defer cancel()
-	if err := pollUntilContextCancel(readyCtx, func(ctx context.Context) (done bool, perr error) {
+	if err := pollUntilContextCancel(readyCtx, func(ctx context.Context) (bool, error) {
 		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
-			perr = err
-			return
+			return false, err
 		}
 		return migration.Spec.RestoreReady, nil
 	}); err != nil {
