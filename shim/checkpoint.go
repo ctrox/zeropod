@@ -52,7 +52,7 @@ func (c *Container) kill(ctx context.Context) error {
 	return nil
 }
 
-func (c *Container) checkpoint(ctx context.Context) error {
+func (c *Container) checkpoint(ctx context.Context) (retErr error) {
 	c.checkpointRestore.Lock()
 	defer c.checkpointRestore.Unlock()
 
@@ -107,6 +107,13 @@ func (c *Container) checkpoint(ctx context.Context) error {
 	opts.ImagePath = nodev1.SnapshotPath(c.ID())
 
 	beforeCheckpoint := time.Now()
+	c.setScaledDownFlag(true)
+	defer func() {
+		if retErr != nil {
+			c.setScaledDownFlag(false)
+		}
+	}()
+
 	if err := initProcess.Runtime().Checkpoint(ctx, c.ID(), opts); err != nil {
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
 		b, err := os.ReadFile(path.Join(workDir, "dump.log"))

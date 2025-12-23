@@ -218,6 +218,10 @@ func (c *Container) setPhaseNotify(phase v1.ContainerPhase, duration time.Durati
 	c.sendEvent(c.Status())
 }
 
+func (c *Container) setScaledDownFlag(flag bool) {
+	c.scaledDown = flag
+}
+
 func (c *Container) SetSkipStart(skip bool) {
 	c.skipStart = skip
 }
