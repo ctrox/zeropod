@@ -1,0 +1,29 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zeropod-node
+  namespace: zeropod-system
+spec:
+  template:
+    spec:
+      volumes:
+        - name: containerd-etc
+          hostPath:
+            path: /etc/k0s
+        - name: containerd-run
+          hostPath:
+            path: /run/k0s
+      initContainers:
+        - name: installer
+          volumeMounts:
+            - name: containerd-etc
+              mountPath: /etc/k0s
+            - name: containerd-run
+              mountPath: /run/k0s
+      containers:
+        - name: manager
+          volumeMounts:
+            - name: containerd-etc
+              mountPath: /etc/k0s
+            - name: containerd-run
+              mountPath: /run/k0s

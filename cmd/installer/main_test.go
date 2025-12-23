@@ -2,7 +2,10 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/containerd/containerd/v2/cmd/containerd/server/config"
@@ -90,11 +93,12 @@ imports = [
   "runtime_zeropod.toml",
 ]
 `
-	containerdv1AlreadyConfigured = fullContainerdConfigV2 + runtimeConfig + `
+)
+
+var containerdv1AlreadyConfigured = fullContainerdConfigV2 + fmt.Sprintf(runtimeConfig, strings.TrimSuffix(defaultOptPath, "/"), true) + `
 [plugins."io.containerd.internal.v1.opt"]
   path = "/opt/zeropod"
 `
-)
 
 type testConfig struct {
 	containerdConfig       string
@@ -197,7 +201,7 @@ func TestConfigureContainerd(t *testing.T) {
 			assert.NoError(config.LoadConfig(ctx, configName+tc.newConfigSuffix, conf))
 
 			if !tc.containerdv1 {
-				zeropodConfig, err := os.ReadFile(zeropodRuntimeConfigPath(configName))
+				zeropodConfig, err := os.ReadFile(zeropodRuntimeConfigPath(tc.runtime, configName))
 				require.NoError(err)
 				assert.NotEmpty(zeropodConfig)
 				t.Log(string(zeropodConfig))
@@ -218,6 +222,34 @@ func TestConfigureContainerd(t *testing.T) {
 	}
 }
 
+func TestConfigureContainerdK0s(t *testing.T) {
+	t.Run("writes drop-in", func(t *testing.T) {
+		temp := t.TempDir()
+		cfg := filepath.Join(temp, "containerd.toml")
+		managedConfig := []byte("# " + k0sManagedSentinel + "\nversion = 2\n")
+		require.NoError(t, os.WriteFile(cfg, managedConfig, 0644))
+
+		restart, err := configureContainerdK0s(context.Background(), cfg)
+		require.NoError(t, err)
+		assert.False(t, restart)
+
+		dropIn := filepath.Join(filepath.Dir(cfg), k0sDropInDirName, zeropodTomlName)
+		data, err := os.ReadFile(dropIn)
+		require.NoError(t, err)
+		assert.Contains(t, string(data), "runtime_type = \"io.containerd.runc.v2\"")
+	})
+
+	t.Run("requires managed config", func(t *testing.T) {
+		temp := t.TempDir()
+		cfg := filepath.Join(temp, "containerd.toml")
+		require.NoError(t, os.WriteFile(cfg, []byte("version = 2\n"), 0644))
+
+		_, err := configureContainerdK0s(context.Background(), cfg)
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "not k0s managed")
+	})
+}
+
 func setupTestConfig(t *testing.T, tc testConfig) string {
 	temp := t.TempDir()
 	configFile, err := os.CreateTemp(temp, "containerd-config-*.toml")
@@ -226,7 +258,7 @@ func setupTestConfig(t *testing.T, tc testConfig) string {
 
 	if tc.preCreateZeropodConfig {
 		if !tc.containerdv1 {
-			require.NoError(t, writeZeropodRuntimeConfig(configFile.Name(), tc.expectedOptPath, tc.expectedOptPath == "", 2))
+			require.NoError(t, writeZeropodRuntimeConfig(tc.runtime, configFile.Name(), tc.expectedOptPath, tc.expectedOptPath == "", 2, useSystemdCgroup(tc.runtime)))
 		}
 		require.NoError(t, backupContainerdConfig(configFile.Name()))
 	}
