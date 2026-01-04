@@ -449,6 +449,12 @@ func disableDataMigration() podOption {
 	})
 }
 
+func lazyRestore() podOption {
+	return annotations(map[string]string{
+		shim.LazyRestoreAnnotationKey: "true",
+	})
+}
+
 const agnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.39"
 
 func agnContainer(name string, port int) podOption {
@@ -927,7 +933,7 @@ func getNodeMetrics(ctx context.Context, c client.Client, cfg *rest.Config) (map
 		}
 		defer pf.Stop()
 
-		resp, err := http.Get(fmt.Sprintf("http://localhost:%v/metrics", pf.ListenPort))
+		resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%v/metrics", pf.ListenPort))
 		if err != nil {
 			return nil, err
 		}
@@ -1008,7 +1014,7 @@ func freezerWrite(data string, port int) error {
 	if err != nil {
 		return err
 	}
-	resp, err := http.Post(fmt.Sprintf("http://localhost:%d/set", port), "", bytes.NewBuffer(b))
+	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/set", port), "", bytes.NewBuffer(b))
 	if err != nil {
 		return err
 	}
@@ -1017,7 +1023,7 @@ func freezerWrite(data string, port int) error {
 
 func freezerRead(port int) (*freeze, error) {
 	f := &freeze{}
-	resp, err := http.Get(fmt.Sprintf("http://localhost:%d/get", port))
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/get", port))
 	if err != nil {
 		return nil, err
 	}
@@ -1035,7 +1041,7 @@ func availabilityCheck(ctx context.Context, port int) time.Duration {
 	for {
 		lowTimeoutClient := &http.Client{Timeout: time.Millisecond * 50}
 		beforeReq := time.Now()
-		resp, err := lowTimeoutClient.Get(fmt.Sprintf("http://localhost:%d/get", port))
+		resp, err := lowTimeoutClient.Get(fmt.Sprintf("http://127.0.0.1:%d/get", port))
 		if err != nil {
 			downtime += time.Since(beforeReq)
 			continue

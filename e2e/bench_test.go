@@ -84,7 +84,7 @@ func BenchmarkRestore(b *testing.B) {
 				b.StartTimer()
 
 				before := time.Now()
-				resp, err := c.Get(fmt.Sprintf("http://localhost:%d", port))
+				resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d", port))
 				if !assert.NoError(b, err) {
 					b.Log("error", err)
 					time.Sleep(time.Hour)

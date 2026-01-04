@@ -143,7 +143,7 @@ func TestE2E(t *testing.T) {
 		},
 		"pod with HTTP probe": {
 			pod: testPod(
-				scaleDownAfter(time.Second),
+				defaultScaleDownAfter,
 				addContainer("nginx", "nginx", nil, 80),
 				livenessProbe(&corev1.Probe{
 					InitialDelaySeconds: 5,
@@ -163,7 +163,7 @@ func TestE2E(t *testing.T) {
 		},
 		"pod with TCP probe": {
 			pod: testPod(
-				scaleDownAfter(time.Second),
+				defaultScaleDownAfter,
 				addContainer("nginx", "nginx", nil, 80),
 				livenessProbe(&corev1.Probe{
 					InitialDelaySeconds: 5,
@@ -183,7 +183,7 @@ func TestE2E(t *testing.T) {
 		},
 		"pod with large HTTP probe and increased buffer": {
 			pod: testPod(
-				scaleDownAfter(time.Second),
+				defaultScaleDownAfter,
 				annotations(map[string]string{shim.ProbeBufferSizeAnnotationKey: "2048"}),
 				addContainer("nginx", "nginx", nil, 80),
 				livenessProbe(&corev1.Probe{
@@ -203,6 +203,17 @@ func TestE2E(t *testing.T) {
 			waitScaledDown:   true,
 			expectRunning:    false,
 			expectScaledDown: true,
+		},
+		"lazy restore": {
+			pod: testPod(
+				defaultScaleDownAfter,
+				lazyRestore(),
+				addContainer("nginx", "nginx", nil, 80),
+			),
+			parallelReqs:   1,
+			maxReqDuration: time.Second,
+			sequentialReqs: 5,
+			waitScaledDown: true,
 		},
 	}
 
@@ -243,7 +254,7 @@ func TestE2E(t *testing.T) {
 						c.Transport = &http.Transport{DisableKeepAlives: !tc.keepAlive}
 
 						before := time.Now()
-						resp, err := c.Get(fmt.Sprintf("http://localhost:%d", e2e.port))
+						resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d", e2e.port))
 						if err != nil {
 							t.Error(err)
 							return
@@ -368,7 +379,7 @@ func TestE2E(t *testing.T) {
 		// hitting it
 		waitUntilScaledDown(t, ctx, e2e.client, pod)
 		// make a real request and expect it to scale down again
-		resp, err := c.Get(fmt.Sprintf("http://localhost:%d", e2e.port))
+		resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d", e2e.port))
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		waitUntilScaledDown(t, ctx, e2e.client, pod)

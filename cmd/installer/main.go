@@ -87,6 +87,7 @@ network-lock skip
     "zeropod.ctrox.dev/disable-probe-detection",
     "zeropod.ctrox.dev/probe-buffer-size",
     "zeropod.ctrox.dev/disable-migrate-data",
+    "zeropod.ctrox.dev/lazy-restore",
     "io.containerd.runc.v2.group"
   ]
 
@@ -110,6 +111,7 @@ network-lock skip
     "zeropod.ctrox.dev/disable-probe-detection",
     "zeropod.ctrox.dev/probe-buffer-size",
     "zeropod.ctrox.dev/disable-migrate-data",
+    "zeropod.ctrox.dev/lazy-restore",
     "io.containerd.runc.v2.group"
   ]
 

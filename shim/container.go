@@ -55,6 +55,7 @@ type Container struct {
 	// restores can cause cgroup confusion. This mutex is shared between all
 	// containers.
 	checkpointRestore *sync.Mutex
+	lazyRestore       sync.Mutex
 	evacuation        sync.Once
 	metrics           *v1.ContainerMetrics
 	runcVersion       string
@@ -408,7 +409,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 	return func() error {
 		log.G(ctx).Printf("got a request")
 
-		restoredContainer, _, err := c.Restore(ctx)
+		restoredContainer, err := c.Restore(ctx)
 		if err != nil {
 			if errors.Is(err, ErrAlreadyRestored) {
 				log.G(ctx).Info("container is already restored, ignoring request")

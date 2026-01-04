@@ -1,18 +1,20 @@
 package shim
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"time"
 
 	"github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types/runc/options"
-	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
 	"github.com/containerd/containerd/v2/pkg/cio"
 	cioutil "github.com/containerd/containerd/v2/pkg/ioutil"
@@ -33,14 +35,15 @@ var (
 	ErrRestoreDial          = errors.New("failed to connect to node socket")
 )
 
-func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
+const lazyCancelTimeout = time.Minute
+
+func (c *Container) Restore(ctx context.Context) (*runc.Container, error) {
 	c.checkpointRestore.Lock()
 	defer c.checkpointRestore.Unlock()
 	if !c.ScaledDown() {
-		return nil, nil, ErrAlreadyRestored
+		return nil, ErrAlreadyRestored
 	}
 
-	beforeRestore := time.Now()
 	go func() {
 		// as soon as we checkpoint the container, the log pipe is closed. As
 		// we currently have no way to instruct containerd to restore the logs
@@ -58,7 +61,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		}
 	}()
 
-	createReq := &task.CreateTaskRequest{
+	req := &task.CreateTaskRequest{
 		ID:               c.ID(),
 		Options:          c.createOpts,
 		Bundle:           c.Bundle,
@@ -70,13 +73,32 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		Checkpoint:       nodev1.SnapshotPath(c.ID()),
 	}
 
-	if c.cfg.DisableCheckpointing {
-		createReq.Checkpoint = ""
+	if !c.cfg.LazyRestore {
+		return c.restore(ctx, req)
 	}
 
-	container, err := runc.NewContainer(namespaces.WithNamespace(ctx, c.cfg.ContainerdNamespace), c.platform, createReq)
+	lazyCtx, lazyCancel := context.WithTimeout(ctx, lazyCancelTimeout)
+	if err := c.prepareLazyRestore(lazyCtx, req); err != nil {
+		return nil, fmt.Errorf("preparing lazy restore: %w", err)
+	}
+	cont, err := c.restore(ctx, req)
 	if err != nil {
-		return nil, nil, err
+		// only cancel lazy restore on error, a successful restore will happen
+		// in the background.
+		lazyCancel()
+	}
+	return cont, err
+}
+
+func (c *Container) restore(ctx context.Context, req *task.CreateTaskRequest) (*runc.Container, error) {
+	beforeRestore := time.Now()
+	if c.cfg.DisableCheckpointing {
+		req.Checkpoint = ""
+	}
+
+	container, err := runc.NewContainer(namespaces.WithNamespace(ctx, c.cfg.ContainerdNamespace), c.platform, req)
+	if err != nil {
+		return nil, err
 	}
 	// it's important to restore the cgroup as NewContainer won't set it as
 	// the process is not yet restored.
@@ -89,7 +111,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 
 	p, err := container.Process("")
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	log.G(ctx).Info("restore: process created")
 
@@ -100,8 +122,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		} else {
 			log.G(ctx).Errorf("restore.log: %s", b)
 		}
-
-		return nil, nil, fmt.Errorf("start failed during restore: %w", err)
+		return nil, fmt.Errorf("start failed during restore: %w", err)
 	}
 	c.Container = container
 	c.process = p
@@ -114,10 +135,42 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 
 	// process is running again, we don't need to redirect traffic anymore
 	if err := c.activator.DisableRedirects(); err != nil {
-		return nil, nil, fmt.Errorf("could not disable redirects: %w", err)
+		return nil, fmt.Errorf("could not disable redirects: %w", err)
 	}
 
-	return container, p, nil
+	return container, nil
+}
+
+func (c *Container) prepareLazyRestore(ctx context.Context, createReq *task.CreateTaskRequest) error {
+	beforeLazy := time.Now()
+	go func() {
+		c.lazyRestore.Lock()
+		defer c.lazyRestore.Unlock()
+		args := []string{
+			"-o", "/dev/stdout", "-v", "lazy-pages", "--images-dir",
+			nodev1.SnapshotPath(c.ID()), "--work-dir", nodev1.SnapshotPath(c.ID()),
+		}
+		cmd := exec.CommandContext(ctx, "criu", args...)
+		log.G(ctx).Info("starting lazy-pages daemon", "cmd", cmd.Args)
+		execLogger := newExecLogger(ctx, "criu-lazy-pages")
+		cmd.Stderr = execLogger
+		cmd.Stdout = execLogger
+		if err := cmd.Start(); err != nil {
+			log.G(ctx).WithError(err).Error("error running lazy-pages daemon")
+			return
+		}
+		cmd.Wait()
+		log.G(ctx).Info("lazy-pages server closed")
+	}()
+	if err := waitForLazyPagesSocket(ctx, nodev1.SnapshotPath(c.ID()), time.Second); err != nil {
+		return err
+	}
+	log.G(ctx).WithField("duration", time.Since(beforeLazy).String()).Debug("lazy-pages daemon started")
+
+	if err := setCriuWorkPath(createReq, createReq.Checkpoint); err != nil {
+		return err
+	}
+	return nil
 }
 
 // restoreLoggers creates the appropriate fifos and pipes the logs to the
@@ -312,4 +365,24 @@ func FinishRestore(ctx context.Context, id string, cfg *Config, startTime time.T
 	}
 
 	return nil
+}
+
+type execLogger struct {
+	name string
+	log  *log.Entry
+}
+
+func newExecLogger(ctx context.Context, name string) *execLogger {
+	return &execLogger{
+		log:  log.G(ctx),
+		name: name,
+	}
+}
+
+func (el execLogger) Write(p []byte) (n int, err error) {
+	scanner := bufio.NewScanner(bytes.NewReader(p))
+	for scanner.Scan() {
+		el.log.WithField("exec", el.name).Debug(scanner.Text())
+	}
+	return len(p), nil
 }

@@ -26,6 +26,7 @@ const (
 	DisableProbeDetectAnnotationKey  = "zeropod.ctrox.dev/disable-probe-detection"
 	ProbeBufferSizeAnnotationKey     = "zeropod.ctrox.dev/probe-buffer-size"
 	DisableMigrateDataAnnotationKey  = "zeropod.ctrox.dev/disable-migrate-data"
+	LazyRestoreAnnotationKey         = "zeropod.ctrox.dev/lazy-restore"
 	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
 	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
 	CRIPodNameAnnotation             = "io.kubernetes.cri.sandbox-name"
@@ -57,6 +58,7 @@ type Config struct {
 	DisableProbeDetection bool
 	ProbeBufferSize       int
 	DisableMigrateData    bool
+	LazyRestore           bool
 	spec                  *specs.Spec
 }
 
@@ -100,28 +102,12 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 
-	disableCheckpointValue := spec.Annotations[DisableCheckpoiningAnnotationKey]
-	disableCheckpointing := false
-	if disableCheckpointValue != "" {
-		disableCheckpointing, err = strconv.ParseBool(disableCheckpointValue)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	preDump := false
-	preDumpValue := spec.Annotations[PreDumpAnnotationKey]
-	if preDumpValue != "" {
-		preDump, err = strconv.ParseBool(preDumpValue)
-		if err != nil {
-			return nil, err
-		}
-		if preDump && runtime.GOARCH == "arm64" {
-			// disable pre-dump on arm64
-			// https://github.com/checkpoint-restore/criu/issues/1859
-			log.G(ctx).Warnf("disabling pre-dump: it was requested but is not supported on %s", runtime.GOARCH)
-			preDump = false
-		}
+	preDump := decodeBool(spec.Annotations, PreDumpAnnotationKey, false)
+	if preDump && runtime.GOARCH == "arm64" {
+		// disable pre-dump on arm64
+		// https://github.com/checkpoint-restore/criu/issues/1859
+		log.G(ctx).Warnf("disabling pre-dump: it was requested but is not supported on %s", runtime.GOARCH)
+		preDump = false
 	}
 
 	containerNames := []string{}
@@ -141,15 +127,6 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ns = defaultContainerdNS
 	}
 
-	disableProbeDetectionValue := spec.Annotations[DisableProbeDetectAnnotationKey]
-	disableProbeDetection := false
-	if disableProbeDetectionValue != "" {
-		disableProbeDetection, err = strconv.ParseBool(disableProbeDetectionValue)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	probeBufferSize := defaultProbeBufferSize
 	probeBufferSizeValue := spec.Annotations[ProbeBufferSizeAnnotationKey]
 	if probeBufferSizeValue != "" {
@@ -159,19 +136,10 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 
-	disableMigrateDataValue := spec.Annotations[DisableMigrateDataAnnotationKey]
-	disableMigrateData := false
-	if disableMigrateDataValue != "" {
-		disableMigrateData, err = strconv.ParseBool(disableMigrateDataValue)
-		if err != nil {
-			return nil, err
-		}
-	}
-
 	return &Config{
 		Ports:                 containerPorts,
 		ScaleDownDuration:     dur,
-		DisableCheckpointing:  disableCheckpointing,
+		DisableCheckpointing:  decodeBool(spec.Annotations, DisableCheckpoiningAnnotationKey, false),
 		PreDump:               preDump,
 		Migrate:               migrate,
 		LiveMigrate:           spec.Annotations[LiveMigrateAnnotationKey],
@@ -182,9 +150,10 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		PodNamespace:          spec.Annotations[CRIPodNamespaceAnnotation],
 		PodUID:                spec.Annotations[CRIPodUIDAnnotation],
 		ContainerdNamespace:   ns,
-		DisableProbeDetection: disableProbeDetection,
 		ProbeBufferSize:       probeBufferSize,
-		DisableMigrateData:    disableMigrateData,
+		DisableProbeDetection: decodeBool(spec.Annotations, DisableProbeDetectAnnotationKey, false),
+		DisableMigrateData:    decodeBool(spec.Annotations, DisableMigrateDataAnnotationKey, false),
+		LazyRestore:           decodeBool(spec.Annotations, LazyRestoreAnnotationKey, false),
 		spec:                  spec,
 	}, nil
 }
@@ -210,4 +179,16 @@ func (cfg Config) LiveMigrationEnabled() bool {
 
 func (cfg Config) AnyMigrationEnabled() bool {
 	return cfg.migrationEnabled() || cfg.LiveMigrationEnabled()
+}
+
+func decodeBool(annotations map[string]string, key string, def bool) bool {
+	val := annotations[key]
+	if val == "" {
+		return def
+	}
+	b, err := strconv.ParseBool(val)
+	if err != nil {
+		return def
+	}
+	return b
 }

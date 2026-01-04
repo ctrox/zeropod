@@ -264,7 +264,7 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*emp
 	if zeropodContainer.ScaledDown() {
 		log.G(ctx).Printf("got exec for scaled down container, restoring")
 
-		_, _, err := zeropodContainer.Restore(ctx)
+		_, err := zeropodContainer.Restore(ctx)
 		if err != nil {
 			// restore failed, this is currently unrecoverable, so we shutdown
 			// our shim and let containerd recreate it.
