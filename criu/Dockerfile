@@ -5,6 +5,11 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     libcap-dev libnl-3-dev libnet-dev pkg-config curl ca-certificates \
     gnutls-dev uuid-dev
 
+# enable contrib and non-free for cuda deps
+RUN sed -i 's/Components: main/Components: main contrib non-free non-free-firmware/g' /etc/apt/sources.list.d/debian.sources
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+    nvidia-cuda-dev libnvidia-ml-dev
+
 WORKDIR /workspace
 
 RUN git clone https://github.com/checkpoint-restore/criu.git
@@ -27,3 +32,4 @@ RUN mkdir criu-libs/ && \
 FROM scratch AS export-stage
 COPY --from=build /workspace/criu/criu/criu /bin/
 COPY --from=build /workspace/criu/criu-libs /lib/
+COPY --from=build /workspace/criu/plugins/cuda/cuda.so /lib/criu/

@@ -140,7 +140,24 @@ func (c *Container) checkpointExtraArgs() []string {
 		return def
 	}
 	if maj == 1 && min >= 3 || maj > 1 {
-		return []string{checkpointArgSkipTCPInFlight}
+		def = append(def, checkpointArgSkipTCPInFlight)
 	}
+
+	// Check if the cuda-checkpoint plugin is installed and add it to the library path
+	if exe, err := os.Executable(); err == nil {
+		// resolve plugin path relative to the shim binary
+		// shim is in .../bin/shim, plugin is in .../lib/criu/cuda.so
+		cudaPlugin := path.Join(path.Dir(path.Dir(exe)), "lib", "criu", "cuda.so")
+		if _, err := os.Stat(cudaPlugin); err == nil {
+			def = append(def, "--lib", cudaPlugin)
+		} else {
+			// fallback to default path
+			cudaPlugin = "/opt/zeropod/lib/criu/cuda.so"
+			if _, err := os.Stat(cudaPlugin); err == nil {
+				def = append(def, "--lib", cudaPlugin)
+			}
+		}
+	}
+
 	return def
 }
