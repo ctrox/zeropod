@@ -1,0 +1,19 @@
+resources:
+  - ../production
+patches:
+  - path: microk8s.yaml
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/0/args
+        value: []
+      - op: add
+        path: /spec/template/spec/initContainers/0/args/-
+        value: -containerd-socket=/run/containerd/containerd.sock
+      - op: add
+        path: /spec/template/spec/initContainers/0/args/-
+        value: -containerd-config=/var/snap/microk8s/current/args/containerd-template.toml
+      - op: add
+        path: /spec/template/spec/initContainers/0/args/-
+        value: -containerd-namespace=k8s.io
+    target:
+      kind: DaemonSet

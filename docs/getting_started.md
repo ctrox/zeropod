@@ -45,6 +45,9 @@ kubectl apply -k https://github.com/ctrox/zeropod/config/k3s
 
 # rke2:
 kubectl apply -k https://github.com/ctrox/zeropod/config/rke2
+
+# microk8s:
+kubectl apply -k https://github.com/ctrox/zeropod/config/microk8s
 ```
 
 By default, zeropod will only be installed on nodes with the label
