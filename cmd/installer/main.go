@@ -40,6 +40,7 @@ var (
 	containerdSocket    = flag.String("containerd-socket", defaultContainerdSock, "path to the containerd socket")
 	containerdConfig    = flag.String("containerd-config", defaultContainerdConfigPath, "path to the containerd config file")
 	containerdNamespace = flag.String("containerd-namespace", defaultContainerdNamespace, "containerd namespace")
+	systemdCgroup       = flag.Bool("systemd-cgroup", true, "enbles systemd cgroup support")
 )
 
 type containerRuntime string
@@ -48,6 +49,7 @@ const (
 	runtimeContainerd containerRuntime = "containerd"
 	runtimeRKE2       containerRuntime = "rke2"
 	runtimeK3S        containerRuntime = "k3s"
+	runtimeMicroK8s   containerRuntime = "microk8s"
 
 	hostRoot                    = "/host"
 	binPath                     = "bin/"
@@ -96,7 +98,7 @@ network-lock skip
 
   [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.zeropod.options]
     # use systemd cgroup by default
-    SystemdCgroup = true
+    SystemdCgroup = %t
 `
 	configVersion2 = "version = 2"
 	runtimeConfig  = `
@@ -119,7 +121,7 @@ network-lock skip
 
   [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod.options]
     # use systemd cgroup by default
-    SystemdCgroup = true
+    SystemdCgroup = %t
 `
 )
 
@@ -271,6 +273,8 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 		}
 
 		return nil
+	case runtimeMicroK8s:
+		return restartUnit(ctx, conn, "snap.microk8s.daemon-containerd.service")
 	}
 
 	return nil
@@ -398,7 +402,7 @@ func configureContainerdv1(ctx context.Context, runtime containerRuntime, contai
 		optPath = containerdOptPath
 	}
 
-	if _, err := fmt.Fprintf(cfg, runtimeConfig, strings.TrimSuffix(optPath, "/")); err != nil {
+	if _, err := fmt.Fprintf(cfg, runtimeConfig, strings.TrimSuffix(optPath, "/"), *systemdCgroup); err != nil {
 		return false, err
 	}
 
@@ -496,7 +500,7 @@ func writeZeropodRuntimeConfig(containerdConfig, optPath string, existingOpt boo
 	if version == 3 {
 		zeropodRuntimeConfig = runtimeConfigV3
 	}
-	zeropodRuntimeConfig = fmt.Sprintf(zeropodRuntimeConfig, strings.TrimSuffix(optPath, "/"))
+	zeropodRuntimeConfig = fmt.Sprintf(zeropodRuntimeConfig, strings.TrimSuffix(optPath, "/"), *systemdCgroup)
 	if !existingOpt {
 		zeropodRuntimeConfig = zeropodRuntimeConfig + fmt.Sprintf(optPlugin, optPath)
 	}

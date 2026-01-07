@@ -8,12 +8,21 @@ patches:
         value: []
       - op: add
         path: /spec/template/spec/initContainers/0/args/-
+        value: -runtime=microk8s
+      - op: add
+        path: /spec/template/spec/initContainers/0/args/-
+        value: -systemd-cgroup=false
+      - op: add
+        path: /spec/template/spec/initContainers/0/args/-
         value: -containerd-socket=/run/containerd/containerd.sock
       - op: add
         path: /spec/template/spec/initContainers/0/args/-
-        value: -containerd-config=/var/snap/microk8s/current/args/containerd-template.toml
+        value: -containerd-config=/etc/containerd/containerd-template.toml
       - op: add
         path: /spec/template/spec/initContainers/0/args/-
         value: -containerd-namespace=k8s.io
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: -probe-binary-name=kubelite
     target:
       kind: DaemonSet

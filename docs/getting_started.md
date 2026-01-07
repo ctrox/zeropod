@@ -34,10 +34,10 @@ kubectl apply -k https://github.com/ctrox/zeropod/config/production
 kubectl apply -k https://github.com/ctrox/zeropod/config/gke
 ```
 
-> ⚠️⚠️⚠️ For k3s and rke2, the initial installation needs to restart the
-> k3s/k3s-agent or rke2-server/rke2-agent services, since it's not possible to
+> ⚠️⚠️⚠️ For k3s, rke2 and microk8s, the initial installation needs to restart the
+> k3s/k3s-agent, rke2-server/rke2-agent or snap services, since it's not possible to
 > just restart Containerd. This might lead to restarts of other workloads on
-> each targeted node depending on the k3s/rke2 version.
+> each targeted node depending on the k3s/rke2/microk8s version.
 
 ```bash
 # k3s:
@@ -70,7 +70,38 @@ Now you can create workloads which make use of zeropod.
 
 ```bash
 # create an example pod which makes use of zeropod
-kubectl apply -f https://github.com/ctrox/zeropod/config/examples/nginx.yaml
+kubectl apply -f https://raw.githubusercontent.com/ctrox/zeropod/refs/heads/main/config/examples/nginx.yaml
+```
+
+### Verifying Checkpoint and Restore
+
+The nginx example has a `scaledown-duration` of 10 seconds. After no external
+traffic for 10 seconds, the container will be checkpointed (frozen) to disk.
+
+**1. Watch the manager logs:**
+```bash
+kubectl logs -f -n zeropod-system -l app.kubernetes.io/name=zeropod-node -c manager
+```
+
+Look for status events:
+- `"phase":1` means RUNNING
+- `"phase":0` means SCALED_DOWN (checkpointed)
+
+**2. Trigger a restore:**
+
+Once you see `phase:0`, the container is checkpointed. Send a request to wake it:
+```bash
+POD_IP=$(kubectl get pod -l app=nginx -o jsonpath='{.items[0].status.podIP}')
+curl $POD_IP
+```
+
+The manager logs should show `phase:1` again, indicating the container was
+restored from checkpoint. The curl request will succeed as soon as the
+container is ready.
+
+**3. Verify checkpoint data on disk:**
+```bash
+sudo ls -la /var/lib/zeropod/i/
 ```
 
 Depending on your cluster setup, none of the predefined configs might not
