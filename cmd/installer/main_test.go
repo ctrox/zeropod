@@ -90,7 +90,28 @@ imports = [
   "runtime_zeropod.toml",
 ]
 `
-	containerdv1AlreadyConfigured = fullContainerdConfigV2 + runtimeConfig + `
+	containerdv1AlreadyConfigured = fullContainerdConfigV2 + `
+[plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod]
+  runtime_type = "io.containerd.runc.v2"
+  runtime_path = "/opt/zeropod/bin/containerd-shim-zeropod-v2"
+  pod_annotations = [
+    "zeropod.ctrox.dev/ports-map",
+    "zeropod.ctrox.dev/container-names",
+    "zeropod.ctrox.dev/scaledown-duration",
+    "zeropod.ctrox.dev/disable-checkpointing",
+    "zeropod.ctrox.dev/pre-dump",
+    "zeropod.ctrox.dev/migrate",
+    "zeropod.ctrox.dev/live-migrate",
+    "zeropod.ctrox.dev/disable-probe-detection",
+    "zeropod.ctrox.dev/probe-buffer-size",
+    "zeropod.ctrox.dev/disable-migrate-data",
+    "io.containerd.runc.v2.group"
+  ]
+
+  [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod.options]
+    # use systemd cgroup by default
+    SystemdCgroup = true
+` + `
 [plugins."io.containerd.internal.v1.opt"]
   path = "/opt/zeropod"
 `
@@ -104,6 +125,7 @@ type testConfig struct {
 	newConfigSuffix        string
 	expectedOptPath        string
 	containerdv1           bool
+	systemdCgroup          *bool
 }
 
 func TestConfigureContainerd(t *testing.T) {
@@ -158,6 +180,11 @@ func TestConfigureContainerd(t *testing.T) {
 			expectedRestart:  true,
 			newConfigSuffix:  templateSuffix,
 		},
+		"microk8s config": {
+			containerdConfig: fullContainerdConfigV2,
+			runtime:          runtimeMicroK8s,
+			expectedRestart:  true,
+		},
 		"full config v1": {
 			containerdConfig: fullContainerdConfigV2,
 			runtime:          runtimeContainerd,
@@ -171,10 +198,21 @@ func TestConfigureContainerd(t *testing.T) {
 			expectedRestart:        false,
 			containerdv1:           true,
 		},
+		"systemd cgroup disabled": {
+			containerdConfig: fullContainerdConfigV2,
+			runtime:          runtimeContainerd,
+			expectedRestart:  true,
+			systemdCgroup:    &[]bool{false}[0],
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if tc.expectedOptPath == "" {
 				tc.expectedOptPath = defaultOptPath
+			}
+			if tc.systemdCgroup != nil {
+				original := *systemdCgroup
+				*systemdCgroup = *tc.systemdCgroup
+				defer func() { *systemdCgroup = original }()
 			}
 			assert := assert.New(t)
 			require := require.New(t)
