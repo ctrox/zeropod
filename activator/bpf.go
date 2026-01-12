@@ -28,6 +28,8 @@ const (
 	PodKubeletAddrsMapv4           = "kubelet_addrs_v4"
 	PodKubeletAddrsMapv6           = "kubelet_addrs_v6"
 	trackerIgnoreLocalhostVariable = "tracker_ignore_localhost"
+	tcxIngressPinName              = "tcx_ingress"
+	tcxEgressPinName               = "tcx_egress"
 )
 
 type BPF struct {
@@ -155,12 +157,13 @@ func (bpf *BPF) AttachRedirector(ifaces ...string) error {
 		}
 		// try TCX first and if that is unsupported by the kernel fallback to
 		// the old qdisc.
-		if err := bpf.attachTCX(iface); err == nil {
+		tcxErr := bpf.attachTCX(iface)
+		if tcxErr == nil {
 			bpf.log.Info("attached redirector using TCX", "iface", ifaceName)
 			continue
 		}
 		if err := bpf.attachQdisc(iface); err == nil {
-			bpf.log.Warn("attached redirector using Qdisc as TCX failed", "iface", ifaceName)
+			bpf.log.Warn("attached redirector using Qdisc as TCX failed", "iface", ifaceName, "error", tcxErr)
 			return err
 		}
 	}
@@ -168,25 +171,38 @@ func (bpf *BPF) AttachRedirector(ifaces ...string) error {
 }
 
 func (bpf *BPF) attachTCX(iface *net.Interface) error {
-	ingress, err := link.AttachTCX(link.TCXOptions{
-		Interface: iface.Index,
-		Program:   bpf.objs.TcRedirectIngress,
-		Attach:    ebpf.AttachTCXIngress,
-	})
+	ingress, err := bpf.loadOrAttachTCXLink(iface, bpf.objs.TcRedirectIngress, ebpf.AttachTCXIngress)
 	if err != nil {
-		return fmt.Errorf("could not attach ingress TCX: %w", err)
+		return fmt.Errorf("loading TCX: %w", err)
 	}
 	bpf.links = append(bpf.links, ingress)
-	egress, err := link.AttachTCX(link.TCXOptions{
-		Interface: iface.Index,
-		Program:   bpf.objs.TcRedirectEgress,
-		Attach:    ebpf.AttachTCXEgress,
-	})
+	egress, err := bpf.loadOrAttachTCXLink(iface, bpf.objs.TcRedirectEgress, ebpf.AttachTCXEgress)
 	if err != nil {
 		return fmt.Errorf("could not attach egress TCX: %w", err)
 	}
 	bpf.links = append(bpf.links, egress)
 	return nil
+}
+
+func (bpf *BPF) loadOrAttachTCXLink(iface *net.Interface, program *ebpf.Program, attach ebpf.AttachType) (link.Link, error) {
+	name := tcxIngressPinName
+	if attach == ebpf.AttachTCXEgress {
+		name = tcxEgressPinName
+	}
+	pinPath := filepath.Join(PinPath(bpf.pid), fmt.Sprintf("%s_%s", name, iface.Name))
+	l, err := link.LoadPinnedLink(pinPath, nil)
+	if err == nil {
+		return l, nil
+	}
+	l, err = link.AttachTCX(link.TCXOptions{
+		Interface: iface.Index,
+		Program:   program,
+		Attach:    attach,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("could not attach TCX %s: %w", name, err)
+	}
+	return l, l.Pin(pinPath)
 }
 
 func (bpf *BPF) attachQdisc(iface *net.Interface) error {
