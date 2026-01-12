@@ -21,12 +21,13 @@ import (
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS bpf redirector.c -- -I/headers
 
 const (
-	BPFFSPath                = "/sys/fs/bpf"
-	probeBinaryNameVariable  = "probe_binary_name"
-	probeBinaryNameMaxLength = 16
-	SocketTrackerMap         = "socket_tracker"
-	PodKubeletAddrsMapv4     = "kubelet_addrs_v4"
-	PodKubeletAddrsMapv6     = "kubelet_addrs_v6"
+	BPFFSPath                      = "/sys/fs/bpf"
+	probeBinaryNameVariable        = "probe_binary_name"
+	probeBinaryNameMaxLength       = 16
+	SocketTrackerMap               = "socket_tracker"
+	PodKubeletAddrsMapv4           = "kubelet_addrs_v4"
+	PodKubeletAddrsMapv6           = "kubelet_addrs_v6"
+	trackerIgnoreLocalhostVariable = "tracker_ignore_localhost"
 )
 
 type BPF struct {
@@ -39,7 +40,9 @@ type BPF struct {
 }
 
 type BPFConfig struct {
-	mapSizes map[string]uint32
+	mapSizes               map[string]uint32
+	probeBinaryName        string
+	trackerIgnoreLocalhost bool
 }
 
 type BPFOpts func(cfg *BPFConfig)
@@ -50,7 +53,19 @@ func OverrideMapSize(mapSizes map[string]uint32) BPFOpts {
 	}
 }
 
-func InitBPF(pid int, log *slog.Logger, probeBinaryName string, opts ...BPFOpts) (*BPF, error) {
+func ProbeBinaryName(name string) BPFOpts {
+	return func(cfg *BPFConfig) {
+		cfg.probeBinaryName = name
+	}
+}
+
+func TrackerIgnoreLocalhost(ignore bool) BPFOpts {
+	return func(cfg *BPFConfig) {
+		cfg.trackerIgnoreLocalhost = ignore
+	}
+}
+
+func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 	cfg := &BPFConfig{
 		mapSizes: map[string]uint32{
 			SocketTrackerMap: 128,
@@ -76,16 +91,19 @@ func InitBPF(pid int, log *slog.Logger, probeBinaryName string, opts ...BPFOpts)
 		return nil, fmt.Errorf("loading bpf objects: %w", err)
 	}
 
-	if len([]byte(probeBinaryName)) > probeBinaryNameMaxLength {
+	if len([]byte(cfg.probeBinaryName)) > probeBinaryNameMaxLength {
 		return nil, fmt.Errorf(
 			"probe binary name %s is too long (%d bytes), max is %d bytes",
-			probeBinaryName, len([]byte(probeBinaryName)), probeBinaryNameMaxLength,
+			cfg.probeBinaryName, len([]byte(cfg.probeBinaryName)), probeBinaryNameMaxLength,
 		)
 	}
 	binName := [probeBinaryNameMaxLength]byte{}
-	copy(binName[:], probeBinaryName[:])
+	copy(binName[:], cfg.probeBinaryName[:])
 	if err := spec.Variables[probeBinaryNameVariable].Set(binName); err != nil {
 		return nil, fmt.Errorf("setting probe binary variable: %w", err)
+	}
+	if err := spec.Variables[trackerIgnoreLocalhostVariable].Set(cfg.trackerIgnoreLocalhost); err != nil {
+		return nil, fmt.Errorf("setting trackerIgnoreLocalhost variable: %w", err)
 	}
 
 	for mapName, size := range cfg.mapSizes {
