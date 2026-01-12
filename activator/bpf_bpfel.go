@@ -81,7 +81,8 @@ type bpfMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfVariableSpecs struct {
-	ProbeBinaryName *ebpf.VariableSpec `ebpf:"probe_binary_name"`
+	ProbeBinaryName        *ebpf.VariableSpec `ebpf:"probe_binary_name"`
+	TrackerIgnoreLocalhost *ebpf.VariableSpec `ebpf:"tracker_ignore_localhost"`
 }
 
 // bpfObjects contains all objects after they have been loaded into the kernel.
@@ -129,7 +130,8 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfVariables struct {
-	ProbeBinaryName *ebpf.Variable `ebpf:"probe_binary_name"`
+	ProbeBinaryName        *ebpf.Variable `ebpf:"probe_binary_name"`
+	TrackerIgnoreLocalhost *ebpf.Variable `ebpf:"tracker_ignore_localhost"`
 }
 
 // bpfPrograms contains all programs after they have been loaded into the kernel.

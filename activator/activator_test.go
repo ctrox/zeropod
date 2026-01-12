@@ -20,13 +20,14 @@ import (
 )
 
 type testCase struct {
-	parallelReqs       int
-	connHook           ConnHook
-	expectedBody       string
-	expectedCode       int
-	expectLastActivity bool
-	ipv6               bool
-	setBinaryName      bool
+	parallelReqs           int
+	connHook               ConnHook
+	expectedBody           string
+	expectedCode           int
+	expectLastActivity     bool
+	ipv6                   bool
+	setBinaryName          bool
+	trackerIgnoreLocalhost bool
 }
 
 func TestActivator(t *testing.T) {
@@ -101,6 +102,22 @@ func TestActivator(t *testing.T) {
 			setBinaryName:      true,
 			expectLastActivity: false,
 		},
+		"ignore activity from localhost v4": {
+			parallelReqs:           1,
+			expectedBody:           "ok",
+			expectedCode:           http.StatusOK,
+			ipv6:                   false,
+			expectLastActivity:     false,
+			trackerIgnoreLocalhost: true,
+		},
+		"ignore activity from localhost v6": {
+			parallelReqs:           1,
+			expectedBody:           "ok",
+			expectedCode:           http.StatusOK,
+			ipv6:                   true,
+			expectLastActivity:     false,
+			trackerIgnoreLocalhost: true,
+		},
 	}
 	wg := sync.WaitGroup{}
 	for name, tc := range tests {
@@ -123,12 +140,16 @@ func TestActivator(t *testing.T) {
 				require.NoError(t, err)
 				exeName = filepath.Base(currentExe)
 			}
-			bpf, err := InitBPF(os.Getpid(), slog.Default(), exeName, OverrideMapSize(
-				// not completely sure why this happens but when testing in
-				// github actions, the default map size of 128 makes the test
-				// very flaky so we increase it here.
-				map[string]uint32{SocketTrackerMap: 1024},
-			))
+			bpf, err := InitBPF(os.Getpid(), slog.Default(),
+				ProbeBinaryName(exeName),
+				OverrideMapSize(
+					// not completely sure why this happens but when testing in
+					// github actions, the default map size of 128 makes the test
+					// very flaky so we increase it here.
+					map[string]uint32{SocketTrackerMap: 1024},
+				),
+				TrackerIgnoreLocalhost(tc.trackerIgnoreLocalhost),
+			)
 			require.NoError(t, err)
 			require.NoError(t, bpf.AttachRedirector("lo"))
 

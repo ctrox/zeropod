@@ -19,9 +19,9 @@ import (
 
 type Redirector struct {
 	sync.Mutex
-	sandboxes       map[int]sandbox
-	log             *slog.Logger
-	probeBinaryName string
+	sandboxes     map[int]sandbox
+	log           *slog.Logger
+	activatorOpts []activator.BPFOpts
 }
 
 type sandbox struct {
@@ -41,11 +41,11 @@ const (
 // can be found it attaches the redirector BPF programs to the network
 // interfaces of the sandbox. The directories are expected to be created by
 // the zeropod shim on startup.
-func AttachRedirectors(ctx context.Context, log *slog.Logger, probeBinaryName string) error {
+func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...activator.BPFOpts) error {
 	r := &Redirector{
-		sandboxes:       make(map[int]sandbox),
-		log:             log,
-		probeBinaryName: probeBinaryName,
+		sandboxes:     make(map[int]sandbox),
+		log:           log,
+		activatorOpts: activatorOpts,
 	}
 
 	if _, err := os.Stat(activator.MapsPath()); os.IsNotExist(err) {
@@ -134,7 +134,7 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 }
 
 func (r *Redirector) attachRedirector(pid int) error {
-	bpf, err := activator.InitBPF(pid, r.log, r.probeBinaryName)
+	bpf, err := activator.InitBPF(pid, r.log, r.activatorOpts...)
 	if err != nil {
 		return fmt.Errorf("unable to initialize BPF: %w", err)
 	}

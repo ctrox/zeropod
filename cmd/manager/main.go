@@ -14,6 +14,7 @@ import (
 	"runtime/debug"
 	"syscall"
 
+	"github.com/ctrox/zeropod/activator"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager"
@@ -36,10 +37,11 @@ var (
 	debugFlag      = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
-	statusLabels    = flag.Bool("status-labels", false, "update pod labels to reflect container status")
-	probeBinaryName = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
-	statusEvents    = flag.Bool("status-events", false, "create status events to reflect container status")
-	versionFlag     = flag.Bool("version", false, "output version and exit")
+	statusLabels           = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	probeBinaryName        = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
+	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", false, "set to ignore traffic from localhost in socket tracker")
+	statusEvents           = flag.Bool("status-events", false, "create status events to reflect container status")
+	versionFlag            = flag.Bool("version", false, "output version and exit")
 
 	version   = ""
 	revision  = ""
@@ -88,7 +90,11 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	if err := manager.AttachRedirectors(ctx, log, *probeBinaryName); err != nil {
+	activatorOpts := []activator.BPFOpts{
+		activator.ProbeBinaryName(*probeBinaryName),
+		activator.TrackerIgnoreLocalhost(*trackerIgnoreLocalhost),
+	}
+	if err := manager.AttachRedirectors(ctx, log, activatorOpts...); err != nil {
 		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
 	}
 
