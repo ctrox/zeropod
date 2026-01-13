@@ -699,7 +699,7 @@ func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageReque
 		return fmt.Errorf("invalid image_id requested: %s", req.ImageId)
 	}
 
-	arch, err := archives.FilesFromDisk(ctx, nil, map[string]string{nodev1.SnapshotPath(req.ImageId): ""})
+	files, err := filesToArchive(ctx, log, req)
 	if err != nil {
 		return fmt.Errorf("unable to archive checkpoint: %w", err)
 	}
@@ -718,7 +718,8 @@ func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageReque
 	archive := func() {
 		defer close(errChan)
 		defer w.Close()
-		if err := format.Archive(ctx, w, arch); err != nil {
+		if err := format.Archive(ctx, w, files); err != nil {
+			log.Error("archiving checkpoint", "error", err)
 			errChan <- err
 		}
 	}
@@ -748,6 +749,22 @@ func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageReque
 		return err
 	}
 	return nil
+}
+
+func filesToArchive(ctx context.Context, log *slog.Logger, req *nodev1.PullImageRequest) ([]archives.FileInfo, error) {
+	allFiles, err := archives.FilesFromDisk(ctx, nil, map[string]string{nodev1.SnapshotPath(req.ImageId): ""})
+	if err != nil {
+		return nil, fmt.Errorf("unable to archive checkpoint: %w", err)
+	}
+	toArchive := []archives.FileInfo{}
+	for _, f := range allFiles {
+		if f.Mode().Type() == os.ModeSocket {
+			log.Debug("skipping unix socket", "name", f.NameInArchive)
+			continue
+		}
+		toArchive = append(toArchive, f)
+	}
+	return toArchive, nil
 }
 
 func (ns *nodeService) local(host string) bool {
