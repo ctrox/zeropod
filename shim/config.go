@@ -70,7 +70,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 	var containerPorts []uint16
 	portsMap := spec.Annotations[PortsAnnotationKey]
 	if portsMap != "" {
-		for _, mapping := range strings.Split(portsMap, mappingDelim) {
+		for mapping := range strings.SplitSeq(portsMap, mappingDelim) {
 			namePorts := strings.Split(mapping, mapDelim)
 			if len(namePorts) != 2 {
 				return nil, fmt.Errorf("invalid port map, the format needs to be name=port")
@@ -81,7 +81,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 				continue
 			}
 
-			for _, port := range strings.Split(ports, portsDelim) {
+			for port := range strings.SplitSeq(ports, portsDelim) {
 				p, err := strconv.ParseUint(port, 10, 16)
 				if err != nil {
 					return nil, err
@@ -190,10 +190,8 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 }
 
 func (cfg Config) IsZeropodContainer() bool {
-	for _, n := range cfg.ZeropodContainerNames {
-		if n == cfg.ContainerName {
-			return true
-		}
+	if slices.Contains(cfg.ZeropodContainerNames, cfg.ContainerName) {
+		return true
 	}
 
 	// if there is none specified, every one of them is considered.

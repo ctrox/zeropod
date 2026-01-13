@@ -78,7 +78,6 @@ func StartSubscribers(ctx context.Context, sc SubscriberConfig, podHandlers ...P
 	}
 
 	for _, sock := range socks {
-		sock := sock
 		go func() {
 			if err := subscribe(ctx, sc, filepath.Join(task.ShimSocketPath, sock.Name()), podHandlers); err != nil {
 				sc.Log.Error("error subscribing", "sock", sock.Name(), "err", err)
