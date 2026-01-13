@@ -652,7 +652,7 @@ func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyP
 	// daemon to connect to.
 	psp := newPageServerProxy(
 		"127.0.0.1:0",
-		fmt.Sprintf("%s:%d", r.Address, r.Port),
+		net.JoinHostPort(r.Address, strconv.Itoa(int(r.Port))),
 		nil,
 		ns.tlsConfig,
 		ns.log,
