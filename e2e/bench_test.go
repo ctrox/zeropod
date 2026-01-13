@@ -48,7 +48,6 @@ func BenchmarkRestore(b *testing.B) {
 	}
 
 	for name, bc := range benches {
-		bc := bc
 		b.Run(name, func(b *testing.B) {
 			if bc.preDump && runtime.GOARCH == "arm64" {
 				b.Skip("skipping pre-dump test as it's not supported on arm64")

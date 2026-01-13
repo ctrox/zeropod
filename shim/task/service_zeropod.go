@@ -55,7 +55,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	go ep.Run(ctx)
 	s := &service{
 		context:              ctx,
-		events:               make(chan interface{}, 128),
+		events:               make(chan any, 128),
 		ec:                   make(chan runcC.Exit, 32),
 		ep:                   ep,
 		shutdown:             sd,
