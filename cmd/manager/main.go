@@ -13,6 +13,7 @@ import (
 	goruntime "runtime"
 	"runtime/debug"
 	"syscall"
+	"time"
 
 	"github.com/ctrox/zeropod/activator"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
@@ -44,6 +45,10 @@ var (
 	statusEvents            = flag.Bool("status-events", false, "create status events to reflect container status")
 	versionFlag             = flag.Bool("version", false, "output version and exit")
 	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 10, "num reconciles the pod controller processes concurrently")
+	pagesTransferTimeout    = flag.Duration("pages-transfer-timeout", time.Minute*5, "how long to wait for pages transfer")
+	migrationServersTimeout = flag.Duration("migration-servers-timeout", time.Second*10, "how long to wait for migration servers")
+	migrationClaimTimeout   = flag.Duration("migration-claim-timeout", time.Second*10, "how long to wait for migration to be claimed")
+	migrationReadyTimeout   = flag.Duration("migration-ready-timeout", time.Minute*5, "how long to wait for migration to be ready")
 
 	version   = ""
 	revision  = ""
@@ -148,7 +153,17 @@ func main() {
 		}
 	}()
 
-	nodeServer, err := node.NewServer(*nodeServerAddr, mgr.GetClient(), log)
+	nodeServer, err := node.NewServer(
+		*nodeServerAddr,
+		mgr.GetClient(),
+		log,
+		node.Timeouts{
+			PagesTransfer:    *pagesTransferTimeout,
+			MigrationServers: *migrationServersTimeout,
+			MigrationClaim:   *migrationClaimTimeout,
+			MigrationReady:   *migrationReadyTimeout,
+		},
+	)
 	if err != nil {
 		log.Error("creating node server", "err", err)
 		os.Exit(1)

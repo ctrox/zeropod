@@ -42,13 +42,8 @@ const (
 	PageServerHostKey  = "page_server_host"
 	PageServerPortKey  = "page_server_port"
 	CriuBin            = "/bin/criu"
-
-	pagesTransferTimeout = time.Minute * 5
-	caCertFile           = "/tls/ca.crt"
-	caKeyFile            = "/tls/ca.key"
-
-	migrationClaimTimeout = time.Second * 10
-	migrationReadyTimeout = time.Minute * 5
+	caCertFile         = "/tls/ca.crt"
+	caKeyFile          = "/tls/ca.key"
 )
 
 var ErrLiveMigrationNotSupported = errors.New("live migration is not supported on this node")
@@ -65,10 +60,17 @@ type Server struct {
 	log          *slog.Logger
 }
 
+type Timeouts struct {
+	MigrationClaim,
+	MigrationReady,
+	MigrationServers,
+	PagesTransfer time.Duration
+}
+
 // NewServer starts a node server with two listeners:
 // * Unix socket for the shims to connect to it locally
 // * TCP+TLS socket to allow the other node instances to connect
-func NewServer(addr string, kube client.Client, log *slog.Logger) (*Server, error) {
+func NewServer(addr string, kube client.Client, log *slog.Logger, timeouts Timeouts) (*Server, error) {
 	host, ok := os.LookupEnv(nodev1.PodIPEnvKey)
 	if !ok {
 		return nil, fmt.Errorf("could not find host, env POD_IP is not set")
@@ -114,6 +116,7 @@ func NewServer(addr string, kube client.Client, log *slog.Logger) (*Server, erro
 		tlsConfig:              tlsConfig,
 		pageServerTLS:          true,
 		liveMigrationSupported: liveMigrationSupported,
+		timeouts:               timeouts,
 	})
 
 	log.Info("new node server", "name", nodeName, "live_migration_supported", liveMigrationSupported)
@@ -183,6 +186,7 @@ type nodeService struct {
 	tlsConfig              *tls.Config
 	pageServerTLS          bool
 	liveMigrationSupported bool
+	timeouts               Timeouts
 }
 
 var findMigrationBackoff = wait.Backoff{
@@ -225,7 +229,7 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 
 	// wait for the page server to be set by the evac
 	container := v1.MigrationContainer{}
-	pCtx, cancel := context.WithTimeout(ctx, time.Second*10)
+	pCtx, cancel := context.WithTimeout(ctx, ns.timeouts.MigrationServers)
 	defer cancel()
 	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (bool, error) {
 		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
@@ -515,7 +519,7 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 		},
 	}
 	// wait for the migration to be claimed
-	pCtx, cancel := context.WithTimeout(ctx, migrationClaimTimeout)
+	pCtx, cancel := context.WithTimeout(ctx, ns.timeouts.MigrationClaim)
 	defer cancel()
 	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (bool, error) {
 		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
@@ -543,7 +547,7 @@ func (ns *nodeService) PrepareEvac(ctx context.Context, req *nodev1.EvacRequest)
 	}
 
 	log.Info("waiting for migration restore to be ready")
-	readyCtx, cancel := context.WithTimeout(ctx, migrationReadyTimeout)
+	readyCtx, cancel := context.WithTimeout(ctx, ns.timeouts.MigrationReady)
 	defer cancel()
 	if err := pollUntilContextCancel(readyCtx, func(ctx context.Context) (bool, error) {
 		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
@@ -585,7 +589,7 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 			tlsConfig = nil
 		}
 		psp := newPageServerProxy("0.0.0.0:0", nodev1.LazyPagesSocket(req.MigrationInfo.ImageId), tlsConfig, nil, log)
-		pspContext, cancel := context.WithTimeout(context.Background(), pagesTransferTimeout)
+		pspContext, cancel := context.WithTimeout(context.Background(), ns.timeouts.PagesTransfer)
 		if err := psp.Start(pspContext); err != nil {
 			log.Error("page server src proxy", "error", err)
 		}
@@ -657,7 +661,7 @@ func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyP
 		ns.tlsConfig,
 		ns.log,
 	)
-	pspContext, cancel := context.WithTimeout(context.Background(), pagesTransferTimeout)
+	pspContext, cancel := context.WithTimeout(context.Background(), ns.timeouts.PagesTransfer)
 	if err := psp.Start(pspContext); err != nil {
 		cancel()
 		ns.log.Error("starting page server dst proxy", "error", err)
