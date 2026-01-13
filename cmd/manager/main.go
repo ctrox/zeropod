@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	ctrlconfig "sigs.k8s.io/controller-runtime/pkg/config"
 	ctrlmanager "sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
@@ -37,11 +38,12 @@ var (
 	debugFlag      = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
-	statusLabels           = flag.Bool("status-labels", false, "update pod labels to reflect container status")
-	probeBinaryName        = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
-	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", false, "set to ignore traffic from localhost in socket tracker")
-	statusEvents           = flag.Bool("status-events", false, "create status events to reflect container status")
-	versionFlag            = flag.Bool("version", false, "output version and exit")
+	statusLabels            = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	probeBinaryName         = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
+	trackerIgnoreLocalhost  = flag.Bool("tracker-ignore-localhost", false, "set to ignore traffic from localhost in socket tracker")
+	statusEvents            = flag.Bool("status-events", false, "create status events to reflect container status")
+	versionFlag             = flag.Bool("version", false, "output version and exit")
+	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 10, "num reconciles the pod controller processes concurrently")
 
 	version   = ""
 	revision  = ""
@@ -189,6 +191,7 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 	}
 	mgr, err := ctrlmanager.New(cfg, ctrlmanager.Options{
 		Scheme: scheme, Metrics: server.Options{BindAddress: "0"},
+		Controller: ctrlconfig.Controller{MaxConcurrentReconciles: *maxConcurrentReconciles},
 		Cache: cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
 				// for pods we're only interested in objects that are running on
