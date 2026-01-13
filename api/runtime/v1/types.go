@@ -1,7 +1,8 @@
 package v1
 
 import (
-	"fmt"
+	"net"
+	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -14,7 +15,7 @@ type MigrationServer struct {
 }
 
 func (ms MigrationServer) Address() string {
-	return fmt.Sprintf("%s:%d", ms.Host, ms.Port)
+	return net.JoinHostPort(ms.Host, strconv.Itoa(ms.Port))
 }
 
 // +kubebuilder:object:generate:=true
