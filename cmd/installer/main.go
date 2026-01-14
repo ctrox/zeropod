@@ -45,6 +45,7 @@ const (
 	runtimeContainerd containerRuntime = "containerd"
 	runtimeRKE2       containerRuntime = "rke2"
 	runtimeK3S        containerRuntime = "k3s"
+	runtimeK0S        containerRuntime = "k0s"
 
 	hostRoot                    = "/host"
 	binPath                     = "bin/"
@@ -53,6 +54,11 @@ const (
 	runtimePath                 = "/build/" + shimBinaryName
 	defaultContainerdConfigPath = "/etc/containerd/config.toml"
 	containerdSock              = "/run/containerd/containerd.sock"
+	k0sContainerdDir            = "/etc/k0s"
+	k0sContainerdConfigPath     = k0sContainerdDir + "/containerd.toml"
+	k0sDropInDirName            = "containerd.d"
+	k0sContainerdSock           = "/run/k0s/containerd.sock"
+	k0sManagedSentinel          = "k0s_managed=true"
 	configBackupSuffix          = ".original"
 	templateSuffix              = ".tmpl"
 	caSecretName                = "ca-cert"
@@ -92,7 +98,7 @@ network-lock skip
 
   [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.zeropod.options]
     # use systemd cgroup by default
-    SystemdCgroup = true
+    SystemdCgroup = %t
 `
 	configVersion2 = "version = 2"
 	runtimeConfig  = `
@@ -115,7 +121,7 @@ network-lock skip
 
   [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod.options]
     # use systemd cgroup by default
-    SystemdCgroup = true
+    SystemdCgroup = %t
 `
 )
 
@@ -139,7 +145,7 @@ func main() {
 		os.Exit(0)
 	}
 
-	if err := installCriu(ctx); err != nil {
+	if err := installCriu(ctx, containerRuntime(*runtime)); err != nil {
 		log.Fatalf("error installing criu: %s", err)
 	}
 
@@ -166,8 +172,8 @@ func main() {
 	log.Println("installer completed")
 }
 
-func installCriu(ctx context.Context) error {
-	client, err := containerd.New(containerdSock, containerd.WithDefaultNamespace("k8s"))
+func installCriu(ctx context.Context, runtime containerRuntime) error {
+	client, err := containerd.New(containerdSocketPath(runtime), containerd.WithDefaultNamespace("k8s"))
 	if err != nil {
 		return err
 	}
@@ -180,7 +186,7 @@ func installCriu(ctx context.Context) error {
 	if err := client.Install(
 		ctx, image, containerd.WithInstallLibs,
 		containerd.WithInstallReplace,
-		containerd.WithInstallPath(optPath(ctx, containerRuntime(*runtime))),
+		containerd.WithInstallPath(optPath(ctx, runtime)),
 	); err != nil {
 		return err
 	}
@@ -233,7 +239,8 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 
 	restartRequired, err := configureContainerd(ctx, runtime)
 	if err != nil {
-		if restoreErr := restoreContainerdConfig(runtime, defaultContainerdConfigPath); restoreErr != nil {
+		configPath := containerdConfigPathForRuntime(runtime)
+		if restoreErr := restoreContainerdConfig(runtime, configPath); restoreErr != nil {
 			return fmt.Errorf("unable to configure and restore containerd config: %w: %w", restoreErr, err)
 		}
 		return fmt.Errorf("unable to configure containerd: %w", err)
@@ -283,7 +290,11 @@ func restartUnit(ctx context.Context, conn *dbus.Conn, service string) error {
 }
 
 func configureContainerd(ctx context.Context, runtime containerRuntime) (restartRequired bool, err error) {
-	client, err := containerd.New(containerdSock, containerd.WithDefaultNamespace("k8s"))
+	if runtime == runtimeK0S {
+		return configureContainerdK0s(ctx, containerdConfigPathForRuntime(runtime))
+	}
+
+	client, err := containerd.New(containerdSocketPath(runtime), containerd.WithDefaultNamespace("k8s"))
 	if err != nil {
 		return false, fmt.Errorf("creating containerd client: %w", err)
 	}
@@ -293,10 +304,45 @@ func configureContainerd(ctx context.Context, runtime containerRuntime) (restart
 		return false, fmt.Errorf("getting containerd version: %w", err)
 	}
 	log.Printf("configuring containerd %s", v.Version)
+	configPath := containerdConfigPathForRuntime(runtime)
 	if strings.HasPrefix(v.Version, "1") || strings.HasPrefix(v.Version, "v1") {
-		return configureContainerdv1(ctx, runtime, defaultContainerdConfigPath)
+		return configureContainerdv1(ctx, runtime, configPath)
 	}
-	return configureContainerdv2(ctx, runtime, defaultContainerdConfigPath)
+	return configureContainerdv2(ctx, runtime, configPath)
+}
+
+func configureContainerdK0s(ctx context.Context, containerdConfig string) (bool, error) {
+	if err := ensureK0sManaged(containerdConfig); err != nil {
+		return false, err
+	}
+
+	dropInPath := zeropodRuntimeConfigPath(runtimeK0S, containerdConfig)
+	if _, err := os.Stat(dropInPath); err == nil {
+		log.Println("runtime already configured, refreshing zeropod drop-in")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false, fmt.Errorf("checking zeropod drop-in: %w", err)
+	}
+
+	conf := &config.Config{}
+	if err := config.LoadConfig(ctx, containerdConfig, conf); err != nil {
+		return false, fmt.Errorf("loading containerd config: %w", err)
+	}
+
+	existingOpt, containerdOptPath, err := optConfigured(ctx, containerdConfig)
+	if err != nil {
+		return false, fmt.Errorf("could not check opt configuration: %w", err)
+	}
+
+	optPath := *hostOptPath
+	if existingOpt {
+		optPath = containerdOptPath
+	}
+
+	if err := writeZeropodRuntimeConfig(runtimeK0S, containerdConfig, optPath, existingOpt, conf.Version, useSystemdCgroup(runtimeK0S)); err != nil {
+		return false, err
+	}
+
+	return false, nil
 }
 
 func configureContainerdv2(ctx context.Context, runtime containerRuntime, containerdConfig string) (bool, error) {
@@ -342,7 +388,7 @@ func configureContainerdv2(ctx context.Context, runtime containerRuntime, contai
 		optPath = containerdOptPath
 	}
 
-	if err := writeZeropodRuntimeConfig(containerdConfig, optPath, existingOpt, conf.Version); err != nil {
+	if err := writeZeropodRuntimeConfig(runtime, containerdConfig, optPath, existingOpt, conf.Version, useSystemdCgroup(runtime)); err != nil {
 		return false, err
 	}
 
@@ -394,7 +440,8 @@ func configureContainerdv1(ctx context.Context, runtime containerRuntime, contai
 		optPath = containerdOptPath
 	}
 
-	if _, err := fmt.Fprintf(cfg, runtimeConfig, strings.TrimSuffix(optPath, "/")); err != nil {
+	configSnippet := fmt.Sprintf(runtimeConfig, strings.TrimSuffix(optPath, "/"), useSystemdCgroup(runtime))
+	if _, err := fmt.Fprint(cfg, configSnippet); err != nil {
 		return false, err
 	}
 
@@ -479,27 +526,42 @@ func zeropodImportConfigured(imports []string) bool {
 	return false
 }
 
-func zeropodRuntimeConfigPath(containerdConfig string) string {
-	return filepath.Join(filepath.Dir(containerdConfig), zeropodTomlName)
+func zeropodRuntimeConfigPath(runtime containerRuntime, containerdConfig string) string {
+	dir := filepath.Dir(containerdConfig)
+	if runtime == runtimeK0S {
+		dir = filepath.Join(dir, k0sDropInDirName)
+	}
+	return filepath.Join(dir, zeropodTomlName)
 }
 
 func backupContainerdConfig(containerdConfig string) error {
 	return copyConfig(containerdConfig, containerdConfig+configBackupSuffix)
 }
 
-func writeZeropodRuntimeConfig(containerdConfig, optPath string, existingOpt bool, version int) error {
-	zeropodRuntimeConfig := fmt.Sprintf("%s\n%s", configVersion2, runtimeConfig)
-	if version == 3 {
-		zeropodRuntimeConfig = runtimeConfigV3
+func writeZeropodRuntimeConfig(runtime containerRuntime, containerdConfig, optPath string, existingOpt bool, version int, systemdCgroup bool) error {
+	zeropodRuntimeConfig := renderZeropodRuntimeConfig(optPath, existingOpt, version, systemdCgroup)
+	dest := zeropodRuntimeConfigPath(runtime, containerdConfig)
+	if runtime == runtimeK0S {
+		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+			return fmt.Errorf("ensuring k0s drop-in directory: %w", err)
+		}
 	}
-	zeropodRuntimeConfig = fmt.Sprintf(zeropodRuntimeConfig, strings.TrimSuffix(optPath, "/"))
-	if !existingOpt {
-		zeropodRuntimeConfig = zeropodRuntimeConfig + fmt.Sprintf(optPlugin, optPath)
-	}
-	if err := os.WriteFile(zeropodRuntimeConfigPath(containerdConfig), []byte(zeropodRuntimeConfig), 0644); err != nil {
+	if err := os.WriteFile(dest, []byte(zeropodRuntimeConfig), 0644); err != nil {
 		return fmt.Errorf("writing zeropod runtime config: %w", err)
 	}
 	return nil
+}
+
+func renderZeropodRuntimeConfig(optPath string, existingOpt bool, version int, systemdCgroup bool) string {
+	trimmedOpt := strings.TrimSuffix(optPath, "/")
+	zeropodRuntimeConfig := fmt.Sprintf("%s\n%s", configVersion2, fmt.Sprintf(runtimeConfig, trimmedOpt, systemdCgroup))
+	if version == 3 {
+		zeropodRuntimeConfig = fmt.Sprintf(runtimeConfigV3, trimmedOpt, systemdCgroup)
+	}
+	if !existingOpt {
+		zeropodRuntimeConfig += fmt.Sprintf(optPlugin, optPath)
+	}
+	return zeropodRuntimeConfig
 }
 
 func restoreContainerdConfig(runtime containerRuntime, containerdConfigPath string) error {
@@ -549,6 +611,39 @@ func containerdConfigFile(runtime containerRuntime, containerdConfigPath string)
 	return containerdConfigPath
 }
 
+func containerdConfigPathForRuntime(runtime containerRuntime) string {
+	switch runtime {
+	case runtimeK0S:
+		return k0sContainerdConfigPath
+	default:
+		return defaultContainerdConfigPath
+	}
+}
+
+func containerdSocketPath(runtime containerRuntime) string {
+	switch runtime {
+	case runtimeK0S:
+		return k0sContainerdSock
+	default:
+		return containerdSock
+	}
+}
+
+func useSystemdCgroup(runtime containerRuntime) bool {
+	return runtime != runtimeK0S
+}
+
+func ensureK0sManaged(containerdConfig string) error {
+	data, err := os.ReadFile(containerdConfig)
+	if err != nil {
+		return fmt.Errorf("reading containerd config: %w", err)
+	}
+	if !bytes.Contains(data, []byte(k0sManagedSentinel)) {
+		return fmt.Errorf("containerd config %s is not k0s managed", containerdConfig)
+	}
+	return nil
+}
+
 func copyConfig(from, to string) error {
 	info, err := os.Stat(from)
 	if err != nil {
@@ -588,7 +683,7 @@ func optConfigured(ctx context.Context, containerdConfig string) (bool, string, 
 }
 
 func optPath(ctx context.Context, runtime containerRuntime) string {
-	ok, path, err := optConfigured(ctx, containerdConfigFile(runtime, defaultContainerdConfigPath))
+	ok, path, err := optConfigured(ctx, containerdConfigFile(runtime, containerdConfigPathForRuntime(runtime)))
 	if err != nil {
 		return defaultOptPath
 	}
@@ -643,7 +738,12 @@ func runUninstall(ctx context.Context, client kubernetes.Interface, runtime cont
 		return fmt.Errorf("removing opt path: %w", err)
 	}
 
-	if err := restoreContainerdConfig(runtime, defaultContainerdConfigPath); err != nil {
+	runtimeConfigPath := zeropodRuntimeConfigPath(runtime, containerdConfigPathForRuntime(runtime))
+	if err := os.Remove(runtimeConfigPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("removing runtime config %s: %w", runtimeConfigPath, err)
+	}
+
+	if err := restoreContainerdConfig(runtime, containerdConfigPathForRuntime(runtime)); err != nil {
 		return err
 	}
 
