@@ -90,6 +90,13 @@ const (
 	MigrationPhaseUnclaimed MigrationPhase = "Unclaimed"
 )
 
+// Final returns if the phase is final
+func (phase MigrationPhase) Final() bool {
+	return phase == MigrationPhaseCompleted ||
+		phase == MigrationPhaseFailed ||
+		phase == MigrationPhaseUnclaimed
+}
+
 type MigrationCondition struct {
 	Phase MigrationPhase `json:"phase,omitempty"`
 }

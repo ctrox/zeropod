@@ -173,6 +173,9 @@ func main() {
 	if err := manager.NewPodController(ctx, mgr, log); err != nil {
 		log.Error("running pod controller", "error", err)
 	}
+	if err := manager.NewMigrationController(ctx, mgr, log); err != nil {
+		log.Error("running migration controller", "error", err)
+	}
 
 	go func() {
 		if err := mgr.Start(ctx); err != nil {
