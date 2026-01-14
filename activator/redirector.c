@@ -73,6 +73,7 @@ struct {
 } kubelet_addrs_v6 SEC(".maps");
 
 const volatile char probe_binary_name[TASK_COMM_LEN] = "";
+const volatile bool tracker_ignore_localhost = false;
 
 static __always_inline int track_activity(__be16 dport) {
     __u64 time = bpf_ktime_get_ns();
@@ -221,6 +222,23 @@ static __always_inline struct in6_addr* lookup_kubelet_ip_v6(struct ipv6hdr *ip)
     return NULL;
 }
 
+static __always_inline bool is_ipv6_localhost(const struct in6_addr *addr) {
+    if (!tracker_ignore_localhost) {
+        return tracker_ignore_localhost;
+    }
+    return (addr->in6_u.u6_addr32[0] == 0 &&
+            addr->in6_u.u6_addr32[1] == 0 &&
+            addr->in6_u.u6_addr32[2] == 0 &&
+            addr->in6_u.u6_addr32[3] == bpf_htonl(1));
+}
+
+static __always_inline bool is_ipv4_localhost(__be32 addr) {
+    if (!tracker_ignore_localhost) {
+        return tracker_ignore_localhost;
+    }
+    return addr == bpf_htonl(0x7F000001);
+}
+
 static __always_inline int parse_and_redirect(struct __sk_buff *ctx, bool ingress) {
     void *data_end = (void *)(long)ctx->data_end;
     void *data = (void *)(long)ctx->data;
@@ -233,7 +251,7 @@ static __always_inline int parse_and_redirect(struct __sk_buff *ctx, bool ingres
                 tcp = (void*)ip4 + sizeof(*ip4);
                 if ((tcp != NULL) && ((void*)tcp + sizeof(*tcp) <= data_end)) {
                     if (ingress) {
-                        if (ip4->saddr != lookup_kubelet_ip_v4(ip4)) {
+                        if (ip4->saddr != lookup_kubelet_ip_v4(ip4) && !is_ipv4_localhost(ip4->saddr)) {
                             track_activity(bpf_ntohs(tcp->dest));
                         }
                     }
@@ -248,7 +266,7 @@ static __always_inline int parse_and_redirect(struct __sk_buff *ctx, bool ingres
                     tcp = (void*)ip6 + sizeof(*ip6);
                     if ((tcp != NULL) && ((void*)tcp + sizeof(*tcp) <= data_end)) {
                         if (ingress) {
-                            if (!ipv6_addr_equal(&ip6->saddr, lookup_kubelet_ip_v6(ip6))) {
+                            if (!ipv6_addr_equal(&ip6->saddr, lookup_kubelet_ip_v6(ip6)) && !is_ipv6_localhost(&ip6->saddr)) {
                                 track_activity(bpf_ntohs(tcp->dest));
                             }
                         }

@@ -7,13 +7,14 @@ components:
 - ../status-labels
 - ../status-events
 - ../migration-manager
+# - ../tracker-ignore-localhost
 images:
 - name: installer
   newName: ghcr.io/ctrox/zeropod-installer
-  newTag: v0.9.1
+  newTag: v0.9.2
 - name: manager
   newName: ghcr.io/ctrox/zeropod-manager
-  newTag: v0.9.1
+  newTag: v0.9.2
 patches:
 - patch: |-
     - op: add

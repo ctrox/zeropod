@@ -27,7 +27,7 @@ var (
 )
 
 var (
-	MigrationKind             = reflect.TypeOf(Migration{}).Name()
+	MigrationKind             = reflect.TypeFor[Migration]().Name()
 	MigrationGroupKind        = schema.GroupKind{Group: Group, Kind: MigrationKind}.String()
 	MigrationKindAPIVersion   = MigrationKind + "." + GroupVersion.String()
 	MigrationGroupVersionKind = GroupVersion.WithKind(MigrationKind)

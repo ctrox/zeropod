@@ -77,7 +77,7 @@ func NewTaskService(ctx context.Context, publisher shim.Publisher, sd shutdown.S
 	go ep.Run(ctx)
 	s := &service{
 		context:              ctx,
-		events:               make(chan interface{}, 128),
+		events:               make(chan any, 128),
 		ec:                   reaper.Default.Subscribe(),
 		ep:                   ep,
 		shutdown:             sd,
@@ -112,7 +112,7 @@ type service struct {
 	mu sync.Mutex
 
 	context  context.Context
-	events   chan interface{}
+	events   chan any
 	platform stdio.Platform
 	ec       chan runcC.Exit
 	ep       oom.Watcher
@@ -625,7 +625,7 @@ func (s *service) Stats(ctx context.Context, r *taskAPI.StatsRequest) (*taskAPI.
 	if cgx == nil {
 		return nil, errgrpc.ToGRPCf(errdefs.ErrNotFound, "cgroup does not exist")
 	}
-	var statsx interface{}
+	var statsx any
 	switch cg := cgx.(type) {
 	case cgroup1.Cgroup:
 		stats, err := cg.Stat(cgroup1.IgnoreNotExist)
@@ -690,7 +690,7 @@ func (s *service) processExits() {
 	}
 }
 
-func (s *service) send(evt interface{}) {
+func (s *service) send(evt any) {
 	s.events <- evt
 }
 

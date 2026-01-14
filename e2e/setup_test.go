@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -379,9 +380,7 @@ func annotations(annotations map[string]string) podOption {
 		if p.meta.Annotations == nil {
 			p.meta.SetAnnotations(annotations)
 		}
-		for k, v := range annotations {
-			p.meta.Annotations[k] = v
-		}
+		maps.Copy(p.meta.Annotations, annotations)
 	}
 }
 

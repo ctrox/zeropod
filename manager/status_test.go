@@ -44,7 +44,6 @@ func TestOnStatus(t *testing.T) {
 	}
 
 	for name, tc := range cases {
-		tc := tc
 		t.Run(name, func(t *testing.T) {
 			client := fake.NewClientBuilder().WithScheme(scheme).Build()
 			pod := newPod(nil)
