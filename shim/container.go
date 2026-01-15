@@ -18,6 +18,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
+	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -301,8 +302,22 @@ func (c *Container) Stop(ctx context.Context) {
 	status.Phase = v1.ContainerPhase_STOPPING
 	c.sendEvent(status)
 	c.StopActivator(ctx)
+	c.cleanupImage(ctx)
 }
 
+func (c *Container) cleanupImage(ctx context.Context) {
+	// with migration, the shim might exit before the image data has been
+	// transferred to the new node. The cleanup is the responsibility of the
+	// node service.
+	if c.cfg.AnyMigrationEnabled() {
+		return
+	}
+	if err := os.RemoveAll(nodev1.ImagePath(c.ID())); err != nil {
+		if !os.IsNotExist(err) {
+			log.G(ctx).Warnf("unable to cleanup image path: %s", err)
+		}
+	}
+}
 func (c *Container) Process() process.Process {
 	return c.process
 }
