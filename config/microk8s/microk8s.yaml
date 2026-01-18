@@ -1,0 +1,15 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: zeropod-node
+  namespace: zeropod-system
+spec:
+  template:
+    spec:
+      volumes:
+        - name: containerd-run
+          hostPath:
+            path: /var/snap/microk8s/common/run
+        - name: containerd-etc
+          hostPath:
+            path: /var/snap/microk8s/current/args
