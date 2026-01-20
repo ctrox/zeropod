@@ -27,6 +27,7 @@ const (
 	ProbeBufferSizeAnnotationKey     = "zeropod.ctrox.dev/probe-buffer-size"
 	DisableMigrateDataAnnotationKey  = "zeropod.ctrox.dev/disable-migrate-data"
 	LazyRestoreAnnotationKey         = "zeropod.ctrox.dev/lazy-restore"
+	ImageStreamingAnnotationKey      = "zeropod.ctrox.dev/image-streaming"
 	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
 	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
 	CRIPodNameAnnotation             = "io.kubernetes.cri.sandbox-name"
@@ -59,6 +60,7 @@ type Config struct {
 	ProbeBufferSize       int
 	DisableMigrateData    bool
 	LazyRestore           bool
+	ImageStreaming        bool
 	spec                  *specs.Spec
 }
 
@@ -154,6 +156,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		DisableProbeDetection: decodeBool(spec.Annotations, DisableProbeDetectAnnotationKey, false),
 		DisableMigrateData:    decodeBool(spec.Annotations, DisableMigrateDataAnnotationKey, false),
 		LazyRestore:           decodeBool(spec.Annotations, LazyRestoreAnnotationKey, false),
+		ImageStreaming:        decodeBool(spec.Annotations, ImageStreamingAnnotationKey, false),
 		spec:                  spec,
 	}, nil
 }

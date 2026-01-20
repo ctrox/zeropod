@@ -102,6 +102,13 @@ func (c *Container) checkpoint(ctx context.Context) error {
 		opts.ParentPath = nodev1.RelativePreDumpDir()
 	}
 
+	streamingCtx, cancel := context.WithTimeout(ctx, streamingDumpTimeout)
+	if c.cfg.ImageStreaming {
+		if err := c.prepareStreamingDump(streamingCtx); err != nil {
+			return fmt.Errorf("preparing streaming dump: %w", err)
+		}
+	}
+
 	c.AddCheckpointedPID(c.Pid())
 	// ImagePath is always the same, regardless of pre-dump
 	opts.ImagePath = nodev1.SnapshotPath(c.ID())
@@ -114,6 +121,7 @@ func (c *Container) checkpoint(ctx context.Context) error {
 			log.G(ctx).Errorf("error reading dump.log: %s", err)
 		}
 		log.G(ctx).Errorf("dump.log: %s", b)
+		cancel()
 		return err
 	}
 

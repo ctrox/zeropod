@@ -26,3 +26,8 @@ func TestCheckpointExtraArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestImageStreamer(t *testing.T) {
+	c := &Container{id: "foo"}
+	c.prepareStreamingDump(t.Context())
+}

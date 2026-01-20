@@ -60,6 +60,7 @@ type Container struct {
 	metrics          *v1.ContainerMetrics
 	runcVersion      string
 	lazyRestore      sync.Mutex
+	streamingCR      sync.Mutex
 }
 
 func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {

@@ -5,7 +5,7 @@ import "path/filepath"
 const (
 	runPath                  = "/run/zeropod/"
 	SocketPath               = runPath + "node.sock"
-	SnapshotSuffix           = "snapshot"
+	SnapshotSuffix           = "s"
 	UpperSuffix              = "upper"
 	WorkDirSuffix            = "work"
 	MigrateAnnotationKey     = "zeropod.ctrox.dev/migrate"

@@ -6,7 +6,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
     gnutls-dev uuid-dev
 
 WORKDIR /workspace
-
 RUN git clone https://github.com/checkpoint-restore/criu.git
 WORKDIR /workspace/criu
 ADD criu/*.patch .
@@ -22,8 +21,21 @@ RUN mkdir criu-libs/ && \
     for l in $(ldd criu/criu | awk '{ print $3 }'); do cp $l criu-libs/; done && \
     rm criu-libs/libc.so*
 
+WORKDIR /workspace
+RUN git clone https://github.com/lz4/lz4.git
+WORKDIR /workspace/lz4
+RUN git checkout v1.10.0 && make -j $(nproc)
+
+FROM rust:latest as rust
+WORKDIR /workspace
+RUN git clone https://github.com/checkpoint-restore/criu-image-streamer.git
+WORKDIR /workspace/criu-image-streamer
+RUN git checkout 075a7a5eb45cf1f093cda81f8ecb66da4de615f4 && make
+
 # we just add libs and binaries from scratch so this image can be used with
 # containerd's client.Install.
 FROM scratch AS export-stage
 COPY --from=build /workspace/criu/criu/criu /bin/
 COPY --from=build /workspace/criu/criu-libs /lib/
+COPY --from=build /workspace/lz4/lz4 /bin/
+COPY --from=rust /workspace/criu-image-streamer/target/release/criu-image-streamer /bin/

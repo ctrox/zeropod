@@ -1,0 +1,40 @@
+diff --git a/criu/cr-service.c b/criu/cr-service.c
+index dccf4ef38..ed0253922 100644
+--- a/criu/cr-service.c
++++ b/criu/cr-service.c
+@@ -50,6 +50,26 @@
+ 
+ unsigned int service_sk_ino = -1;
+ 
++static int image_dir_mode(void)
++{
++	switch (opts.mode) {
++	case CR_DUMP:
++		/* fallthrough */
++	case CR_CPUINFO_DUMP:
++		/* fallthrough */
++	case CR_PRE_DUMP:
++		return O_DUMP;
++	case CR_RESTORE:
++		return O_RSTR;
++	default:
++		return -1;
++	}
++
++	/* never reached */
++	BUG();
++	return -1;
++}
++
+ static int recv_criu_msg(int socket_fd, CriuReq **req)
+ {
+ 	u8 local[PB_PKOBJ_LOCAL_SIZE];
+@@ -340,7 +360,7 @@ static int setup_images_and_workdir(const char *images_dir_path,
+ 		 * This explains why we provide the argument mode=-1 instead of
+ 		 * O_RSTR or O_DUMP.
+ 		 */
+-		if (open_image_dir(images_dir_path, -1) < 0) {
++		if (open_image_dir(images_dir_path, image_dir_mode()) < 0) {
+ 			pr_perror("Can't open images directory");
+ 			return -1;
+ 		}

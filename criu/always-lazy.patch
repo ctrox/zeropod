@@ -1,8 +1,15 @@
 diff --git a/criu/cr-service.c b/criu/cr-service.c
-index dccf4ef38..bb30c4c98 100644
+index dccf4ef38..50d54ac9e 100644
 --- a/criu/cr-service.c
 +++ b/criu/cr-service.c
-@@ -393,6 +393,12 @@ static int setup_logging_from_req(CriuOpts *req, bool output_changed_by_rpc_conf
+@@ -1,5 +1,6 @@
+ #ifndef _GNU_SOURCE
+ #define _GNU_SOURCE
++#include <cstring>
+ #endif
+ 
+ #include <unistd.h>
+@@ -393,6 +394,12 @@ static int setup_logging_from_req(CriuOpts *req, bool output_changed_by_rpc_conf
  	return 0;
  }
  
@@ -15,23 +22,34 @@ index dccf4ef38..bb30c4c98 100644
  static int setup_opts_from_req(int sk, CriuOpts *req)
  {
  	struct ucred ids;
-@@ -400,6 +406,7 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
+@@ -400,6 +407,9 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
  	socklen_t ids_len = sizeof(struct ucred);
  	char images_dir_path[PATH_MAX] = "";
  	char status_fd[PATH_MAX];
 +	char lazy_pages_socket_path[PATH_MAX];
++	char stream_capture_socket_path[PATH_MAX];
++	char stream_serve_socket_path[PATH_MAX];
  	bool output_changed_by_rpc_conf = false;
  	bool work_changed_by_rpc_conf = false;
  	bool imgs_changed_by_rpc_conf = false;
-@@ -522,6 +529,14 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
+@@ -522,6 +532,23 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
  		opts.lazy_pages = req->lazy_pages;
  	}
  
 +	if (resolve_images_dir_path(lazy_pages_socket_path, imgs_changed_by_rpc_conf, req, ids.pid) == 0) {
++	    strcpy(stream_capture_socket_path, lazy_pages_socket_path);
++	    strcpy(stream_serve_socket_path, lazy_pages_socket_path);
 +		strcat(lazy_pages_socket_path, "/lazy-pages.socket");
 +		if (file_exists(lazy_pages_socket_path)) {
 +			// always enable lazy-pages if the socket exists
 +			opts.lazy_pages = true;
++		}
++
++		strcat(stream_capture_socket_path, "/streamer-capture.sock");
++		strcat(stream_serve_socket_path, "/streamer-serve.sock");
++		if (file_exists(stream_capture_socket_path) || file_exists(stream_serve_socket_path)) {
++			// always enable stream if the socket exists
++			opts.stream = true;
 +		}
 +	}
 +

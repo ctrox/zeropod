@@ -75,15 +75,29 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, error) {
 		Checkpoint:       nodev1.SnapshotPath(c.ID()),
 	}
 
+	beforeRestore := time.Now()
 	if !c.cfg.LazyRestore {
-		return c.restore(ctx, req)
+		streamingCtx, cancel := context.WithTimeout(ctx, streamingRestoreTimeout)
+		if c.cfg.ImageStreaming {
+			if err := c.prepareStreamingRestore(streamingCtx); err != nil {
+				return nil, fmt.Errorf("preparing streaming restore: %w", err)
+			}
+		}
+		cont, err := c.restore(ctx, req, beforeRestore)
+		if err != nil {
+			// only cancel streaming restore on error, a successful restore will happen
+			// in the background.
+			cancel()
+			return nil, err
+		}
+		return cont, nil
 	}
 
 	lazyCtx, lazyCancel := context.WithTimeout(ctx, lazyCancelTimeout)
 	if err := c.prepareLazyRestore(lazyCtx, req); err != nil {
 		return nil, fmt.Errorf("preparing lazy restore: %w", err)
 	}
-	cont, err := c.restore(ctx, req)
+	cont, err := c.restore(ctx, req, beforeRestore)
 	if err != nil {
 		// only cancel lazy restore on error, a successful restore will happen
 		// in the background.
@@ -92,8 +106,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, error) {
 	return cont, err
 }
 
-func (c *Container) restore(ctx context.Context, req *task.CreateTaskRequest) (*runc.Container, error) {
-	beforeRestore := time.Now()
+func (c *Container) restore(ctx context.Context, req *task.CreateTaskRequest, before time.Time) (*runc.Container, error) {
 	if c.cfg.DisableCheckpointing {
 		req.Checkpoint = ""
 	}
@@ -128,7 +141,7 @@ func (c *Container) restore(ctx context.Context, req *task.CreateTaskRequest) (*
 	}
 	c.Container = container
 	c.process = p
-	c.setPhaseNotify(v1.ContainerPhase_RUNNING, time.Since(beforeRestore))
+	c.setPhaseNotify(v1.ContainerPhase_RUNNING, time.Since(before))
 	log.G(ctx).Printf("restored process: %d in %s", p.Pid(), c.metrics.LastRestoreDuration.AsDuration())
 
 	if c.postRestore != nil {
@@ -164,7 +177,7 @@ func (c *Container) prepareLazyRestore(ctx context.Context, createReq *task.Crea
 		cmd.Wait()
 		log.G(ctx).Info("lazy-pages server closed")
 	}()
-	if err := waitForLazyPagesSocket(ctx, nodev1.SnapshotPath(c.ID()), time.Second); err != nil {
+	if err := waitForSocket(ctx, nodev1.SnapshotPath(c.ID()), "lazy-pages.socket", time.Second); err != nil {
 		return err
 	}
 	log.G(ctx).WithField("duration", time.Since(beforeLazy).String()).Debug("lazy-pages daemon started")
@@ -299,7 +312,7 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *Confi
 
 	// wait for the lazy pages socket file to exist to ensure the pages
 	// server is up and running.
-	if err := waitForLazyPagesSocket(ctx, r.Checkpoint, time.Second); err != nil {
+	if err := waitForSocket(ctx, r.Checkpoint, "lazy-pages.socket", time.Second); err != nil {
 		log.G(ctx).Errorf("aborting restore: %s", err)
 		r.Checkpoint = ""
 		return false, nil
@@ -308,18 +321,18 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *Confi
 	return false, nil
 }
 
-// waitForLazyPagesSocket waits until the lazy-pages.socket file exists in the
+// waitForSocket waits until the lazy-pages.socket file exists in the
 // supplied checkpointPath.
-func waitForLazyPagesSocket(ctx context.Context, checkpointPath string, timeout time.Duration) error {
+func waitForSocket(ctx context.Context, checkpointPath, sock string, timeout time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout waiting for lazy-pages.socket")
+			return fmt.Errorf("timeout waiting for %s", sock)
 		default:
-			_, err := os.Stat(filepath.Join(checkpointPath, "lazy-pages.socket"))
+			_, err := os.Stat(filepath.Join(checkpointPath, sock))
 			if err == nil {
 				return nil
 			}

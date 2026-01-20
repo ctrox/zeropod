@@ -8,6 +8,7 @@ CRIU_VERSION := v4.2
 CRIU_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-criu:$(CRIU_VERSION)
 DOCKER_SOCK := /var/run/docker.sock
 EBPF_IMAGE := $(REGISTRY)/$(NAMESPACE)/zeropod-ebpf:$(TAG)
+PLATFORMS := linux/arm64,linux/amd64
 # versioning
 PKG=github.com/ctrox/zeropod
 CONTAINERD_PKG=github.com/containerd/containerd/v2
@@ -41,7 +42,7 @@ logs:
 	docker exec kind-worker journalctl -fu containerd & docker exec kind-worker2 journalctl -fu containerd
 
 build-criu:
-	docker buildx build --push --platform linux/arm64,linux/amd64 --build-arg CRIU_VERSION=$(CRIU_VERSION) -t $(CRIU_IMAGE) -f criu/Dockerfile .
+	docker buildx build --push --platform $(PLATFORMS) --build-arg CRIU_VERSION=$(CRIU_VERSION) -t $(CRIU_IMAGE) -f criu/Dockerfile .
 
 build-installer:
 	docker build --load -t $(INSTALLER_IMAGE) -f cmd/installer/Dockerfile .
