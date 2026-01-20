@@ -58,6 +58,7 @@ type Container struct {
 	evacuation       sync.Once
 	metrics          *v1.ContainerMetrics
 	runcVersion      string
+	lazyRestore      sync.Mutex
 }
 
 func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
@@ -427,7 +428,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 	return func() error {
 		log.G(ctx).Printf("got a request")
 
-		restoredContainer, _, err := c.Restore(ctx)
+		restoredContainer, err := c.Restore(ctx)
 		if err != nil {
 			if errors.Is(err, ErrAlreadyRestored) {
 				log.G(ctx).Info("container is already restored, ignoring request")

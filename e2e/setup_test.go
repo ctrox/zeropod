@@ -448,6 +448,12 @@ func disableDataMigration() podOption {
 	})
 }
 
+func lazyRestore() podOption {
+	return annotations(map[string]string{
+		shim.LazyRestoreAnnotationKey: "true",
+	})
+}
+
 const agnHostImage = "registry.k8s.io/e2e-test-images/agnhost:2.39"
 
 func agnContainer(name string, port int) podOption {

@@ -27,7 +27,7 @@ func TestPageServerProxy(t *testing.T) {
 	ca, serverCert, clientCert := prepareTLS(t)
 	caCertPool.AddCert(ca)
 	tlsConfig := serverTLSConfig(caCertPool, serverCert)
-	psp := newPageServerProxy("localhost:0", socket, tlsConfig, nil, slog.Default())
+	psp := newPageServerProxy("127.0.0.1:0", socket, tlsConfig, nil, slog.Default())
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 	defer cancel()

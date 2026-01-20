@@ -143,7 +143,7 @@ func TestE2E(t *testing.T) {
 		},
 		"pod with HTTP probe": {
 			pod: testPod(
-				scaleDownAfter(time.Second),
+				defaultScaleDownAfter,
 				addContainer("nginx", "nginx", nil, 80),
 				livenessProbe(&corev1.Probe{
 					InitialDelaySeconds: 5,
@@ -163,7 +163,7 @@ func TestE2E(t *testing.T) {
 		},
 		"pod with TCP probe": {
 			pod: testPod(
-				scaleDownAfter(time.Second),
+				defaultScaleDownAfter,
 				addContainer("nginx", "nginx", nil, 80),
 				livenessProbe(&corev1.Probe{
 					InitialDelaySeconds: 5,
@@ -183,7 +183,7 @@ func TestE2E(t *testing.T) {
 		},
 		"pod with large HTTP probe and increased buffer": {
 			pod: testPod(
-				scaleDownAfter(time.Second),
+				defaultScaleDownAfter,
 				annotations(map[string]string{shim.ProbeBufferSizeAnnotationKey: "2048"}),
 				addContainer("nginx", "nginx", nil, 80),
 				livenessProbe(&corev1.Probe{
@@ -203,6 +203,17 @@ func TestE2E(t *testing.T) {
 			waitScaledDown:   true,
 			expectRunning:    false,
 			expectScaledDown: true,
+		},
+		"lazy restore": {
+			pod: testPod(
+				defaultScaleDownAfter,
+				lazyRestore(),
+				addContainer("nginx", "nginx", nil, 80),
+			),
+			parallelReqs:   1,
+			maxReqDuration: time.Second,
+			sequentialReqs: 5,
+			waitScaledDown: true,
 		},
 	}
 
