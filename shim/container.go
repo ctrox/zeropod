@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"slices"
 	"sync"
@@ -380,8 +381,9 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 // initRetry returns the duration in which the next init should be retried. It
 // backs off exponentially with an initial wait of 100 milliseconds.
 func (c *Container) initRetry() time.Duration {
-	const initial, max = time.Millisecond * 100, time.Minute * 5
-	c.initBackoff = min(max, c.initBackoff*2)
+	const initial, max = time.Millisecond * 100, time.Minute * 2
+	jitter := time.Duration(rand.Intn(int(c.initBackoff.Nanoseconds() + 1)))
+	c.initBackoff = min(max, c.initBackoff+jitter)
 
 	if c.initBackoff == 0 {
 		c.initBackoff = initial
