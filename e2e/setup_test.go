@@ -390,6 +390,12 @@ func preDump(preDump bool) podOption {
 	})
 }
 
+func imageStreaming(imageStreaming bool) podOption {
+	return annotations(map[string]string{
+		shim.ImageStreamingAnnotationKey: strconv.FormatBool(imageStreaming),
+	})
+}
+
 func scaleDownAfter(dur time.Duration) podOption {
 	return annotations(map[string]string{
 		shim.ScaleDownDurationAnnotationKey: dur.String(),
@@ -467,9 +473,10 @@ func agnContainer(name string, port int) podOption {
 func addContainer(name, image string, args []string, ports ...int) podOption {
 	return func(p *pod) {
 		container := corev1.Container{
-			Name:  name,
-			Image: image,
-			Args:  args,
+			Name:    name,
+			Image:   image,
+			Args:    args,
+			Command: []string{"/freezer"},
 		}
 		for _, port := range ports {
 			container.Ports = append(container.Ports, corev1.ContainerPort{ContainerPort: int32(port)})
