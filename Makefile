@@ -73,14 +73,14 @@ test:
 # of the host into the container. For now this is the only way to run the e2e
 # tests on Mac OS with apple silicon as the shim requires GOOS=linux.
 docker-test-e2e: build-test
-	docker run --rm --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make test-e2e
+	docker run --rm -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make test-e2e
 
 docker-bench: build-test
-	docker run --rm --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make bench
+	docker run --rm -ti --privileged --network=host --rm -v $(DOCKER_SOCK):$(DOCKER_SOCK) -v $(PWD):/app $(TEST_IMAGE) make bench
 
 # has to have SYS_ADMIN because the test tries to set netns and mount bpffs
 docker-test: build-test
-	docker run --rm --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host --userns=host -v $(PWD):/app $(TEST_IMAGE) go test -v -short ./... $(testargs)
+	docker run --rm -ti --cap-add=SYS_ADMIN --cap-add=NET_ADMIN --pid=host --userns=host -v $(PWD):/app $(TEST_IMAGE) go test -v -short ./... $(testargs)
 
 CLANG ?= clang
 CFLAGS := -O2 -g -Wall -Werror
