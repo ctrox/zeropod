@@ -19,6 +19,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
@@ -39,6 +40,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 		runtimeClassName    string
 		expectedMigration   bool
 		expectedRequeue     bool
+		garbageCollection   bool
 	}{
 		"pod that should be migrated": {
 			pod:                 newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_SCALED_DOWN),
@@ -47,6 +49,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 			deletePod:           true,
 			nodeName:            "node1",
 			expectedMigration:   true,
+			garbageCollection:   true,
 		},
 		"pod without live migration and running": {
 			pod:                 newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING),
@@ -87,6 +90,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 			t.Setenv(nodev1.NodeNameEnvKey, tc.nodeName)
 			r, err := newPodReconciler(kube, slog.Default())
 			require.NoError(t, err)
+			r.autoGCMigrations = tc.garbageCollection
 
 			if tc.containerID != "" {
 				tc.pod.Status.ContainerStatuses[0].ContainerID = tc.containerID
@@ -111,6 +115,9 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 				require.NotEmpty(t, migration.Status.Containers)
 				assert.Equal(t, v1.MigrationPhasePending, migration.Status.Containers[0].Condition.Phase)
 				assert.Equal(t, tc.expectedContainerID, migration.Spec.Containers[0].ID)
+				hasRef, err := controllerutil.HasOwnerReference(migration.OwnerReferences, tc.pod, kube.Scheme())
+				assert.NoError(t, err)
+				assert.Equal(t, tc.garbageCollection, hasRef, "owner reference")
 			} else {
 				assert.True(t, errors.IsNotFound(kube.Get(ctx, client.ObjectKeyFromObject(tc.pod), &v1.Migration{})))
 			}
@@ -132,6 +139,7 @@ func TestPodReconcilerMigrationTarget(t *testing.T) {
 		nodeName          string
 		expectedRequeue   bool
 		deletePod         bool
+		garbageCollection bool
 	}{
 		"pending pod should claim migration with matching hash": {
 			pod:               setPhase(setPodTemplateHash(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING), "hash"), corev1.PodPending),
@@ -139,6 +147,7 @@ func TestPodReconcilerMigrationTarget(t *testing.T) {
 			expectClaimed:     true,
 			expectedRequeue:   false,
 			nodeName:          "node1",
+			garbageCollection: true,
 		},
 		"another pending pod should claim migration with matching hash": {
 			pod:               setPhase(setPodTemplateHash(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING), "hashb"), corev1.PodPending),
@@ -183,6 +192,7 @@ func TestPodReconcilerMigrationTarget(t *testing.T) {
 			t.Setenv(nodev1.NodeNameEnvKey, tc.nodeName)
 			r, err := newPodReconciler(kube, slog.Default())
 			require.NoError(t, err)
+			r.autoGCMigrations = tc.garbageCollection
 
 			require.NoError(t, kube.Create(ctx, tc.pod))
 			if tc.deletePod {
@@ -206,6 +216,9 @@ func TestPodReconcilerMigrationTarget(t *testing.T) {
 				assert.Empty(t, tc.existingMigration.Spec.TargetPod)
 				assert.Empty(t, tc.existingMigration.Spec.TargetNode)
 			}
+			hasRef, err := controllerutil.HasOwnerReference(tc.existingMigration.OwnerReferences, tc.pod, kube.Scheme())
+			assert.NoError(t, err)
+			assert.Equal(t, tc.garbageCollection, hasRef, "owner reference")
 		})
 	}
 }

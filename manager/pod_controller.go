@@ -17,6 +17,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -24,12 +25,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 )
 
-func NewPodController(ctx context.Context, mgr manager.Manager, log *slog.Logger) error {
+func NewPodController(ctx context.Context, mgr manager.Manager, log *slog.Logger, opts ...PodControllerOption) error {
 	ctrl.SetLogger(logr.FromSlogHandler(log.Handler()))
 
 	pr, err := newPodReconciler(mgr.GetClient(), log)
 	if err != nil {
 		return err
+	}
+	for _, opt := range opts {
+		opt(pr)
 	}
 	c, err := controller.New("pod-controller", mgr, controller.Options{
 		Reconciler: pr,
@@ -45,10 +49,23 @@ func NewPodController(ctx context.Context, mgr manager.Manager, log *slog.Logger
 	))
 }
 
+// PodControllerOption is used for functional opts on the podReconciler.
+type PodControllerOption func(*podReconciler)
+
+// AutoGCMigrations configures the controller to attach an ownerReference on
+// every migration to automatically garbage collect the migration object on
+// owner pod deletion.
+func AutoGCMigrations(gc bool) PodControllerOption {
+	return func(pr *podReconciler) {
+		pr.autoGCMigrations = gc
+	}
+}
+
 type podReconciler struct {
-	kube     client.Client
-	log      *slog.Logger
-	nodeName string
+	kube             client.Client
+	log              *slog.Logger
+	nodeName         string
+	autoGCMigrations bool
 }
 
 func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, error) {
@@ -122,7 +139,7 @@ func (r podReconciler) isMigrationCandidate(pod *corev1.Pod) bool {
 
 func (r podReconciler) prepareMigrationSource(ctx context.Context, pod *corev1.Pod) error {
 	log := r.log.With("pod_name", pod.Name, "pod_namespace", pod.Namespace)
-	migration, err := newMigration(pod)
+	migration, err := r.newMigration(pod)
 	if err != nil {
 		return fmt.Errorf("initializing migration object: %w", err)
 	}
@@ -163,6 +180,13 @@ func (r podReconciler) prepareMigrationTarget(ctx context.Context, pod *corev1.P
 		}
 		if mig.MatchesPod(pod) && !mig.Claimed() {
 			mig.Claim(pod.Name, pod.Spec.NodeName)
+			if r.autoGCMigrations {
+				// when claiming, we transfer ownership to the target pod so it
+				// will be GC'd when the pod is deleted.
+				if err := controllerutil.SetOwnerReference(pod, &mig, r.kube.Scheme()); err != nil {
+					return false, fmt.Errorf("setting owner reference: %w", err)
+				}
+			}
 			if err := r.kube.Update(ctx, &mig); err != nil {
 				if errors.IsConflict(err) {
 					log.Warn("conflict claiming migration, requeuing")
@@ -181,7 +205,7 @@ func isZeropod(pod *corev1.Pod) bool {
 	return pod.Spec.RuntimeClassName != nil && *pod.Spec.RuntimeClassName == v1.RuntimeClassName
 }
 
-func newMigration(pod *corev1.Pod) (*v1.Migration, error) {
+func (r podReconciler) newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 	containers := []v1.MigrationContainer{}
 	for _, container := range pod.Status.ContainerStatuses {
 		u, err := url.Parse(container.ContainerID)
@@ -193,8 +217,7 @@ func newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 			ID:   u.Host,
 		})
 	}
-
-	return &v1.Migration{
+	mig := &v1.Migration{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       pod.Name,
 			Namespace:  pod.Namespace,
@@ -207,7 +230,13 @@ func newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 			Containers:      containers,
 			LiveMigration:   liveMigrationEnabled(pod),
 		},
-	}, nil
+	}
+	if r.autoGCMigrations {
+		if err := controllerutil.SetOwnerReference(pod, mig, r.kube.Scheme()); err != nil {
+			return nil, fmt.Errorf("setting owner reference: %w", err)
+		}
+	}
+	return mig, nil
 }
 
 func anyMigrationEnabled(pod *corev1.Pod) bool {

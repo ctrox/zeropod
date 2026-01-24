@@ -49,6 +49,7 @@ var (
 	migrationServersTimeout = flag.Duration("migration-servers-timeout", time.Second*10, "how long to wait for migration servers")
 	migrationClaimTimeout   = flag.Duration("migration-claim-timeout", time.Second*10, "how long to wait for migration to be claimed")
 	migrationReadyTimeout   = flag.Duration("migration-ready-timeout", time.Minute*5, "how long to wait for migration to be ready")
+	autoGCMigrations        = flag.Bool("auto-gc-migrations", true, "automatically garbage collect migrations when owning pod is deleted")
 
 	version   = ""
 	revision  = ""
@@ -170,7 +171,7 @@ func main() {
 	}
 	go nodeServer.Start(ctx)
 
-	if err := manager.NewPodController(ctx, mgr, log); err != nil {
+	if err := manager.NewPodController(ctx, mgr, log, manager.AutoGCMigrations(*autoGCMigrations)); err != nil {
 		log.Error("running pod controller", "error", err)
 	}
 	if err := manager.NewMigrationController(ctx, mgr, log); err != nil {
