@@ -243,7 +243,7 @@ func TestE2E(t *testing.T) {
 						c.Transport = &http.Transport{DisableKeepAlives: !tc.keepAlive}
 
 						before := time.Now()
-						resp, err := c.Get(fmt.Sprintf("http://localhost:%d", e2e.port))
+						resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d", e2e.port))
 						if err != nil {
 							t.Error(err)
 							return
@@ -368,7 +368,7 @@ func TestE2E(t *testing.T) {
 		// hitting it
 		waitUntilScaledDown(t, ctx, e2e.client, pod)
 		// make a real request and expect it to scale down again
-		resp, err := c.Get(fmt.Sprintf("http://localhost:%d", e2e.port))
+		resp, err := c.Get(fmt.Sprintf("http://127.0.0.1:%d", e2e.port))
 		require.NoError(t, err)
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		waitUntilScaledDown(t, ctx, e2e.client, pod)
