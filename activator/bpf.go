@@ -39,12 +39,14 @@ type BPF struct {
 	qdiscs  []*netlink.GenericQdisc
 	filters []*netlink.BpfFilter
 	links   []link.Link
+	noPin   bool
 }
 
 type BPFConfig struct {
 	mapSizes               map[string]uint32
 	probeBinaryName        string
 	trackerIgnoreLocalhost bool
+	disablePinning         bool
 }
 
 type BPFOpts func(cfg *BPFConfig)
@@ -64,6 +66,12 @@ func ProbeBinaryName(name string) BPFOpts {
 func TrackerIgnoreLocalhost(ignore bool) BPFOpts {
 	return func(cfg *BPFConfig) {
 		cfg.trackerIgnoreLocalhost = ignore
+	}
+}
+
+func DisablePinning() BPFOpts {
+	return func(cfg *BPFConfig) {
+		cfg.disablePinning = true
 	}
 }
 
@@ -120,7 +128,7 @@ func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 		return nil, fmt.Errorf("loading objects: %w", err)
 	}
 
-	return &BPF{pid: pid, log: log, objs: &objs}, nil
+	return &BPF{pid: pid, log: log, objs: &objs, noPin: cfg.disablePinning}, nil
 }
 
 func (bpf *BPF) Cleanup() error {
@@ -201,6 +209,9 @@ func (bpf *BPF) loadOrAttachTCXLink(iface *net.Interface, program *ebpf.Program,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("could not attach TCX %s: %w", name, err)
+	}
+	if bpf.noPin {
+		return l, nil
 	}
 	return l, l.Pin(pinPath)
 }

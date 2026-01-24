@@ -149,6 +149,9 @@ func TestActivator(t *testing.T) {
 					map[string]uint32{SocketTrackerMap: 1024},
 				),
 				TrackerIgnoreLocalhost(tc.trackerIgnoreLocalhost),
+				// disable pinning for this test since this is flaky on some
+				// systems (gh actions mostly)
+				DisablePinning(),
 			)
 			require.NoError(t, err)
 			require.NoError(t, bpf.AttachRedirector("lo"))
