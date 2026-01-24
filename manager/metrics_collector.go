@@ -9,7 +9,6 @@ import (
 
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/shim/task"
 	"github.com/prometheus/client_golang/prometheus"
 )
 
@@ -80,14 +79,14 @@ func NewCollector() *Collector {
 }
 
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
-	socks, err := os.ReadDir(task.ShimSocketPath)
+	socks, err := os.ReadDir(v1.ShimSocketPath)
 	if err != nil {
-		slog.Error("error listing file in shim socket path", "path", task.ShimSocketPath, "err", err)
+		slog.Error("error listing file in shim socket path", "path", v1.ShimSocketPath, "err", err)
 		return
 	}
 
 	for _, sock := range socks {
-		sockName := filepath.Join(task.ShimSocketPath, sock.Name())
+		sockName := filepath.Join(v1.ShimSocketPath, sock.Name())
 		slog.Debug("getting metrics", "name", sockName)
 
 		shimMetrics, err := collectMetricsOverTTRPC(context.Background(), sockName)

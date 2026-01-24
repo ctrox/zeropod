@@ -14,10 +14,8 @@ import (
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 )
 
-const ShimSocketPath = "/run/zeropod/s/"
-
 func shimSocketAddress(containerdSocket string) string {
-	return fmt.Sprintf("unix://%s.sock", filepath.Join(ShimSocketPath, path.Base(containerdSocket)))
+	return fmt.Sprintf("unix://%s.sock", filepath.Join(v1.ShimSocketPath, path.Base(containerdSocket)))
 }
 
 func shimID() (string, error) {
