@@ -196,8 +196,9 @@ func newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 
 	return &v1.Migration{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      pod.Name,
-			Namespace: pod.Namespace,
+			Name:       pod.Name,
+			Namespace:  pod.Namespace,
+			Finalizers: []string{checkpointCleanupFinalizer},
 		},
 		Spec: v1.MigrationSpec{
 			SourcePod:       pod.Name,

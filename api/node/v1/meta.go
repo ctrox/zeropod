@@ -4,9 +4,7 @@ import "path/filepath"
 
 const (
 	runPath                  = "/run/zeropod/"
-	varPath                  = "/var/lib/zeropod/"
 	SocketPath               = runPath + "node.sock"
-	imagesPath               = varPath + "i/"
 	SnapshotSuffix           = "snapshot"
 	UpperSuffix              = "upper"
 	WorkDirSuffix            = "work"
@@ -17,8 +15,14 @@ const (
 	preDumpDirName           = "pre-dump"
 )
 
+var imageBasePath = "/var/lib/zeropod/"
+
+func SetImageBasePath(path string) {
+	imageBasePath = path
+}
+
 func ImagePath(id string) string {
-	return filepath.Join(imagesPath, id)
+	return filepath.Join(imageBasePath, "i", id)
 }
 
 func WorkDirPath(id string) string {
