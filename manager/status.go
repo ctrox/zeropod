@@ -16,7 +16,6 @@ import (
 
 	"github.com/containerd/ttrpc"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
-	"github.com/ctrox/zeropod/shim/task"
 	"github.com/fsnotify/fsnotify"
 	"google.golang.org/protobuf/types/known/emptypb"
 	corev1 "k8s.io/api/core/v1"
@@ -66,20 +65,20 @@ type SubscriberConfig struct {
 }
 
 func StartSubscribers(ctx context.Context, sc SubscriberConfig, podHandlers ...PodHandler) error {
-	if _, err := os.Stat(task.ShimSocketPath); errors.Is(err, os.ErrNotExist) {
-		if err := os.Mkdir(task.ShimSocketPath, os.ModePerm); err != nil {
+	if _, err := os.Stat(v1.ShimSocketPath); errors.Is(err, os.ErrNotExist) {
+		if err := os.Mkdir(v1.ShimSocketPath, os.ModePerm); err != nil {
 			return err
 		}
 	}
 
-	socks, err := os.ReadDir(task.ShimSocketPath)
+	socks, err := os.ReadDir(v1.ShimSocketPath)
 	if err != nil {
 		return fmt.Errorf("error listing file in shim socket path: %s", err)
 	}
 
 	for _, sock := range socks {
 		go func() {
-			if err := subscribe(ctx, sc, filepath.Join(task.ShimSocketPath, sock.Name()), podHandlers); err != nil {
+			if err := subscribe(ctx, sc, filepath.Join(v1.ShimSocketPath, sock.Name()), podHandlers); err != nil {
 				sc.Log.Error("error subscribing", "sock", sock.Name(), "err", err)
 			}
 		}()
@@ -234,7 +233,7 @@ func watchForShims(ctx context.Context, sc SubscriberConfig, podHandlers []PodHa
 	}
 	defer watcher.Close()
 
-	if err := watcher.Add(task.ShimSocketPath); err != nil {
+	if err := watcher.Add(v1.ShimSocketPath); err != nil {
 		return err
 	}
 

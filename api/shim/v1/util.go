@@ -6,6 +6,8 @@ import (
 	"github.com/containerd/containerd/v2/pkg/atomicfile"
 )
 
+const ShimSocketPath = "/run/zeropod/s/"
+
 // WriteAddress writes a address file atomically
 func WriteAddress(path, address string) error {
 	path, err := filepath.Abs(path)
