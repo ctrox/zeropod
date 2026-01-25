@@ -27,9 +27,9 @@ const (
 
 var (
 	crBuckets = []float64{
-		0.02, 0.03, 0.04, 0.05, 0.075,
-		0.1, 0.12, 0.14, 0.16, 0.18,
-		0.2, 0.3, 0.4, 0.5, 1,
+		0.025, 0.05, 0.1, 0.2, 0.3,
+		0.4, 0.5, 0.6, 0.7, 0.8,
+		0.9, 1, 2.5, 5, 10,
 	}
 	commonLabels = []string{labelContainerName, LabelPodName, LabelPodNamespace}
 )
