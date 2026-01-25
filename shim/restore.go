@@ -34,8 +34,8 @@ var (
 )
 
 func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
-	c.checkpointRestore.Lock()
-	defer c.checkpointRestore.Unlock()
+	c.CheckpointRestore.Lock()
+	defer c.CheckpointRestore.Unlock()
 	if !c.ScaledDown() {
 		return nil, nil, ErrAlreadyRestored
 	}

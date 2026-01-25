@@ -68,7 +68,6 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	}
 	w := &wrapper{
 		service:           s,
-		checkpointRestore: sync.Mutex{},
 		zeropodContainers: make(map[string]*zshim.Container),
 		zeropodEvents:     make(chan *v1.ContainerStatus, 128),
 		exitChan:          reaper.Default.Subscribe(),
@@ -108,7 +107,6 @@ type wrapper struct {
 	*service
 
 	mut               sync.Mutex
-	checkpointRestore sync.Mutex
 	zeropodContainers map[string]*zshim.Container
 	zeropodEvents     chan *v1.ContainerStatus
 	exitChan          chan runcC.Exit
@@ -139,7 +137,7 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return w.service.Create(ctx, r)
 	}
 
-	zeropodContainer, err := zshim.New(w.context, cfg, r, &w.checkpointRestore, w.platform, w.zeropodEvents)
+	zeropodContainer, err := zshim.New(w.context, cfg, r, w.platform, w.zeropodEvents)
 	if err != nil {
 		return nil, fmt.Errorf("error creating scaled container: %w", err)
 	}
@@ -346,15 +344,15 @@ func scaledDownStats() (*taskAPI.StatsResponse, error) {
 }
 
 func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Empty, error) {
-	// our container might be just in the process of checkpoint/restore, so we
-	// ensure that has finished.
-	w.checkpointRestore.Lock()
-	defer w.checkpointRestore.Unlock()
-
 	zeropodContainer, ok := w.getZeropodContainer(r.ID)
 	if !ok {
 		return w.service.Kill(ctx, r)
 	}
+	// our container might be just in the process of checkpoint/restore, so we
+	// ensure that has finished.
+	zeropodContainer.CheckpointRestore.Lock()
+	defer zeropodContainer.CheckpointRestore.Unlock()
+
 	log.G(ctx).Infof("kill called in zeropod: %s", zeropodContainer.ID())
 	zeropodContainer.CancelScaleDown()
 
@@ -435,7 +433,9 @@ func (w *wrapper) preventExit(cp containerProcess) bool {
 // preRestore should be called before restoring as it calls preStart in the
 // task service to get the handleStarted closure.
 func (w *wrapper) preRestore() zshim.HandleStartedFunc {
+	w.lifecycleMu.Lock()
 	handleStarted, cleanup := w.preStart(nil)
+	w.lifecycleMu.Unlock()
 	defer cleanup()
 	return handleStarted
 }

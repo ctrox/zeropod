@@ -30,6 +30,9 @@ type HandleStartedFunc func(*runc.Container, process.Process)
 
 type Container struct {
 	*runc.Container
+	// mutex to lock during checkpoint/restore operations to ensure we don't try
+	// to restore during checkpoint or the other way around.
+	CheckpointRestore *sync.Mutex
 
 	context          context.Context
 	id               string
@@ -52,16 +55,12 @@ type Container struct {
 	events           chan *v1.ContainerStatus
 	checkpointedPIDs map[int]struct{}
 	pidsMu           sync.Mutex
-	// mutex to lock during checkpoint/restore operations since concurrent
-	// restores can cause cgroup confusion. This mutex is shared between all
-	// containers.
-	checkpointRestore *sync.Mutex
-	evacuation        sync.Once
-	metrics           *v1.ContainerMetrics
-	runcVersion       string
+	evacuation       sync.Once
+	metrics          *v1.ContainerMetrics
+	runcVersion      string
 }
 
-func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, cr *sync.Mutex, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
+func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
 	// get network ns of our container and store it for later use
 	netNSPath, err := GetNetworkNS(cfg.spec)
 	if err != nil {
@@ -92,7 +91,7 @@ func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, cr *syn
 		cfg:               cfg,
 		logPath:           logPath,
 		netNS:             targetNS,
-		checkpointRestore: cr,
+		CheckpointRestore: &sync.Mutex{},
 		events:            events,
 		checkpointedPIDs:  map[int]struct{}{},
 		metrics:           newMetrics(cfg, true),

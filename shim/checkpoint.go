@@ -40,8 +40,8 @@ func (c *Container) scaleDown(ctx context.Context) error {
 }
 
 func (c *Container) kill(ctx context.Context) error {
-	c.checkpointRestore.Lock()
-	defer c.checkpointRestore.Unlock()
+	c.CheckpointRestore.Lock()
+	defer c.CheckpointRestore.Unlock()
 	log.G(ctx).Infof("checkpointing is disabled, scaling down by killing")
 	c.AddCheckpointedPID(c.Pid())
 
@@ -53,8 +53,8 @@ func (c *Container) kill(ctx context.Context) error {
 }
 
 func (c *Container) checkpoint(ctx context.Context) error {
-	c.checkpointRestore.Lock()
-	defer c.checkpointRestore.Unlock()
+	c.CheckpointRestore.Lock()
+	defer c.CheckpointRestore.Unlock()
 
 	snapshotDir := nodev1.SnapshotPath(c.ID())
 	if err := os.RemoveAll(snapshotDir); err != nil {
