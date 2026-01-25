@@ -2,6 +2,7 @@ package v1
 
 import (
 	"net"
+	"slices"
 	"strconv"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -146,5 +147,13 @@ func (mig Migration) ClaimedAndMatchesPod(pod *corev1.Pod) bool {
 
 // Claimed indicates if this migration already has been claimed
 func (mig Migration) Claimed() bool {
-	return mig.Spec.TargetNode != ""
+	// a non-empty target node or a container in status unclaimed indicates the
+	// migration has already been claimed before.
+	return mig.Spec.TargetNode != "" || mig.hasUnclaimedContainer()
+}
+
+func (mig Migration) hasUnclaimedContainer() bool {
+	return slices.ContainsFunc(mig.Status.Containers, func(status MigrationContainerStatus) bool {
+		return status.Condition.Phase == MigrationPhaseUnclaimed
+	})
 }
