@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/containerd/log"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/opencontainers/selinux/go-selinux"
 )
 
 func (c *Container) scaleDown(ctx context.Context) error {
@@ -114,7 +116,9 @@ func (c *Container) checkpoint(ctx context.Context) error {
 	opts.ImagePath = nodev1.SnapshotPath(c.ID())
 
 	beforeCheckpoint := time.Now()
-	if err := initProcess.Runtime().Checkpoint(ctx, c.ID(), opts); err != nil {
+	if err := c.doCR(func() error {
+		return initProcess.Runtime().Checkpoint(ctx, c.ID(), opts)
+	}); err != nil {
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
 		b, err := os.ReadFile(path.Join(workDir, "dump.log"))
 		if err != nil {
@@ -129,6 +133,21 @@ func (c *Container) checkpoint(ctx context.Context) error {
 	log.G(ctx).Infof("checkpointing done in %s", c.metrics.LastCheckpointDuration.AsDuration())
 
 	return nil
+}
+
+// doCR executes the checkpoint/restore function. If an selinux label is
+// configured, we set it to ensure criu is executed with it.
+func (c *Container) doCR(f func() error) error {
+	if c.cfg.CRSelinuxLabel == "" {
+		return f()
+	}
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+	defer func() { _ = selinux.SetExecLabel("") }()
+	if err := selinux.SetExecLabel(c.cfg.CRSelinuxLabel); err != nil {
+		return err
+	}
+	return f()
 }
 
 const checkpointArgSkipTCPInFlight = "--tcp-skip-in-flight"

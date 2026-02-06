@@ -94,6 +94,45 @@ imports = [
 [plugins."io.containerd.internal.v1.opt"]
   path = "/opt/zeropod"
 `
+
+	bottleRocketContainerdConfig = `version = 3
+root = "/var/lib/containerd"
+state = "/run/containerd"
+disabled_plugins = [
+    "io.containerd.internal.v1.opt",
+    "io.containerd.snapshotter.v1.devmapper",
+    "io.containerd.snapshotter.v1.native",
+    "io.containerd.snapshotter.v1.zfs",
+]
+
+imports = ["/etc/containerd/config.d/*.toml"]
+
+[grpc]
+address = "/run/containerd/containerd.sock"
+
+[plugins."io.containerd.cri.v1.images"]
+
+# Pause container image is specified here, shares the same image as kubelet's pod-infra-container-image
+[plugins."io.containerd.cri.v1.images".pinned_images]
+sandbox = "localhost/kubernetes/pause:0.1.0"
+
+[plugins."io.containerd.cri.v1.runtime"]
+device_ownership_from_security_context = true
+enable_selinux = true
+
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runc]
+runtime_type = "io.containerd.runc.v2"
+base_runtime_spec = "/etc/containerd/cri-base.json"
+
+[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runc.options]
+SystemdCgroup = true
+
+[plugins."io.containerd.cri.v1.runtime".cni]
+bin_dir = "/opt/cni/bin"
+conf_dir = "/etc/cni/net.d"
+
+[plugins."io.containerd.cri.v1.images".registry]
+`
 )
 
 type testConfig struct {
@@ -170,6 +209,11 @@ func TestConfigureContainerd(t *testing.T) {
 			preCreateZeropodConfig: true,
 			expectedRestart:        false,
 			containerdv1:           true,
+		},
+		"bottlerocket config": {
+			containerdConfig: bottleRocketContainerdConfig,
+			runtime:          runtimeContainerd,
+			expectedRestart:  true,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {

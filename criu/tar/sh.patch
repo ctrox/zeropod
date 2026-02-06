@@ -1,0 +1,47 @@
+diff --git a/src/system.c b/src/system.c
+index ba4ac2d..1ca5125 100644
+--- a/src/system.c
++++ b/src/system.c
+@@ -189,7 +189,7 @@ sys_spawn_shell (void)
+   pid_t child;
+   const char *shell = getenv ("SHELL");
+   if (! shell)
+-    shell = "/bin/sh";
++    shell = "sh";
+   child = xfork ();
+   if (child == 0)
+     {
+@@ -722,13 +722,13 @@ sys_exec_command (char *file_name, int typechar, struct tar_stat_info *st)
+ 
+   stat_to_env (file_name, typechar, st);
+ 
+-  argv[0] = "/bin/sh";
++  argv[0] = "sh";
+   argv[1] = "-c";
+   argv[2] = to_command_option;
+   argv[3] = NULL;
+ 
+   priv_set_restore_linkdir ();
+-  execv ("/bin/sh", argv);
++  execv ("sh", argv);
+ 
+   exec_fatal (file_name);
+ }
+@@ -837,7 +837,7 @@ sys_exec_info_script (const char **archive_name, int volume_number)
+ 
+   xclose (p[PREAD]);
+ 
+-  argv[0] = "/bin/sh";
++  argv[0] = "sh";
+   argv[1] = "-c";
+   argv[2] = (char *) info_script_option;
+   argv[3] = NULL;
+@@ -885,7 +885,7 @@ sys_exec_checkpoint_script (const char *script_name,
+   setenv ("TAR_FORMAT",
+ 	  archive_format_string (current_format == DEFAULT_FORMAT ?
+ 				 archive_format : current_format), 1);
+-  argv[0] = "/bin/sh";
++  argv[0] = "sh";
+   argv[1] = "-c";
+   argv[2] = (char *) script_name;
+   argv[3] = NULL;

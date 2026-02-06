@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -98,6 +99,14 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		go startShimServer(ctx, id, w)
 	} else {
 		log.G(ctx).Errorf("unable to get shim ID: %s", err)
+	}
+
+	e, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("getting executable dir: %w", err)
+	}
+	if err := os.Setenv(zshim.CriuConfigFileEnvKey, filepath.Join(filepath.Dir(e), "../etc/criu.conf")); err != nil {
+		return nil, fmt.Errorf("setting criu config env: %w", err)
 	}
 
 	return w, nil

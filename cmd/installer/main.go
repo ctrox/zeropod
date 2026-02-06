@@ -10,10 +10,13 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	containerd "github.com/containerd/containerd/v2/client"
@@ -22,6 +25,7 @@ import (
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager/node"
 	"github.com/ctrox/zeropod/shim"
+	gdbus "github.com/godbus/dbus/v5"
 	"github.com/pelletier/go-toml/v2"
 	corev1 "k8s.io/api/core/v1"
 	knodev1 "k8s.io/api/node/v1"
@@ -37,6 +41,7 @@ var (
 	hostOptPath    = flag.String("host-opt-path", defaultOptPath, "path where zeropod binaries are stored on the host")
 	uninstall      = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
 	installTimeout = flag.Duration("timeout", time.Minute, "duration the installer waits for the installation to complete")
+	brAPIInit      = flag.Bool("bottlerocket-api-init", false, "runs the steps that depend on the api-server for bottlerocket")
 )
 
 type containerRuntime string
@@ -46,13 +51,15 @@ const (
 	runtimeRKE2       containerRuntime = "rke2"
 	runtimeK3S        containerRuntime = "k3s"
 
+	bottleRocketHostRoot        = "/.bottlerocket/rootfs"
 	hostRoot                    = "/host"
 	binPath                     = "bin/"
-	criuConfigFile              = "/etc/criu/default.conf"
+	criuConfigFile              = "/etc/criu.conf"
 	shimBinaryName              = "containerd-shim-zeropod-v2"
-	runtimePath                 = "/build/" + shimBinaryName
 	defaultContainerdConfigPath = "/etc/containerd/config.toml"
 	containerdSock              = "/run/containerd/containerd.sock"
+	bottleRocketContainerdSock  = "/run/host-containerd/containerd.sock"
+	runtimePath                 = "/build/" + shimBinaryName
 	configBackupSuffix          = ".original"
 	templateSuffix              = ".tmpl"
 	caSecretName                = "ca-cert"
@@ -89,6 +96,7 @@ network-lock skip
     "zeropod.ctrox.dev/disable-migrate-data",
     "zeropod.ctrox.dev/lazy-restore",
     "zeropod.ctrox.dev/image-streaming",
+    "zeropod.ctrox.dev/selinux-label",
     "io.containerd.runc.v2.group"
   ]
 
@@ -114,6 +122,7 @@ network-lock skip
     "zeropod.ctrox.dev/disable-migrate-data",
     "zeropod.ctrox.dev/lazy-restore",
     "zeropod.ctrox.dev/image-streaming",
+    "zeropod.ctrox.dev/selinux-label",
     "io.containerd.runc.v2.group"
   ]
 
@@ -126,21 +135,29 @@ network-lock skip
 func main() {
 	flag.Parse()
 
-	client, err := inClusterClient()
-	if err != nil {
-		log.Fatalf("unable to create in-cluster client: %s", err)
-	}
-
 	ctx, cancel := context.WithTimeout(context.Background(), *installTimeout)
 	defer cancel()
 
 	if *uninstall {
-		if err := runUninstall(ctx, client, containerRuntime(*runtime)); err != nil {
+		if err := runUninstall(ctx, containerRuntime(*runtime)); err != nil {
 			log.Fatalf("error uninstalling zeropod: %s", err)
 		}
 
 		log.Println("uninstaller completed")
 		os.Exit(0)
+	}
+
+	if *brAPIInit {
+		if err := installRuntimeClass(ctx); err != nil {
+			log.Fatalf("error installing zeropod runtimeClass: %s", err)
+		}
+		log.Println("installed runtimeClass")
+
+		if err := loadTLSCA(ctx); err != nil {
+			log.Fatalf("error loading TLS CA certificate: %s", err)
+		}
+		log.Println("installed ca cert")
+		return
 	}
 
 	if err := installCriu(ctx); err != nil {
@@ -155,23 +172,52 @@ func main() {
 
 	log.Println("installed runtime")
 
-	if err := installRuntimeClass(ctx, client); err != nil {
+	if err := installRuntimeClass(ctx); err != nil {
 		log.Fatalf("error installing zeropod runtimeClass: %s", err)
 	}
 
 	log.Println("installed runtimeClass")
 
-	if err := loadTLSCA(ctx, client); err != nil {
+	if err := loadTLSCA(ctx); err != nil {
 		log.Fatalf("error loading TLS CA certificate: %s", err)
 	}
 
 	log.Println("installed ca cert")
 
 	log.Println("installer completed")
+
+	if isBottleRocket() {
+		if err := loadSelinuxModule(); err != nil {
+			log.Fatalf("loading selinux module: %s", err)
+		}
+		// leave the installer running
+		<-(chan bool)(nil)
+	}
+}
+
+var criuCIL = `(allow super_t container_t (fifo_file (write)))
+(allow container_t super_t (fifo_file (write)))
+(allow super_t self (process (execmem)))
+(allow runtime_t super_t (fifo_file (write)))
+`
+
+func loadSelinuxModule() error {
+	if err := os.WriteFile(filepath.Join(bottleRocketHostRoot, "tmp", "criu.cil"), []byte(criuCIL), 0600); err != nil {
+		return err
+	}
+	cmd := exec.Command("semodule", "-i", "/tmp/criu.cil")
+	cmd.SysProcAttr = &syscall.SysProcAttr{Chroot: bottleRocketHostRoot}
+
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		log.Printf("semodule output: %s", out)
+		return err
+	}
+	return nil
 }
 
 func installCriu(ctx context.Context) error {
-	client, err := containerd.New(containerdSock, containerd.WithDefaultNamespace("k8s"))
+	client, err := containerd.New(containerdSocket(), containerd.WithDefaultNamespace("k8s"))
 	if err != nil {
 		return err
 	}
@@ -180,34 +226,49 @@ func installCriu(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	installPath := optPath(ctx, containerRuntime(*runtime))
+	if err := os.MkdirAll(installPath, 0644); err != nil {
+		return err
+	}
 
+	opt := optPath(ctx, containerRuntime(*runtime))
 	if err := client.Install(
 		ctx, image, containerd.WithInstallLibs,
 		containerd.WithInstallReplace,
-		containerd.WithInstallPath(optPath(ctx, containerRuntime(*runtime))),
+		containerd.WithInstallPath(opt),
 	); err != nil {
 		return err
 	}
 
-	// write the criu config
-	if err := os.MkdirAll(path.Dir(criuConfigFile), os.ModePerm); err != nil {
+	criuConfigName := filepath.Join(opt, criuConfigFile)
+	if err := os.MkdirAll(path.Dir(criuConfigName), os.ModePerm); err != nil {
 		return err
 	}
 
-	if err := os.WriteFile(criuConfigFile, []byte(criuConfig), 0644); err != nil {
+	// write the criu config
+	if err := os.WriteFile(criuConfigName, []byte(criuConfig), 0644); err != nil {
 		return err
 	}
 
 	return nil
 }
 
+func containerdSocket() string {
+	if isBottleRocket() {
+		return filepath.Join(bottleRocketHostRoot, bottleRocketContainerdSock)
+	}
+	return containerdSock
+}
+
+func criuConfigFileName() string {
+	if isBottleRocket() {
+		return filepath.Join(bottleRocketHostRoot, "/root/.criu/default.conf")
+	}
+	return criuConfigFile
+}
+
 func installRuntime(ctx context.Context, runtime containerRuntime) error {
 	log.Printf("installing runtime for %s", runtime)
-
-	conn, err := dbus.NewSystemdConnectionContext(ctx)
-	if err != nil {
-		return fmt.Errorf("unable to connect to dbus: %w", err)
-	}
 
 	// note that if the shim binary already exists, we simply switch it out with
 	// the new one but existing zeropods will have to be deleted to use the
@@ -245,6 +306,29 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 
 	if !restartRequired {
 		return nil
+	}
+
+	conn, err := dbus.NewConnection(func() (*gdbus.Conn, error) {
+		path := "/run/systemd/private"
+		if isBottleRocket() {
+			path = filepath.Join(bottleRocketHostRoot, path)
+		}
+		conn, err := gdbus.Dial(fmt.Sprintf("unix:path=%s", path))
+		if err != nil {
+			return nil, err
+		}
+
+		methods := []gdbus.Auth{gdbus.AuthExternal(strconv.Itoa(os.Getuid()))}
+		err = conn.Auth(methods)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
+		return conn, nil
+	})
+	// conn, err := dbus.NewSystemdConnectionContext(ctx)
+	if err != nil {
+		return fmt.Errorf("unable to connect to dbus: %w", err)
 	}
 
 	switch runtime {
@@ -287,7 +371,7 @@ func restartUnit(ctx context.Context, conn *dbus.Conn, service string) error {
 }
 
 func configureContainerd(ctx context.Context, runtime containerRuntime) (restartRequired bool, err error) {
-	client, err := containerd.New(containerdSock, containerd.WithDefaultNamespace("k8s"))
+	client, err := containerd.New(containerdSocket(), containerd.WithDefaultNamespace("k8s"))
 	if err != nil {
 		return false, fmt.Errorf("creating containerd client: %w", err)
 	}
@@ -304,6 +388,9 @@ func configureContainerd(ctx context.Context, runtime containerRuntime) (restart
 }
 
 func configureContainerdv2(ctx context.Context, runtime containerRuntime, containerdConfig string) (bool, error) {
+	if isBottleRocket() {
+		containerdConfig = filepath.Join(bottleRocketHostRoot, containerdConfig)
+	}
 	if err := migrateToImports(runtime, containerdConfig); err != nil {
 		return false, fmt.Errorf("migrating to imports: %w", err)
 	}
@@ -338,6 +425,10 @@ func configureContainerdv2(ctx context.Context, runtime containerRuntime, contai
 	}
 
 	if err := addZeropodConfigImport(containerdConfig, conf); err != nil {
+		return false, err
+	}
+
+	if err := removeOptDisabled(containerdConfig, conf); err != nil {
 		return false, err
 	}
 
@@ -428,7 +519,7 @@ func addZeropodConfigImport(containerdConfigPath string, conf *config.Config) er
 	}
 	lines := strings.Split(string(cfgData), "\n")
 
-	start, end, found := findImportsLines(lines)
+	start, end, found := findTomlKeyLines("imports", lines)
 	if found {
 		if start == end {
 			end++
@@ -448,6 +539,51 @@ func addZeropodConfigImport(containerdConfigPath string, conf *config.Config) er
 	return nil
 }
 
+func removeOptDisabled(containerdConfigPath string, conf *config.Config) error {
+	if !slices.Contains(conf.DisabledPlugins, containerdOptKey) {
+		return nil
+	}
+	pluginsConf := struct {
+		DisabledPlugins []string `toml:"disabled_plugins"`
+	}{}
+	for _, plugin := range conf.DisabledPlugins {
+		if plugin == containerdOptKey {
+			continue
+		}
+		pluginsConf.DisabledPlugins = append(pluginsConf.DisabledPlugins, plugin)
+	}
+
+	disabledPlugins, err := toml.Marshal(pluginsConf)
+	if err != nil {
+		return err
+	}
+
+	cfgData, err := os.ReadFile(containerdConfigPath)
+	if err != nil {
+		return fmt.Errorf("opening containerd config: %w", err)
+	}
+	lines := strings.Split(string(cfgData), "\n")
+
+	start, end, found := findTomlKeyLines("disabled_plugins", lines)
+	if found {
+		if start == end {
+			end++
+		}
+		lines = slices.Delete(lines, start, end)
+	}
+
+	vLine, ok := versionLine(lines)
+	if !ok {
+		return fmt.Errorf("version not found in containerd config")
+	}
+	lines = slices.Insert(lines, vLine+1, strings.TrimSpace(string(disabledPlugins)))
+
+	if err := os.WriteFile(containerdConfigPath, []byte(strings.Join(lines, "\n")), 0644); err != nil {
+		return fmt.Errorf("writing containerd config: %w", err)
+	}
+	return nil
+}
+
 func versionLine(lines []string) (pos int, found bool) {
 	for i, line := range lines {
 		if strings.Contains(strings.TrimSpace(line), "version") {
@@ -457,9 +593,9 @@ func versionLine(lines []string) (pos int, found bool) {
 	return 0, false
 }
 
-func findImportsLines(lines []string) (start int, end int, found bool) {
+func findTomlKeyLines(key string, lines []string) (start int, end int, found bool) {
 	for i, line := range lines {
-		if strings.HasPrefix(strings.TrimSpace(line), "imports") {
+		if strings.HasPrefix(strings.TrimSpace(line), key) {
 			// handle multiline array
 			if !strings.HasSuffix(strings.TrimSpace(line), "]") {
 				for j, line := range lines[i:] {
@@ -592,6 +728,9 @@ func optConfigured(ctx context.Context, containerdConfig string) (bool, string, 
 }
 
 func optPath(ctx context.Context, runtime containerRuntime) string {
+	if isBottleRocket() {
+		return filepath.Join(bottleRocketHostRoot, defaultOptPath)
+	}
 	ok, path, err := optConfigured(ctx, containerdConfigFile(runtime, defaultContainerdConfigPath))
 	if err != nil {
 		return defaultOptPath
@@ -602,7 +741,14 @@ func optPath(ctx context.Context, runtime containerRuntime) string {
 	return defaultOptPath
 }
 
-func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
+func installRuntimeClass(ctx context.Context) error {
+	if !*brAPIInit && isBottleRocket() {
+		return nil
+	}
+	client, err := inClusterClient()
+	if err != nil {
+		log.Fatalf("unable to create in-cluster client: %s", err)
+	}
 	runtimeClass := &knodev1.RuntimeClass{
 		ObjectMeta: metav1.ObjectMeta{Name: v1.RuntimeClassName},
 		Handler:    v1.RuntimeClassName,
@@ -638,7 +784,11 @@ func inClusterClient() (kubernetes.Interface, error) {
 
 // runUninstall removes all components installed by zeropod and restores the
 // original configuration.
-func runUninstall(ctx context.Context, client kubernetes.Interface, runtime containerRuntime) error {
+func runUninstall(ctx context.Context, runtime containerRuntime) error {
+	client, err := inClusterClient()
+	if err != nil {
+		log.Fatalf("unable to create in-cluster client: %s", err)
+	}
 	if err := removeRuntimeClass(ctx, client); err != nil {
 		return err
 	}
@@ -654,7 +804,14 @@ func runUninstall(ctx context.Context, client kubernetes.Interface, runtime cont
 	return nil
 }
 
-func loadTLSCA(ctx context.Context, client kubernetes.Interface) error {
+func loadTLSCA(ctx context.Context) error {
+	if !*brAPIInit && isBottleRocket() {
+		return nil
+	}
+	client, err := inClusterClient()
+	if err != nil {
+		log.Fatalf("unable to create in-cluster client: %s", err)
+	}
 	// TODO: do not hardcode
 	namespace := "zeropod-system"
 	secret, err := client.CoreV1().Secrets(namespace).Get(ctx, caSecretName, metav1.GetOptions{})
@@ -721,4 +878,9 @@ func linkTar(opt string) error {
 		return err
 	}
 	return nil
+}
+
+func isBottleRocket() bool {
+	_, err := os.Stat(bottleRocketHostRoot)
+	return err == nil
 }

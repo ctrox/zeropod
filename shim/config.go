@@ -28,11 +28,13 @@ const (
 	DisableMigrateDataAnnotationKey  = "zeropod.ctrox.dev/disable-migrate-data"
 	LazyRestoreAnnotationKey         = "zeropod.ctrox.dev/lazy-restore"
 	ImageStreamingAnnotationKey      = "zeropod.ctrox.dev/image-streaming"
+	CRSelinuxLabelAnnotationKey      = "zeropod.ctrox.dev/selinux-label"
 	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
 	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
 	CRIPodNameAnnotation             = "io.kubernetes.cri.sandbox-name"
 	CRIPodNamespaceAnnotation        = "io.kubernetes.cri.sandbox-namespace"
 	CRIPodUIDAnnotation              = "io.kubernetes.cri.sandbox-uid"
+	CriuConfigFileEnvKey             = "CRIU_CONFIG_FILE"
 
 	defaultScaleDownDuration = time.Minute
 	containersDelim          = ","
@@ -62,6 +64,7 @@ type Config struct {
 	LazyRestore           bool
 	ImageStreaming        bool
 	spec                  *specs.Spec
+	CRSelinuxLabel        string
 }
 
 // NewConfig uses the annotations from the container spec to create a new
@@ -157,6 +160,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		DisableMigrateData:    decodeBool(spec.Annotations, DisableMigrateDataAnnotationKey, false),
 		LazyRestore:           decodeBool(spec.Annotations, LazyRestoreAnnotationKey, false),
 		ImageStreaming:        decodeBool(spec.Annotations, ImageStreamingAnnotationKey, false),
+		CRSelinuxLabel:        spec.Annotations[CRSelinuxLabelAnnotationKey],
 		spec:                  spec,
 	}, nil
 }

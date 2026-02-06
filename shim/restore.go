@@ -130,7 +130,9 @@ func (c *Container) restore(ctx context.Context, req *task.CreateTaskRequest, be
 	}
 	log.G(ctx).Info("restore: process created")
 
-	if err := p.Start(ctx); err != nil {
+	if err := c.doCR(func() error {
+		return p.Start(ctx)
+	}); err != nil {
 		b, logErr := os.ReadFile(filepath.Join(container.Bundle, "work", "restore.log"))
 		if logErr != nil {
 			log.G(ctx).Errorf("error reading restore.log: %s", logErr)
