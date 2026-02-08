@@ -34,16 +34,19 @@ func NewPodScaler(log *slog.Logger) *PodScaler {
 }
 
 func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus, pod *corev1.Pod) error {
-	clog := ps.log.With("container", status.Name, "pod", status.PodName,
-		"namespace", status.PodNamespace, "phase", status.Phase)
-	clog.Info("status event")
+	return ps.reconcileContainerResources(ctx, pod, status.Name, status.Phase)
+}
+
+func (ps *PodScaler) reconcileContainerResources(ctx context.Context, pod *corev1.Pod, name string, phase v1.ContainerPhase) error {
+	clog := ps.log.With("container", name, "pod", pod.Name,
+		"namespace", pod.Namespace, "phase", phase)
 
 	if err := ps.setAnnotations(pod); err != nil {
 		return err
 	}
 
 	for i, container := range pod.Spec.Containers {
-		if container.Name != status.Name {
+		if container.Name != name {
 			continue
 		}
 
@@ -60,12 +63,12 @@ func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus, pod
 		}
 
 		current := container.Resources.Requests
-		if ps.isUpToDate(initial, current, status) {
+		if ps.isUpToDate(initial, current, phase) {
 			clog.Debug("container is up to date", "initial", printResources(initial))
 			continue
 		}
 
-		new := ps.newRequests(initial, current.DeepCopy(), status)
+		new := ps.newRequests(initial, current.DeepCopy(), phase)
 		pod.Spec.Containers[i].Resources.Requests = new
 		clog.Debug("container needs to be updated", "current", printResources(current), "new", printResources(new))
 	}
@@ -73,8 +76,8 @@ func (ps *PodScaler) Handle(ctx context.Context, status *v1.ContainerStatus, pod
 	return nil
 }
 
-func (ps *PodScaler) isUpToDate(initial, current corev1.ResourceList, status *v1.ContainerStatus) bool {
-	switch status.Phase {
+func (ps *PodScaler) isUpToDate(initial, current corev1.ResourceList, phase v1.ContainerPhase) bool {
+	switch phase {
 	case v1.ContainerPhase_SCALED_DOWN:
 		return current[corev1.ResourceCPU] == ScaledDownCPU &&
 			current[corev1.ResourceMemory] == ScaledDownMemory
@@ -86,8 +89,8 @@ func (ps *PodScaler) isUpToDate(initial, current corev1.ResourceList, status *v1
 	}
 }
 
-func (ps *PodScaler) newRequests(initial, current corev1.ResourceList, status *v1.ContainerStatus) corev1.ResourceList {
-	switch status.Phase {
+func (ps *PodScaler) newRequests(initial, current corev1.ResourceList, phase v1.ContainerPhase) corev1.ResourceList {
+	switch phase {
 	case v1.ContainerPhase_SCALED_DOWN:
 		current[corev1.ResourceCPU] = ScaledDownCPU
 		current[corev1.ResourceMemory] = ScaledDownMemory

@@ -113,11 +113,14 @@ func main() {
 	}
 
 	podHandlers := []manager.PodHandler{}
+	var labeller, scaler manager.PodHandler
 	if *statusLabels {
-		podHandlers = append(podHandlers, manager.NewPodLabeller(log))
+		labeller = manager.NewPodLabeller(log)
+		podHandlers = append(podHandlers, labeller)
 	}
 	if *inPlaceScaling {
-		podHandlers = append(podHandlers, manager.NewPodScaler(log))
+		scaler = manager.NewPodScaler(log)
+		podHandlers = append(podHandlers, scaler)
 	}
 	if *statusEvents {
 		podHandlers = append(podHandlers, manager.NewEventCreator(log))
@@ -171,7 +174,12 @@ func main() {
 	}
 	go nodeServer.Start(ctx)
 
-	if err := manager.NewPodController(ctx, mgr, log, manager.AutoGCMigrations(*autoGCMigrations)); err != nil {
+	if err := manager.NewPodController(
+		ctx, mgr, log,
+		manager.AutoGCMigrations(*autoGCMigrations),
+		manager.RegisterPodLabeller(labeller),
+		manager.RegisterPodScaler(scaler),
+	); err != nil {
 		log.Error("running pod controller", "error", err)
 	}
 	if err := manager.NewMigrationController(ctx, mgr, log); err != nil {
