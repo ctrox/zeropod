@@ -27,6 +27,8 @@ type testCase struct {
 	expectDataNotMigrated bool
 	beforeMigration       func(t *testing.T)
 	afterMigration        func(t *testing.T, tc testCase)
+	expectFailed          bool
+	skipWaitScaledDown    bool
 }
 
 func TestMigration(t *testing.T) {
@@ -73,6 +75,17 @@ func TestMigration(t *testing.T) {
 			migrationCount: 1,
 			afterMigration: nonLiveAfterMigration,
 		},
+		"non-live migration fails when running": {
+			deploy:                freezerDeployment("cross-node-migration", "default", 1, migrateAnnotation("freezer"), scaleDownAfter(time.Hour)),
+			svc:                   testService(8080),
+			sameNode:              false,
+			liveMigration:         false,
+			expectFailed:          true,
+			skipWaitScaledDown:    true,
+			expectDataNotMigrated: true,
+			migrationCount:        1,
+			afterMigration:        func(t *testing.T, tc testCase) {},
+		},
 		"data migration disabled": {
 			deploy:                freezerDeployment("data-migration-disabled", "default", 1, liveMigrateAnnotation("freezer"), disableDataMigration()),
 			svc:                   testService(8080),
@@ -97,7 +110,7 @@ func TestMigration(t *testing.T) {
 			uncordon := cordonNode(t, ctx, e2e.client, pod.Spec.NodeName)
 			defer uncordon()
 		}
-		if !tc.liveMigration {
+		if !tc.liveMigration && !tc.skipWaitScaledDown {
 			waitUntilScaledDown(t, ctx, e2e.client, &pod)
 		}
 		require.NoError(t, e2e.client.Delete(ctx, &pod))
@@ -115,6 +128,10 @@ func TestMigration(t *testing.T) {
 			}
 			if !tc.liveMigration {
 				require.False(t, migration.Spec.LiveMigration)
+			}
+			if tc.expectFailed {
+				require.Equal(t, v1.MigrationPhaseFailed, migration.Status.Containers[0].Condition.Phase)
+				return true
 			}
 			if migration.Status.Containers[0].Condition.Phase == v1.MigrationPhaseFailed {
 				printContainerdLogs(t, "zeropod-e2e-worker", "zeropod-e2e-worker2")

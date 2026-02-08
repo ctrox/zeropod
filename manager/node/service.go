@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"time"
 
@@ -217,6 +218,16 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		return nil, fmt.Errorf("timeout waiting for matching migration: %w", err)
 	}
 	log.Info("found matching migration", "name", migration.Name)
+	if slices.ContainsFunc(
+		migration.Status.Containers,
+		func(container v1.MigrationContainerStatus) bool {
+			return container.Name == req.PodInfo.ContainerName &&
+				container.Condition.Phase == v1.MigrationPhaseFailed
+		},
+	) {
+		log.Warn("matching migration is set to failed, aborting restore")
+		return nil, fmt.Errorf("matching migration is set to failed")
+	}
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		migration.Spec.RestoreReady = true

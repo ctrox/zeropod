@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/url"
 	"os"
+	"path"
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
@@ -170,6 +171,15 @@ func (r podReconciler) prepareMigrationSource(ctx context.Context, pod *corev1.P
 	log.Info("created migration for pod")
 
 	for _, container := range migration.Spec.Containers {
+		if !migration.Spec.LiveMigration && containerRunning(pod, container.Name) {
+			migration.Status.Containers = append(migration.Status.Containers, v1.MigrationContainerStatus{
+				Name: container.Name,
+				Condition: v1.MigrationCondition{
+					Phase: v1.MigrationPhaseFailed,
+				},
+			})
+			continue
+		}
 		migration.Status.Containers = append(migration.Status.Containers, v1.MigrationContainerStatus{
 			Name: container.Name,
 			Condition: v1.MigrationCondition{
@@ -300,4 +310,9 @@ func anyMigrationEnabled(pod *corev1.Pod) bool {
 func liveMigrationEnabled(pod *corev1.Pod) bool {
 	_, ok := pod.Annotations[nodev1.LiveMigrateAnnotationKey]
 	return ok
+}
+
+func containerRunning(pod *corev1.Pod, containerName string) bool {
+	status, ok := pod.Labels[path.Join(StatusLabelKeyPrefix, containerName)]
+	return ok && status == shimv1.ContainerPhase_RUNNING.String()
 }
