@@ -9,7 +9,10 @@ import (
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
+	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/go-logr/logr"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -61,11 +64,27 @@ func AutoGCMigrations(gc bool) PodControllerOption {
 	}
 }
 
+// RegisterPodLabeller to label pods during migration
+func RegisterPodLabeller(handler PodHandler) PodControllerOption {
+	return func(pr *podReconciler) {
+		pr.labeller = handler
+	}
+}
+
+// RegisterPodScaler to scale pods during migration
+func RegisterPodScaler(handler PodHandler) PodControllerOption {
+	return func(pr *podReconciler) {
+		pr.scaler = handler
+	}
+}
+
 type podReconciler struct {
 	kube             client.Client
 	log              *slog.Logger
 	nodeName         string
 	autoGCMigrations bool
+	labeller         PodHandler
+	scaler           PodHandler
 }
 
 func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, error) {
@@ -195,6 +214,11 @@ func (r podReconciler) prepareMigrationTarget(ctx context.Context, pod *corev1.P
 				return false, fmt.Errorf("failed to claim migration: %w", err)
 			}
 			log.Info("claimed migration in controller")
+			if !mig.Spec.LiveMigration {
+				// update pod resources as soon as possible if our migration is
+				// not live as the container will skip starting.
+				return false, r.updatePodResources(ctx, pod, mig.Spec.Containers)
+			}
 			return false, nil
 		}
 	}
@@ -237,6 +261,34 @@ func (r podReconciler) newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 		}
 	}
 	return mig, nil
+}
+
+func (r podReconciler) updatePodResources(ctx context.Context, pod *corev1.Pod, containers []v1.MigrationContainer) error {
+	handlers := []PodHandler{}
+	if r.labeller != nil {
+		handlers = append(handlers, r.labeller)
+	}
+	if r.scaler != nil {
+		handlers = append(handlers, r.scaler)
+	}
+	s := subscriber{
+		log:         r.log,
+		kube:        r.kube,
+		podHandlers: handlers,
+	}
+	for _, container := range containers {
+		if err := s.handlePod(ctx, &shimv1.ContainerStatus{
+			Name:          container.Name,
+			PodName:       pod.Name,
+			PodNamespace:  pod.Namespace,
+			Phase:         shimv1.ContainerPhase_SCALED_DOWN,
+			EventDuration: durationpb.New(0),
+			EventTime:     timestamppb.Now(),
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func anyMigrationEnabled(pod *corev1.Pod) bool {
