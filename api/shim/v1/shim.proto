@@ -33,6 +33,8 @@ enum ContainerPhase {
   SCALED_DOWN = 0;
   RUNNING = 1;
   STOPPING = 2;
+  CHECKPOINT_FAILED = 3;
+  RESTORE_FAILED = 4;
 }
 
 message ContainerStatus {
@@ -43,6 +45,7 @@ message ContainerStatus {
 	ContainerPhase phase = 5;
 	google.protobuf.Timestamp event_time = 6;
 	google.protobuf.Duration event_duration = 7;
+	string event_log = 8;
 }
 
 message ContainerMetrics {

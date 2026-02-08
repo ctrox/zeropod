@@ -69,6 +69,14 @@ func TestE2E(t *testing.T) {
 			maxReqDuration: time.Second,
 			waitScaledDown: true,
 		},
+		"checkpointing disabled": {
+			pod:            testPod(disableCheckpointing(true), defaultScaleDownAfter),
+			parallelReqs:   1,
+			sequentialReqs: 1,
+			preDump:        false,
+			maxReqDuration: time.Second,
+			waitScaledDown: true,
+		},
 		// this is a blackbox test for the socket tracking. We know that
 		// restoring a snapshot of the test pod takes at least 50ms, even on
 		// very fast systems. So if a request takes longer than that we know

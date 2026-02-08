@@ -20,6 +20,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.5.0
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-logr/logr v1.4.3
+	github.com/icza/backscanner v0.0.0-20241124160932-dff01ac50250
 	github.com/klauspost/compress v1.18.0
 	github.com/mholt/archives v0.1.5
 	github.com/moby/sys/userns v0.1.0
