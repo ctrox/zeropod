@@ -40,6 +40,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 		runtimeClassName    string
 		expectedMigration   bool
 		expectedRequeue     bool
+		expectedPhase       v1.MigrationPhase
 		garbageCollection   bool
 	}{
 		"pod that should be migrated": {
@@ -50,6 +51,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 			nodeName:            "node1",
 			expectedMigration:   true,
 			garbageCollection:   true,
+			expectedPhase:       v1.MigrationPhasePending,
 		},
 		"pod without live migration and running": {
 			pod:                 newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING),
@@ -58,6 +60,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 			deletePod:           true,
 			nodeName:            "node1",
 			expectedMigration:   true,
+			expectedPhase:       v1.MigrationPhaseFailed,
 		},
 		"pod with live migration and running": {
 			pod:                 enableLiveMigration(newMigratePod("node1", v1.RuntimeClassName, shimv1.ContainerPhase_RUNNING)),
@@ -66,6 +69,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 			deletePod:           true,
 			nodeName:            "node1",
 			expectedMigration:   true,
+			expectedPhase:       v1.MigrationPhasePending,
 		},
 		"pod on wrong node": {
 			pod:               newMigratePod("node2", v1.RuntimeClassName, shimv1.ContainerPhase_SCALED_DOWN),
@@ -113,7 +117,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 				assert.NoError(t, kube.Get(ctx, client.ObjectKeyFromObject(tc.pod), migration))
 				require.NotEmpty(t, migration.Spec.Containers)
 				require.NotEmpty(t, migration.Status.Containers)
-				assert.Equal(t, v1.MigrationPhasePending, migration.Status.Containers[0].Condition.Phase)
+				assert.Equal(t, tc.expectedPhase, migration.Status.Containers[0].Condition.Phase)
 				assert.Equal(t, tc.expectedContainerID, migration.Spec.Containers[0].ID)
 				hasRef, err := controllerutil.HasOwnerReference(migration.OwnerReferences, tc.pod, kube.Scheme())
 				assert.NoError(t, err)
