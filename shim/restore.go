@@ -40,6 +40,8 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		return nil, nil, ErrAlreadyRestored
 	}
 
+	// cleanup image regardless of success/failure
+	defer c.deleteImage(ctx)
 	beforeRestore := time.Now()
 	go func() {
 		// as soon as we checkpoint the container, the log pipe is closed. As
