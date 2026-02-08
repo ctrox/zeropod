@@ -348,10 +348,8 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 	if !ok {
 		return w.service.Kill(ctx, r)
 	}
-	// our container might be just in the process of checkpoint/restore, so we
-	// ensure that has finished.
 	zeropodContainer.CheckpointRestore.Lock()
-	defer zeropodContainer.CheckpointRestore.Unlock()
+	zeropodContainer.CheckpointRestore.Unlock() //lint:ignore SA2001 ensure cr is finished
 
 	log.G(ctx).Infof("kill called in zeropod: %s", zeropodContainer.ID())
 	zeropodContainer.CancelScaleDown()
