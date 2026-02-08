@@ -17,8 +17,11 @@ const (
 )
 
 var (
+	// we need to request more than 0 as else the resize is rejected because the
+	// QOS Class must not change because of a resize.
 	ScaledDownCPU    = resource.MustParse("1m")
 	ScaledDownMemory = resource.MustParse("1Ki")
+	emptyQuantity    = resource.Quantity{}
 )
 
 type containerResource map[string]resource.Quantity
@@ -52,7 +55,7 @@ func (ps *PodScaler) reconcileContainerResources(ctx context.Context, pod *corev
 
 		_, hasCPU := container.Resources.Requests[corev1.ResourceCPU]
 		_, hasMemory := container.Resources.Requests[corev1.ResourceMemory]
-		if !hasCPU || !hasMemory {
+		if !hasCPU && !hasMemory {
 			clog.Debug("ignoring container without resources")
 			continue
 		}
@@ -79,11 +82,11 @@ func (ps *PodScaler) reconcileContainerResources(ctx context.Context, pod *corev
 func (ps *PodScaler) isUpToDate(initial, current corev1.ResourceList, phase v1.ContainerPhase) bool {
 	switch phase {
 	case v1.ContainerPhase_SCALED_DOWN:
-		return current[corev1.ResourceCPU] == ScaledDownCPU &&
-			current[corev1.ResourceMemory] == ScaledDownMemory
+		return (current[corev1.ResourceCPU].Equal(ScaledDownCPU) || current[corev1.ResourceCPU].Equal(emptyQuantity)) &&
+			(current[corev1.ResourceMemory].Equal(ScaledDownMemory) || current[corev1.ResourceMemory].Equal(emptyQuantity))
 	case v1.ContainerPhase_RUNNING:
-		return current[corev1.ResourceCPU] == initial[corev1.ResourceCPU] &&
-			current[corev1.ResourceMemory] == initial[corev1.ResourceMemory]
+		return current[corev1.ResourceCPU].Equal(initial[corev1.ResourceCPU]) &&
+			current[corev1.ResourceMemory].Equal(initial[corev1.ResourceMemory])
 	default:
 		return true
 	}
@@ -92,8 +95,12 @@ func (ps *PodScaler) isUpToDate(initial, current corev1.ResourceList, phase v1.C
 func (ps *PodScaler) newRequests(initial, current corev1.ResourceList, phase v1.ContainerPhase) corev1.ResourceList {
 	switch phase {
 	case v1.ContainerPhase_SCALED_DOWN:
-		current[corev1.ResourceCPU] = ScaledDownCPU
-		current[corev1.ResourceMemory] = ScaledDownMemory
+		if !current[corev1.ResourceCPU].Equal(emptyQuantity) {
+			current[corev1.ResourceCPU] = ScaledDownCPU
+		}
+		if !current[corev1.ResourceMemory].Equal(emptyQuantity) {
+			current[corev1.ResourceMemory] = ScaledDownMemory
+		}
 		return current
 	case v1.ContainerPhase_RUNNING:
 		return initial
@@ -118,11 +125,11 @@ func (ps *PodScaler) initialRequests(container corev1.Container, podAnnotations 
 		}
 	}
 
-	if cpu, ok := containerCPUs[container.Name]; ok {
+	if cpu, ok := containerCPUs[container.Name]; ok && !cpu.Equal(emptyQuantity) {
 		initial[corev1.ResourceCPU] = cpu
 	}
 
-	if memory, ok := containerMemory[container.Name]; ok {
+	if memory, ok := containerMemory[container.Name]; ok && !memory.Equal(emptyQuantity) {
 		initial[corev1.ResourceMemory] = memory
 	}
 
