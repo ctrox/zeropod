@@ -311,12 +311,17 @@ func (c *Container) cleanupImage(ctx context.Context) {
 	if c.cfg.AnyMigrationEnabled() {
 		return
 	}
+	c.deleteImage(ctx)
+}
+
+func (c *Container) deleteImage(ctx context.Context) {
 	if err := os.RemoveAll(nodev1.ImagePath(c.ID())); err != nil {
 		if !os.IsNotExist(err) {
 			log.G(ctx).Warnf("unable to cleanup image path: %s", err)
 		}
 	}
 }
+
 func (c *Container) Process() process.Process {
 	return c.process
 }
