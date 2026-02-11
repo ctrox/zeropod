@@ -1,0 +1,34 @@
+diff --git a/criu/seize.c b/criu/seize.c
+index d0cf7b36c..3139f9706 100644
+--- a/criu/seize.c
++++ b/criu/seize.c
+@@ -901,8 +901,12 @@ static int collect_threads(struct pstree_item *item)
+ 		pid_t pid = threads[i].real;
+ 		struct proc_status_creds t_creds = {};
+ 
+-		if (thread_collected(item, pid))
++		if (thread_collected(item, pid)) {
++		    if (i == 0) {
++				item->threads[i].ns[0].virt = -1;
++			}
+ 			continue;
++		}
+ 
+ 		nr_inprogress++;
+ 
+diff --git a/criu/timer.c b/criu/timer.c
+index 856501be6..a67263c0b 100644
+--- a/criu/timer.c
++++ b/criu/timer.c
+@@ -330,6 +330,11 @@ static int encode_notify_thread_id(pid_t rtid, struct pstree_item *item, PosixTi
+ 		return -1;
+ 	}
+ 
++	if (vtid == -1) {
++		pr_warn("found unset vtid %d, using vpid\n", vtid);
++		vtid = vpid(item);
++	}
++
+ 	pte->notify_thread_id = vtid;
+ 	pte->has_notify_thread_id = true;
+ 	return 0;
