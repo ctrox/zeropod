@@ -36,8 +36,9 @@ RUN git clone https://github.com/lz4/lz4.git
 WORKDIR /workspace/lz4
 RUN git checkout v1.10.0 && make -j $(nproc)
 
-FROM rust:latest as rust
+FROM rust:1.93.0 as rust
 WORKDIR /workspace
+RUN apt-get update && apt-get install -y protobuf-compiler
 RUN git clone https://github.com/checkpoint-restore/criu-image-streamer.git
 WORKDIR /workspace/criu-image-streamer
 RUN git checkout 075a7a5eb45cf1f093cda81f8ecb66da4de615f4 && make
