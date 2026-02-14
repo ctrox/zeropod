@@ -96,13 +96,8 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 	log.G(ctx).Info("restore: process created")
 
 	if err := p.Start(ctx); err != nil {
-		b, logErr := os.ReadFile(filepath.Join(container.Bundle, "work", "restore.log"))
-		if logErr != nil {
-			log.G(ctx).Errorf("error reading restore.log: %s", logErr)
-		} else {
-			log.G(ctx).Errorf("restore.log: %s", b)
-		}
-
+		lines := printCriuLogs(ctx, filepath.Join(container.Bundle, "work", "restore.log"))
+		c.sendFailEvent(v1.ContainerPhase_RESTORE_FAILED, lines)
 		return nil, nil, fmt.Errorf("start failed during restore: %w", err)
 	}
 	c.Container = container

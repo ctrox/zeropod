@@ -51,13 +51,13 @@ jobs:
 
       - name: Install protoc-gen-go
         run: |
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.3
-          go install github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc@v1.2.4
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.10
+          go install github.com/containerd/ttrpc/cmd/protoc-gen-go-ttrpc@v1.2.7
 
-      - uses: awalsh128/cache-apt-pkgs-action@v1
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
         with:
-          packages: protobuf-compiler libprotobuf-dev
-          version: 1.0
+          version: "32.1"
 
       - name: build ebpf image
         run: make build-ebpf

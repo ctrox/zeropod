@@ -176,12 +176,10 @@ func (c *Container) scheduleScaleDownIn(in time.Duration) error {
 		log.G(c.context).Info("scaling down after scale down duration is up")
 
 		if err := c.scaleDown(c.context); err != nil {
-			// checkpointing failed, this is currently unrecoverable. We set our
-			// initialProcess as exited to make sure it's restarted
-			log.G(c.context).Errorf("scale down failed: %s", err)
-			c.initialProcess.SetExited(1)
+			log.G(c.context).Errorf("scale down failed, disabling checkpointing: %s", err)
+			c.cfg.DisableCheckpointing = true
+			c.scaleDownTimer.Reset(c.cfg.ScaleDownDuration)
 		}
-
 	})
 	c.scaleDownTimer = timer
 	return nil
@@ -216,6 +214,14 @@ func (c *Container) setPhaseNotify(phase v1.ContainerPhase, duration time.Durati
 		c.metrics.LastCheckpointDuration = durationpb.New(duration)
 	}
 	c.sendEvent(c.Status())
+}
+
+func (c *Container) sendFailEvent(phase v1.ContainerPhase, l string) {
+	log.G(c.context).Info("sending fail event")
+	status := c.Status()
+	status.Phase = phase
+	status.EventLog = l
+	c.sendEvent(status)
 }
 
 func (c *Container) SetSkipStart(skip bool) {

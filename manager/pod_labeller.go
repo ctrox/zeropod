@@ -25,10 +25,13 @@ func NewPodLabeller(log *slog.Logger) *PodLabeller {
 
 func (pl *PodLabeller) Handle(ctx context.Context, status *v1.ContainerStatus, pod *corev1.Pod) error {
 	clog := pl.log.With("container", status.Name, "pod", status.PodName,
-		"namespace", status.PodNamespace, "phase", status.Phase)
-	clog.Info("status event")
-
-	pl.setLabel(pod, status)
+		"namespace", status.PodNamespace, "phase", status.Phase.String(),
+		"duration", status.EventDuration.AsDuration().String())
+	switch status.Phase {
+	case v1.ContainerPhase_RUNNING, v1.ContainerPhase_SCALED_DOWN:
+		clog.Info("status event")
+		pl.setLabel(pod, status)
+	}
 	return nil
 }
 

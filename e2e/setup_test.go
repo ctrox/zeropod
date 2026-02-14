@@ -390,6 +390,12 @@ func preDump(preDump bool) podOption {
 	})
 }
 
+func disableCheckpointing(disable bool) podOption {
+	return annotations(map[string]string{
+		shim.DisableCheckpoiningAnnotationKey: strconv.FormatBool(disable),
+	})
+}
+
 func scaleDownAfter(dur time.Duration) podOption {
 	return annotations(map[string]string{
 		shim.ScaleDownDurationAnnotationKey: dur.String(),

@@ -12,6 +12,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/containerd/ttrpc"
@@ -172,6 +173,11 @@ func (s *subscriber) onStatus(ctx context.Context, status *v1.ContainerStatus) e
 		s.collector.deleteMetrics(status)
 		return nil
 	}
+
+	if status.Phase == v1.ContainerPhase_CHECKPOINT_FAILED || status.Phase == v1.ContainerPhase_RESTORE_FAILED {
+		s.log.Info("CR failed", "phase", status.Phase.String(), "criu_log", strings.Split(status.EventLog, "\n"))
+	}
+
 	if len(s.podHandlers) > 0 {
 		if err := s.handlePod(ctx, status); err != nil {
 			return err

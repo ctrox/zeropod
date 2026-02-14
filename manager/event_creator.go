@@ -14,10 +14,12 @@ import (
 )
 
 const (
-	ControllerName   = "zeropod.ctrox.dev/manager"
-	eventNamePrefix  = "zeropod-status-event-"
-	reasonRunning    = "Running"
-	reasonScaledDown = "Scaled down"
+	ControllerName         = "zeropod.ctrox.dev/manager"
+	eventNamePrefix        = "zeropod-status-event-"
+	reasonRunning          = "Running"
+	reasonScaledDown       = "Scaled down"
+	reasonCheckpointFailed = "Checkpoint failed"
+	reasonRestoreFailed    = "Restore failed"
 )
 
 type EventCreator struct {
@@ -37,7 +39,8 @@ func (ec *EventCreator) InjectKubeClient(c client.Client) {
 
 func (ec *EventCreator) Handle(ctx context.Context, status *v1.ContainerStatus, pod *corev1.Pod) error {
 	clog := ec.log.With("container", status.Name, "pod", status.PodName,
-		"namespace", status.PodNamespace, "phase", status.Phase)
+		"namespace", status.PodNamespace, "phase", status.Phase.String(),
+		"duration", status.EventDuration.AsDuration().String())
 	clog.Info("status event")
 
 	message, reason := "", ""
@@ -55,6 +58,12 @@ func (ec *EventCreator) Handle(ctx context.Context, status *v1.ContainerStatus, 
 		if status.EventDuration != nil {
 			message += " in " + status.EventDuration.AsDuration().String()
 		}
+	case v1.ContainerPhase_CHECKPOINT_FAILED:
+		reason = reasonCheckpointFailed
+		message = fmt.Sprintf("Checkpoint failed for container %s", status.Name)
+	case v1.ContainerPhase_RESTORE_FAILED:
+		reason = reasonRestoreFailed
+		message = fmt.Sprintf("Restore failed for container %s", status.Name)
 	}
 
 	instance, err := os.Hostname()
