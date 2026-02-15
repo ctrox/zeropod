@@ -114,7 +114,7 @@ func (s *shimService) SubscribeStatus(ctx context.Context, _ *v1.SubscribeStatus
 
 // GetStatus returns the status of a zeropod container.
 func (s *shimService) GetStatus(ctx context.Context, req *v1.ContainerRequest) (*v1.ContainerStatus, error) {
-	container, ok := s.task.zeropodContainers[req.Id]
+	container, ok := s.task.getZeropodContainer(req.Id)
 	if !ok {
 		return nil, fmt.Errorf("could not find zeropod container with id: %s", req.Id)
 	}
@@ -124,6 +124,8 @@ func (s *shimService) GetStatus(ctx context.Context, req *v1.ContainerRequest) (
 
 // Metrics returns metrics of the zeropod shim instance.
 func (s *shimService) Metrics(context.Context, *v1.MetricsRequest) (*v1.MetricsResponse, error) {
+	s.task.mut.Lock()
+	defer s.task.mut.Unlock()
 	containerMetrics := []*v1.ContainerMetrics{}
 	for _, container := range s.task.zeropodContainers {
 		containerMetrics = append(containerMetrics, container.GetMetrics())

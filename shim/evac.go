@@ -154,7 +154,7 @@ func (c *Container) evac(ctx context.Context) error {
 		case <-done:
 			// once checkpointed, consider the container scaled down to ensure
 			// proper exit cleanup
-			c.setPhase(v1.ContainerPhase_SCALED_DOWN)
+			c.setPhase(v1.ContainerPhase_SCALED_DOWN, 0)
 			log.G(ctx).Info("done case")
 			return nil
 		}

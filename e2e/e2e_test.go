@@ -446,6 +446,7 @@ func TestE2E(t *testing.T) {
 			metric                  string
 			pod                     *corev1.Pod
 			gaugeValue              *float64
+			counterValue            *float64
 			minHistogramSampleCount *uint64
 		}{
 			"running": {
@@ -476,6 +477,16 @@ func TestE2E(t *testing.T) {
 				pod:                     restoredPod,
 				minHistogramSampleCount: ptr.To(uint64(1)),
 			},
+			"checkpoint errors": {
+				metric:       prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricCheckpointErrorsTotal),
+				pod:          restoredPod,
+				counterValue: ptr.To(float64(0)),
+			},
+			"restore errors": {
+				metric:       prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRestoreErrorsTotal),
+				pod:          restoredPod,
+				counterValue: ptr.To(float64(0)),
+			},
 		}
 
 		for name, tc := range tests {
@@ -496,6 +507,11 @@ func TestE2E(t *testing.T) {
 				if tc.gaugeValue != nil {
 					assert.Equal(t, *tc.gaugeValue, *metric.Gauge.Value,
 						"gauge value does not match expectation")
+				}
+
+				if tc.counterValue != nil {
+					assert.Equal(t, *tc.counterValue, *metric.Counter.Value,
+						"counter value does not match expectation")
 				}
 
 				if tc.minHistogramSampleCount != nil {

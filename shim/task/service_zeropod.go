@@ -243,6 +243,12 @@ func (w *wrapper) setZeropodContainer(id string, container *zshim.Container) {
 	w.mut.Unlock()
 }
 
+func (w *wrapper) deleteZeropodContainer(id string) {
+	w.mut.Lock()
+	delete(w.zeropodContainers, id)
+	w.mut.Unlock()
+}
+
 func (w *wrapper) getZeropodContainer(id string) (*zshim.Container, bool) {
 	w.mut.Lock()
 	container, ok := w.zeropodContainers[id]
@@ -299,6 +305,8 @@ func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		if err := zeropodContainer.ScheduleScaleDown(); err != nil {
 			return nil, err
 		}
+	} else {
+		w.deleteZeropodContainer(r.ID)
 	}
 	return w.service.Delete(ctx, r)
 }

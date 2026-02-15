@@ -24,4 +24,10 @@ zeropod_restore_duration_seconds_count{container="nginx",namespace="default",pod
 # HELP zeropod_running Reports if the process is currently running or checkpointed.
 # TYPE zeropod_running gauge
 zeropod_running{container="nginx",namespace="default",pod="nginx"} 0
+# HELP zeropod_checkpoint_errors_total Total number of checkpoint errors.
+# TYPE zeropod_checkpoint_errors_total counter
+zeropod_checkpoint_errors_total{container="nginx",namespace="default",pod="nginx"} 0
+# HELP zeropod_restore_errors_total Total number of restore errors.
+# TYPE zeropod_restore_errors_total counter
+zeropod_restore_errors_total{container="nginx",namespace="default",pod="nginx"} 0
 ```

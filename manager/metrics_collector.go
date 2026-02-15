@@ -17,12 +17,14 @@ const (
 	LabelPodName       = "pod"
 	LabelPodNamespace  = "namespace"
 
-	MetricsNamespace         = "zeropod"
-	MetricCheckpointDuration = "checkpoint_duration_seconds"
-	MetricRestoreDuration    = "restore_duration_seconds"
-	MetricLastCheckpointTime = "last_checkpoint_time"
-	MetricLastRestoreTime    = "last_restore_time"
-	MetricRunning            = "running"
+	MetricsNamespace            = "zeropod"
+	MetricCheckpointDuration    = "checkpoint_duration_seconds"
+	MetricRestoreDuration       = "restore_duration_seconds"
+	MetricLastCheckpointTime    = "last_checkpoint_time"
+	MetricLastRestoreTime       = "last_restore_time"
+	MetricRunning               = "running"
+	MetricCheckpointErrorsTotal = "checkpoint_errors_total"
+	MetricRestoreErrorsTotal    = "restore_errors_total"
 )
 
 var (
@@ -35,15 +37,19 @@ var (
 )
 
 type Collector struct {
+	log                *slog.Logger
 	checkpointDuration *prometheus.HistogramVec
 	restoreDuration    *prometheus.HistogramVec
 	lastCheckpointTime *prometheus.GaugeVec
 	lastRestoreTime    *prometheus.GaugeVec
 	running            *prometheus.GaugeVec
+	checkpointErrors   *prometheus.CounterVec
+	restoreErrors      *prometheus.CounterVec
 }
 
-func NewCollector() *Collector {
+func NewCollector(log *slog.Logger) *Collector {
 	return &Collector{
+		log: log,
 		checkpointDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
 			Namespace: MetricsNamespace,
 			Name:      MetricCheckpointDuration,
@@ -75,23 +81,35 @@ func NewCollector() *Collector {
 			Name:      MetricRunning,
 			Help:      "Reports if the process is currently running or checkpointed.",
 		}, commonLabels),
+
+		checkpointErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricCheckpointErrorsTotal,
+			Help:      "Total number of checkpoint errors.",
+		}, commonLabels),
+
+		restoreErrors: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricRestoreErrorsTotal,
+			Help:      "Total number of restore errors.",
+		}, commonLabels),
 	}
 }
 
 func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	socks, err := os.ReadDir(v1.ShimSocketPath)
 	if err != nil {
-		slog.Error("error listing file in shim socket path", "path", v1.ShimSocketPath, "err", err)
+		c.log.Error("error listing file in shim socket path", "path", v1.ShimSocketPath, "err", err)
 		return
 	}
 
 	for _, sock := range socks {
 		sockName := filepath.Join(v1.ShimSocketPath, sock.Name())
-		slog.Debug("getting metrics", "name", sockName)
+		c.log.Debug("getting metrics", "name", sockName)
 
 		shimMetrics, err := collectMetricsOverTTRPC(context.Background(), sockName)
 		if err != nil {
-			slog.Error("getting metrics", "err", err)
+			c.log.Error("getting metrics", "err", err)
 			// we still want to read the rest of the sockets
 			continue
 		}
@@ -116,6 +134,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			if metrics.LastRestore != nil {
 				c.lastRestoreTime.With(l).Set(float64(metrics.LastRestore.AsTime().UnixNano()))
 			}
+			c.checkpointErrors.With(l).Add(float64(metrics.CheckpointErrors))
+			c.restoreErrors.With(l).Add(float64(metrics.RestoreErrors))
 		}
 	}
 	c.running.Collect(ch)
@@ -123,6 +143,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.restoreDuration.Collect(ch)
 	c.lastCheckpointTime.Collect(ch)
 	c.lastRestoreTime.Collect(ch)
+	c.checkpointErrors.Collect(ch)
+	c.restoreErrors.Collect(ch)
 }
 
 func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
@@ -161,4 +183,6 @@ func (c *Collector) deleteMetrics(status *v1.ContainerStatus) {
 	c.restoreDuration.Delete(l)
 	c.lastCheckpointTime.Delete(l)
 	c.lastRestoreTime.Delete(l)
+	c.checkpointErrors.Delete(l)
+	c.restoreErrors.Delete(l)
 }
