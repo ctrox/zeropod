@@ -450,10 +450,11 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 				log.G(ctx).Info("container is already restored, ignoring request")
 				return nil
 			}
-			// restore failed, this is currently unrecoverable, so we shutdown
-			// our shim and let containerd recreate it.
-			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
-			os.Exit(1)
+			// restore failed, this is currently unrecoverable, so we set the
+			// process to exited and let the runtime recreate it.
+			c.Process().SetExited(1)
+			c.InitialProcess().SetExited(1)
+			log.G(ctx).Errorf("error restoring container, exiting process: %s", err)
 		}
 		c.Container = restoredContainer
 

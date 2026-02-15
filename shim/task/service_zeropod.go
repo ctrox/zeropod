@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"time"
 
@@ -268,12 +267,12 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*emp
 	if zeropodContainer.ScaledDown() {
 		log.G(ctx).Printf("got exec for scaled down container, restoring")
 
-		_, _, err := zeropodContainer.Restore(ctx)
-		if err != nil {
-			// restore failed, this is currently unrecoverable, so we shutdown
-			// our shim and let containerd recreate it.
-			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
-			os.Exit(1)
+		if _, _, err := zeropodContainer.Restore(ctx); err != nil {
+			// restore failed, this is currently unrecoverable, so we set the
+			// process to exited and let the runtime recreate it.
+			zeropodContainer.Process().SetExited(1)
+			zeropodContainer.InitialProcess().SetExited(1)
+			log.G(ctx).Errorf("error restoring container, exiting process: %s", err)
 		}
 	}
 
