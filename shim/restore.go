@@ -33,7 +33,21 @@ var (
 	ErrRestoreDial          = errors.New("failed to connect to node socket")
 )
 
+// Restore starts the container either from a checkpoint or from scratch
+// depending on the configuration. If a restore from checkpoint fails, it will
+// retry without the checkpoint and disable checkpointing for the rest of the
+// container lifetime.
 func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
+	cont, p, err := c.restore(ctx)
+	if err != nil && !c.cfg.DisableCheckpointing {
+		log.G(ctx).Errorf("restore failed, disabling checkpointing and retrying: %s", err)
+		c.cfg.DisableCheckpointing = true
+		cont, p, err = c.restore(ctx)
+	}
+	return cont, p, err
+}
+
+func (c *Container) restore(ctx context.Context) (*runc.Container, process.Process, error) {
 	c.CheckpointRestore.Lock()
 	defer c.CheckpointRestore.Unlock()
 	if !c.ScaledDown() {

@@ -126,7 +126,7 @@ func main() {
 		podHandlers = append(podHandlers, manager.NewEventCreator(log))
 	}
 
-	col := manager.NewCollector()
+	col := manager.NewCollector(log)
 	sc := manager.SubscriberConfig{Log: log, Kube: mgr.GetClient(), Collector: col}
 	if err := manager.StartSubscribers(ctx, sc, podHandlers...); err != nil {
 		log.Error("starting subscribers", "err", err)

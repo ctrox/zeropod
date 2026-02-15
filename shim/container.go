@@ -192,32 +192,43 @@ func (c *Container) CancelScaleDown() {
 	c.scaleDownTimer.Stop()
 }
 
-func (c *Container) setPhase(phase v1.ContainerPhase) {
+func (c *Container) setPhase(phase v1.ContainerPhase, duration time.Duration) {
 	switch phase {
 	case v1.ContainerPhase_RUNNING:
-		c.metrics.LastRestore = timestamppb.Now()
+		if duration != 0 {
+			c.metrics.LastRestore = timestamppb.Now()
+		}
 		c.scaledDown = false
 		c.metrics.Running = true
 	case v1.ContainerPhase_SCALED_DOWN:
-		c.metrics.LastCheckpoint = timestamppb.Now()
+		if duration != 0 {
+			c.metrics.LastCheckpoint = timestamppb.Now()
+		}
 		c.scaledDown = true
 		c.metrics.Running = false
 	}
 }
 
 func (c *Container) setPhaseNotify(phase v1.ContainerPhase, duration time.Duration) {
-	c.setPhase(phase)
-	switch phase {
-	case v1.ContainerPhase_RUNNING:
-		c.metrics.LastRestoreDuration = durationpb.New(duration)
-	case v1.ContainerPhase_SCALED_DOWN:
-		c.metrics.LastCheckpointDuration = durationpb.New(duration)
+	c.setPhase(phase, duration)
+	if duration != 0 {
+		switch phase {
+		case v1.ContainerPhase_RUNNING:
+			c.metrics.LastRestoreDuration = durationpb.New(duration)
+		case v1.ContainerPhase_SCALED_DOWN:
+			c.metrics.LastCheckpointDuration = durationpb.New(duration)
+		}
 	}
 	c.sendEvent(c.Status())
 }
 
 func (c *Container) sendFailEvent(phase v1.ContainerPhase, l string) {
-	log.G(c.context).Info("sending fail event")
+	switch phase {
+	case v1.ContainerPhase_CHECKPOINT_FAILED:
+		c.metrics.CheckpointErrors += 1
+	case v1.ContainerPhase_RESTORE_FAILED:
+		c.metrics.RestoreErrors += 1
+	}
 	status := c.Status()
 	status.Phase = phase
 	status.EventLog = l
@@ -439,10 +450,11 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 				log.G(ctx).Info("container is already restored, ignoring request")
 				return nil
 			}
-			// restore failed, this is currently unrecoverable, so we shutdown
-			// our shim and let containerd recreate it.
-			log.G(ctx).Fatalf("error restoring container, exiting shim: %s", err)
-			os.Exit(1)
+			// restore failed, this is currently unrecoverable, so we set the
+			// process to exited and let the runtime recreate it.
+			c.Process().SetExited(1)
+			c.InitialProcess().SetExited(1)
+			log.G(ctx).Errorf("error restoring container, exiting process: %s", err)
 		}
 		c.Container = restoredContainer
 
@@ -482,4 +494,6 @@ func (c *Container) clearMetrics() {
 	c.metrics.LastRestore = nil
 	c.metrics.LastCheckpointDuration = nil
 	c.metrics.LastRestoreDuration = nil
+	c.metrics.CheckpointErrors = 0
+	c.metrics.RestoreErrors = 0
 }
