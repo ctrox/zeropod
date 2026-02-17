@@ -1,0 +1,10 @@
+resources:
+  - ../production
+patches:
+  - path: k0s.yaml
+  - patch: |-
+      - op: add
+        path: /spec/template/spec/initContainers/0/args/-
+        value: -runtime=k0s
+    target:
+      kind: DaemonSet
