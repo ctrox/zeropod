@@ -76,6 +76,20 @@ func TestNewConfig(t *testing.T) {
 				assert.False(t, cfg.PreDump)
 			},
 		},
+		"proxy timeout": {
+			annotations: map[string]string{
+				ProxyTimeoutAnnotationKey: "30s",
+			},
+			assertCfg: func(t *testing.T, cfg *Config) {
+				assert.Equal(t, time.Second*30, cfg.ProxyTimeout)
+			},
+		},
+		"proxy timeout default": {
+			annotations: map[string]string{},
+			assertCfg: func(t *testing.T, cfg *Config) {
+				assert.Equal(t, time.Second*5, cfg.ProxyTimeout)
+			},
+		},
 	}
 
 	for name, tc := range tests {

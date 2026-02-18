@@ -128,6 +128,10 @@ func (s *Server) DisableRedirects() error {
 	return nil
 }
 
+func (s *Server) SetProxyTimeout(d time.Duration) {
+	s.proxyTimeout = d
+}
+
 func (s *Server) SetPeekBufferSize(size int) {
 	s.peekBufferSize = size
 }
