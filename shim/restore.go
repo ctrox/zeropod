@@ -38,6 +38,11 @@ var (
 // retry without the checkpoint and disable checkpointing for the rest of the
 // container lifetime.
 func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Process, error) {
+	c.CheckpointRestore.Lock()
+	defer c.CheckpointRestore.Unlock()
+	if !c.ScaledDown() {
+		return nil, nil, ErrAlreadyRestored
+	}
 	cont, p, err := c.restore(ctx)
 	if err != nil && !c.cfg.DisableCheckpointing {
 		log.G(ctx).Errorf("restore failed, disabling checkpointing and retrying: %s", err)
@@ -48,12 +53,6 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 }
 
 func (c *Container) restore(ctx context.Context) (*runc.Container, process.Process, error) {
-	c.CheckpointRestore.Lock()
-	defer c.CheckpointRestore.Unlock()
-	if !c.ScaledDown() {
-		return nil, nil, ErrAlreadyRestored
-	}
-
 	// cleanup image regardless of success/failure
 	defer c.deleteImage(ctx)
 	beforeRestore := time.Now()
