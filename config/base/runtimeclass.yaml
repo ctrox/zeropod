@@ -1,0 +1,8 @@
+apiVersion: node.k8s.io/v1
+kind: RuntimeClass
+metadata:
+  name: zeropod
+handler: zeropod
+scheduling:
+  nodeSelector:
+    zeropod.ctrox.dev/node: "true"

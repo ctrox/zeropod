@@ -19,12 +19,9 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/cmd/containerd/server/config"
 	"github.com/coreos/go-systemd/v22/dbus"
-	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager/node"
-	"github.com/ctrox/zeropod/shim"
 	"github.com/pelletier/go-toml/v2"
 	corev1 "k8s.io/api/core/v1"
-	knodev1 "k8s.io/api/node/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -150,12 +147,6 @@ func main() {
 	}
 
 	log.Println("installed runtime")
-
-	if err := installRuntimeClass(ctx, client); err != nil {
-		log.Fatalf("error installing zeropod runtimeClass: %s", err)
-	}
-
-	log.Println("installed runtimeClass")
 
 	if err := loadTLSCA(ctx, client); err != nil {
 		log.Fatalf("error loading TLS CA certificate: %s", err)
@@ -598,31 +589,6 @@ func optPath(ctx context.Context, runtime containerRuntime) string {
 	return defaultOptPath
 }
 
-func installRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
-	runtimeClass := &knodev1.RuntimeClass{
-		ObjectMeta: metav1.ObjectMeta{Name: v1.RuntimeClassName},
-		Handler:    v1.RuntimeClassName,
-		Scheduling: &knodev1.Scheduling{NodeSelector: map[string]string{shim.NodeLabel: "true"}},
-	}
-
-	if _, err := client.NodeV1().RuntimeClasses().Create(ctx, runtimeClass, metav1.CreateOptions{}); err != nil {
-		if !kerrors.IsAlreadyExists(err) {
-			return err
-		}
-	}
-
-	return nil
-}
-
-func removeRuntimeClass(ctx context.Context, client kubernetes.Interface) error {
-	if err := client.NodeV1().RuntimeClasses().Delete(ctx, v1.RuntimeClassName, metav1.DeleteOptions{}); err != nil {
-		if !kerrors.IsNotFound(err) {
-			return err
-		}
-	}
-	return nil
-}
-
 func inClusterClient() (kubernetes.Interface, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
@@ -635,10 +601,6 @@ func inClusterClient() (kubernetes.Interface, error) {
 // runUninstall removes all components installed by zeropod and restores the
 // original configuration.
 func runUninstall(ctx context.Context, client kubernetes.Interface, runtime containerRuntime) error {
-	if err := removeRuntimeClass(ctx, client); err != nil {
-		return err
-	}
-
 	if err := os.RemoveAll(optPath(ctx, runtime)); err != nil {
 		return fmt.Errorf("removing opt path: %w", err)
 	}

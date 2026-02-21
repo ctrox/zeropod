@@ -322,18 +322,6 @@ func deployNode(t testing.TB, ctx context.Context, c client.Client) error {
 		}
 	}
 
-	// wait until runtimeclass is available, that means the install was successful
-	if ok := assert.Eventually(t, func() bool {
-		runtimeClass := &nodev1.RuntimeClass{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: v1.RuntimeClassName,
-			},
-		}
-		return c.Get(ctx, objectName(runtimeClass), runtimeClass) == nil
-	}, time.Second*30, time.Millisecond*500); !ok {
-		return fmt.Errorf("runtimeClass not found")
-	}
-
 	// wait for node pod to be running
 	nodePods := &corev1.PodList{}
 	require.NoError(t, c.List(ctx, nodePods, matchZeropodNodeLabels))
