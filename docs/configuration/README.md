@@ -137,6 +137,24 @@ the TCP stream of incoming connections. This normally does not need to be
 adjusted as the default should fit most probes and only needs to be increased in
 case the probe contains lots of header data. Defaults to `1024` if unset.
 
+### Connect Timeout
+
+```yaml
+zeropod.ctrox.dev/connect-timeout: "5s"
+```
+
+Configures how long to wait for the container process to restore when proxying
+the initial connections. Defaults to `5s` if unset.
+
+### Proxy Timeout
+
+```yaml
+zeropod.ctrox.dev/proxy-timeout: "5s"
+```
+
+Configures how long to proxy a connection to the container process after it has
+been established. Defaults to `5s` if unset.
+
 ## Experimental Features
 
 Features that are marked as experimental might change form in the future or
