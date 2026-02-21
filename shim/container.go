@@ -244,12 +244,17 @@ func (c *Container) SkipStart() bool {
 }
 
 func (c *Container) Status() *v1.ContainerStatus {
+	eventTime := timestamppb.Now()
 	phase := v1.ContainerPhase_RUNNING
-	eventTime := c.metrics.LastRestore
+	if c.metrics.LastRestore != nil {
+		eventTime = c.metrics.LastRestore
+	}
 	eventDuration := c.metrics.LastRestoreDuration
 	if c.ScaledDown() {
 		phase = v1.ContainerPhase_SCALED_DOWN
-		eventTime = c.metrics.LastCheckpoint
+		if c.metrics.LastCheckpoint != nil {
+			eventTime = c.metrics.LastCheckpoint
+		}
 		eventDuration = c.metrics.LastCheckpointDuration
 	}
 	return &v1.ContainerStatus{
