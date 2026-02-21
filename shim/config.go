@@ -225,7 +225,7 @@ func (cfg Config) IsZeropodContainer() bool {
 }
 
 func (cfg Config) migrationEnabled() bool {
-	return slices.Contains(cfg.Migrate, cfg.ContainerName)
+	return slices.Contains(cfg.Migrate, cfg.ContainerName) && !cfg.DisableCheckpointing
 }
 
 func (cfg Config) LiveMigrationEnabled() bool {
