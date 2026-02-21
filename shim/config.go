@@ -25,6 +25,8 @@ const (
 	LiveMigrateAnnotationKey         = "zeropod.ctrox.dev/live-migrate"
 	DisableProbeDetectAnnotationKey  = "zeropod.ctrox.dev/disable-probe-detection"
 	ProbeBufferSizeAnnotationKey     = "zeropod.ctrox.dev/probe-buffer-size"
+	ProxyTimeoutAnnotationKey        = "zeropod.ctrox.dev/proxy-timeout"
+	ConnectTimeoutAnnotationKey      = "zeropod.ctrox.dev/connect-timeout"
 	DisableMigrateDataAnnotationKey  = "zeropod.ctrox.dev/disable-migrate-data"
 	CRIContainerNameAnnotation       = "io.kubernetes.cri.container-name"
 	CRIContainerTypeAnnotation       = "io.kubernetes.cri.container-type"
@@ -33,6 +35,8 @@ const (
 	CRIPodUIDAnnotation              = "io.kubernetes.cri.sandbox-uid"
 
 	defaultScaleDownDuration = time.Minute
+	defaultProxyTimeout      = time.Second * 5
+	defaultConnectTimeout    = time.Second * 5
 	containersDelim          = ","
 	portsDelim               = containersDelim
 	mappingDelim             = ";"
@@ -56,6 +60,8 @@ type Config struct {
 	ContainerdNamespace   string
 	DisableProbeDetection bool
 	ProbeBufferSize       int
+	ProxyTimeout          time.Duration
+	ConnectTimeout        time.Duration
 	DisableMigrateData    bool
 	spec                  *specs.Spec
 }
@@ -159,6 +165,24 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 
+	proxyTimeout := defaultProxyTimeout
+	proxyTimeoutValue := spec.Annotations[ProxyTimeoutAnnotationKey]
+	if proxyTimeoutValue != "" {
+		proxyTimeout, err = time.ParseDuration(proxyTimeoutValue)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	connectTimeout := defaultConnectTimeout
+	connectTimeoutValue := spec.Annotations[ConnectTimeoutAnnotationKey]
+	if connectTimeoutValue != "" {
+		connectTimeout, err = time.ParseDuration(connectTimeoutValue)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	disableMigrateDataValue := spec.Annotations[DisableMigrateDataAnnotationKey]
 	disableMigrateData := false
 	if disableMigrateDataValue != "" {
@@ -184,6 +208,8 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ContainerdNamespace:   ns,
 		DisableProbeDetection: disableProbeDetection,
 		ProbeBufferSize:       probeBufferSize,
+		ProxyTimeout:          proxyTimeout,
+		ConnectTimeout:        connectTimeout,
 		DisableMigrateData:    disableMigrateData,
 		spec:                  spec,
 	}, nil

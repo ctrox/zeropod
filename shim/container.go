@@ -359,6 +359,12 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 		if err != nil {
 			return err
 		}
+		if c.cfg.ProxyTimeout > 0 {
+			act.SetProxyTimeout(c.cfg.ProxyTimeout)
+		}
+		if c.cfg.ConnectTimeout > 0 {
+			act.SetConnectTimeout(c.cfg.ConnectTimeout)
+		}
 		c.activator = act
 	}
 
