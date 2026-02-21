@@ -10,7 +10,7 @@ RUN go mod download
 COPY . .
 
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o zeropod-manager cmd/manager/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags "-s -w" -a -o zeropod-manager ./cmd/manager/
 
 FROM ${CRIU_IMAGE} AS criu
 # the manager runs criu lazy-pages, which needs libc so we can't use the static
