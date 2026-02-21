@@ -40,6 +40,7 @@ type Server struct {
 	sandboxPid     int
 	started        bool
 	peekBufferSize int
+	lastAddr       string
 }
 
 type ConnHook func(net.Conn) (conn net.Conn, cont bool, err error)
@@ -235,12 +236,19 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 		log.G(ctx).Errorf("unable to get TCP Addr from remote addr: %T", conn.RemoteAddr())
 		return
 	}
+	// store addr for loop detection
+	s.lastAddr = tcpAddr.String()
 
 	log.G(ctx).Debugf("registering connection on remote port %d from %s", tcpAddr.Port, tcpAddr.IP.String())
 	if err := s.registerConnection(uint16(tcpAddr.Port)); err != nil {
 		log.G(ctx).Errorf("error registering connection: %s", err)
 		return
 	}
+	defer func() {
+		if err := s.removeConnection(uint16(tcpAddr.Port)); err != nil {
+			log.G(ctx).Warnf("error removing connection: %s", err)
+		}
+	}()
 
 	if err := s.restoreHook(); err != nil {
 		log.G(ctx).Errorf("restoreHook: %s", err)
@@ -255,16 +263,19 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 	defer backendConn.Close()
 
 	log.G(ctx).Println("dial succeeded", backendConn.RemoteAddr().String())
+	if s.lastAddr == backendConn.LocalAddr().String() {
+		log.G(ctx).Warnf("loop detected on %s, disabling redirects", backendConn.LocalAddr().String())
+		if err := s.DisableRedirects(); err != nil {
+			log.G(ctx).WithError(err).Errorf("disabling redirects in loop, closing connection prematurely")
+			return
+		}
+	}
 
 	requestContext, cancel := context.WithTimeout(ctx, s.proxyTimeout)
 	s.proxyCancel = cancel
 	defer cancel()
 	if err := proxy(requestContext, conn, backendConn); err != nil {
 		log.G(ctx).Errorf("error proxying request: %s", err)
-	}
-
-	if err := s.removeConnection(uint16(tcpAddr.Port)); err != nil {
-		log.G(ctx).Warnf("error removing connection: %s", err)
 	}
 
 	log.G(ctx).Println("connection closed", conn.RemoteAddr().String())

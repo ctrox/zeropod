@@ -28,6 +28,7 @@ type testCase struct {
 	ipv6                   bool
 	setBinaryName          bool
 	trackerIgnoreLocalhost bool
+	loopConnection         bool
 }
 
 func TestActivator(t *testing.T) {
@@ -117,6 +118,13 @@ func TestActivator(t *testing.T) {
 			ipv6:                   true,
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
+		},
+		"loop detection": {
+			parallelReqs:       1,
+			loopConnection:     true,
+			expectLastActivity: true,
+			expectedBody:       "ok",
+			expectedCode:       http.StatusOK,
 		},
 	}
 	wg := sync.WaitGroup{}
@@ -220,10 +228,19 @@ func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *
 	}
 
 	once := sync.Once{}
+	loopIterations := 0
 	err := s.Start(
 		ctx,
 		tc.connHook,
 		func() error {
+			if tc.loopConnection {
+				loopIterations += 1
+				if loopIterations > 10 {
+					t.Error("loop detection failed")
+					return fmt.Errorf("loop detection failed")
+				}
+				// return nil
+			}
 			once.Do(func() {
 				// simulate a delay until our server is started
 				time.Sleep(time.Millisecond * 200)
@@ -234,8 +251,10 @@ func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *
 				l, err := net.Listen(network, fmt.Sprintf(":%d", port))
 				require.NoError(t, err)
 
-				if err := s.DisableRedirects(); err != nil {
-					t.Errorf("could not disable redirects: %s", err)
+				if !tc.loopConnection {
+					if err := s.DisableRedirects(); err != nil {
+						t.Errorf("could not disable redirects: %s", err)
+					}
 				}
 
 				// replace listener of server
