@@ -12,6 +12,8 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	goruntime "runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"time"
@@ -34,6 +36,11 @@ var (
 	hostOptPath    = flag.String("host-opt-path", defaultOptPath, "path where zeropod binaries are stored on the host")
 	uninstall      = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
 	installTimeout = flag.Duration("timeout", time.Minute, "duration the installer waits for the installation to complete")
+	versionFlag    = flag.Bool("version", false, "output version and exit")
+
+	version   = ""
+	revision  = ""
+	goVersion = goruntime.Version()
 )
 
 type containerRuntime string
@@ -116,8 +123,32 @@ network-lock skip
 `
 )
 
+func init() {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return
+	}
+
+	if version == "" {
+		version = info.Main.Version
+	}
+
+	for _, kv := range info.Settings {
+		switch kv.Key {
+		case "vcs.revision":
+			revision = kv.Value
+		}
+	}
+}
+
 func main() {
 	flag.Parse()
+
+	if *versionFlag {
+		printVersion()
+		os.Exit(0)
+	}
+	log.Printf("starting installer version=%s revision=%s go=%s", version, revision, goVersion)
 
 	client, err := inClusterClient()
 	if err != nil {
@@ -155,6 +186,14 @@ func main() {
 	log.Println("installed ca cert")
 
 	log.Println("installer completed")
+}
+
+func printVersion() {
+	fmt.Printf("%s:\n", filepath.Base(os.Args[0]))
+	fmt.Println("  Version: ", version)
+	fmt.Println("  Revision:", revision)
+	fmt.Println("  Go version:", goVersion)
+	fmt.Println("")
 }
 
 func installCriu(ctx context.Context) error {

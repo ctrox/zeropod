@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y make
 COPY . .
 
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH GO111MODULE=on go build -ldflags "-s -w" -a -o zeropod-installer cmd/installer/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags "-s -w" -a -o zeropod-installer ./cmd/installer/
 RUN GOARCH=$TARGETARCH make build
 
 FROM gcr.io/distroless/static-debian12
