@@ -1,6 +1,7 @@
 package activator
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -67,6 +68,12 @@ func TestActivator(t *testing.T) {
 			parallelReqs: 1,
 			expectedBody: "",
 			connHook: func(conn net.Conn) (net.Conn, bool, error) {
+				// read request, else we might run into
+				// https://github.com/golang/go/issues/31259
+				_, err := http.ReadRequest(bufio.NewReader(conn))
+				if err != nil {
+					return conn, false, err
+				}
 				resp := http.Response{
 					StatusCode: http.StatusForbidden,
 				}
@@ -79,6 +86,12 @@ func TestActivator(t *testing.T) {
 			parallelReqs: 1,
 			expectedBody: "",
 			connHook: func(conn net.Conn) (net.Conn, bool, error) {
+				// read request, else we might run into
+				// https://github.com/golang/go/issues/31259
+				_, err := http.ReadRequest(bufio.NewReader(conn))
+				if err != nil {
+					return conn, false, err
+				}
 				resp := http.Response{
 					StatusCode: http.StatusForbidden,
 				}
