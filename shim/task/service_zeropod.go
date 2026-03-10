@@ -299,13 +299,18 @@ func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	}
 	log.G(ctx).Infof("delete called in zeropod: %s", zeropodContainer.ID())
 
-	if len(r.ExecID) != 0 {
-		// on delete of an exec container we want to schedule scaling down again.
-		if err := zeropodContainer.ScheduleScaleDown(); err != nil {
-			return nil, err
-		}
-	} else {
+	if r.ExecID == "" {
 		w.deleteZeropodContainer(r.ID)
+	} else {
+		w.lifecycleMu.Lock()
+		// on delete of an exec container we want to schedule scaling down again
+		// but only if there are no other running execs.
+		if w.runningExecs[zeropodContainer.Container] == 0 {
+			if err := zeropodContainer.ScheduleScaleDown(); err != nil {
+				return nil, err
+			}
+		}
+		w.lifecycleMu.Unlock()
 	}
 	return w.service.Delete(ctx, r)
 }
