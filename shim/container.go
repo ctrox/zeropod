@@ -484,6 +484,9 @@ func (c *Container) lastActivity() (time.Time, error) {
 	for _, port := range c.cfg.Ports {
 		last, err := c.activator.LastActivity(port)
 		if err != nil {
+			if errors.Is(err, activator.NoActivityRecordedErr{}) {
+				continue
+			}
 			return time.Time{}, err
 		}
 		act = append(act, last)
