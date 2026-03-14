@@ -1,12 +1,24 @@
 diff --git a/criu/cr-service.c b/criu/cr-service.c
-index deb16e553..f86f0e334 100644
+index dccf4ef38c..b3ba7f03f0 100644
 --- a/criu/cr-service.c
 +++ b/criu/cr-service.c
-@@ -598,6 +598,7 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
- 
+@@ -554,12 +554,15 @@ static int setup_opts_from_req(int sk, CriuOpts *req)
  	if (req->ps) {
  		opts.port = (short)req->ps->port;
-+		opts.addr = req->ps->address;
  
++		if (req->ps->address) {
++			SET_CHAR_OPTS(addr, req->ps->address);
++		} else {
++			xfree(opts.addr);
++			opts.addr = NULL;
++		}
++
  		if (!opts.lazy_pages) {
  			opts.use_page_server = true;
+-			if (req->ps->address)
+-				SET_CHAR_OPTS(addr, req->ps->address);
+-			else
+-				opts.addr = NULL;
+ 
+ 			if (req->ps->has_fd) {
+ 				if (!opts.swrk_restore)
