@@ -2,6 +2,8 @@ name: Build and Publish CRIU image
 
 on:
   push:
+    branches:
+      - main
     paths:
       - criu/**
 

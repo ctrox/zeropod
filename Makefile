@@ -17,6 +17,7 @@ SHIM_EXTLDFLAGS="-static" -s -w
 SHIM_TAGS="no_grpc"
 SHIM_LDFLAGS=-X $(CONTAINERD_PKG)/version.Version=$(VERSION) -X $(CONTAINERD_PKG)/version.Revision=$(REVISION) -X $(CONTAINERD_PKG)/version.Package=$(PKG) -extldflags ${SHIM_EXTLDFLAGS}
 GOARCH ?= $(shell go env GOARCH)
+PLATFORMS := linux/arm64,linux/amd64
 
 # build-kind can be used for fast local development. It just builds and
 # switches out the shim binary. Running pods have to be recreated to make use
@@ -41,7 +42,7 @@ logs:
 	docker exec kind-worker journalctl -fu containerd & docker exec kind-worker2 journalctl -fu containerd
 
 build-criu:
-	docker buildx build --push --platform linux/arm64,linux/amd64 --build-arg CRIU_VERSION=$(CRIU_VERSION) -t $(CRIU_IMAGE) -f criu/Dockerfile .
+	docker buildx build --push --platform $(PLATFORMS) --build-arg CRIU_VERSION=$(CRIU_VERSION) -t $(CRIU_IMAGE) -f criu/Dockerfile .
 
 build-installer:
 	docker build --load -t $(INSTALLER_IMAGE) -f cmd/installer/Dockerfile .
