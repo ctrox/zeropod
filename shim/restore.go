@@ -208,7 +208,7 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 
 // MigrationRestore requests a restore from the node. If a matching migration is
 // found, it sets the Checkpoint path in the CreateTaskRequest.
-func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *Config) (skipStart bool, err error) {
+func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Config) (skipStart bool, err error) {
 	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
 		return false, fmt.Errorf("%w: dialing node service: %w", ErrRestoreDial, err)
@@ -300,7 +300,7 @@ func setCriuWorkPath(r *task.CreateTaskRequest, path string) error {
 	return nil
 }
 
-func FinishRestore(ctx context.Context, id string, cfg *Config, startTime time.Time) error {
+func FinishRestore(ctx context.Context, id string, cfg *v1.Config, startTime time.Time) error {
 	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
 		return fmt.Errorf("dialing node service: %w", err)

@@ -82,6 +82,7 @@ type bpfMapSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfVariableSpecs struct {
 	ProbeBinaryName        *ebpf.VariableSpec `ebpf:"probe_binary_name"`
+	TaskCommOffset         *ebpf.VariableSpec `ebpf:"task_comm_offset"`
 	TrackerIgnoreLocalhost *ebpf.VariableSpec `ebpf:"tracker_ignore_localhost"`
 }
 
@@ -131,6 +132,7 @@ func (m *bpfMaps) Close() error {
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfVariables struct {
 	ProbeBinaryName        *ebpf.Variable `ebpf:"probe_binary_name"`
+	TaskCommOffset         *ebpf.Variable `ebpf:"task_comm_offset"`
 	TrackerIgnoreLocalhost *ebpf.Variable `ebpf:"tracker_ignore_localhost"`
 }
 

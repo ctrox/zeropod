@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,14 +23,8 @@ type Redirector struct {
 }
 
 type sandbox struct {
-	ips       []netip.Addr
 	activator *activator.BPF
 }
-
-const (
-	ifaceETH0     = "eth0"
-	ifaceLoopback = "lo"
-)
 
 // AttachRedirectors scans the zeropod maps path in the bpf file system for
 // directories named after the pid of the sandbox container. It does an
@@ -72,6 +64,10 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...a
 			continue
 		}
 
+		if activator.TCXPinned(pid) {
+			r.log.Debug("skipping already pinned attach", "pid", pid)
+			continue
+		}
 		errs = append(errs, r.attachRedirector(pid))
 	}
 
@@ -102,6 +98,11 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 			pid, err := strconv.Atoi(filepath.Base(event.Name))
 			if err != nil {
 				r.log.Warn("unable to parse pid from added name", "name", filepath.Base(event.Name))
+				continue
+			}
+
+			if activator.TCXPinned(pid, activator.DefaultIfaces...) {
+				r.log.Debug("skipping already pinned attach", "pid", pid)
 				continue
 			}
 
@@ -144,24 +145,19 @@ func (r *Redirector) attachRedirector(pid int) error {
 		return err
 	}
 
-	var sandboxIPs []netip.Addr
 	if err := netNS.Do(func(nn ns.NetNS) error {
-		// TODO: is this really always eth0?
-		// as for loopback, this is required for port-forwarding to work
-		ifaces := []string{ifaceETH0, ifaceLoopback}
-		r.log.Info("attaching redirector for sandbox", "pid", pid, "links", ifaces)
-		if err := bpf.AttachRedirector(ifaces...); err != nil {
+		r.log.Info("attaching redirector for sandbox", "pid", pid, "links", activator.DefaultIfaces)
+		if err := bpf.AttachRedirector(activator.DefaultIfaces...); err != nil {
 			return err
 		}
 
-		sandboxIPs, err = getSandboxIPs(ifaceETH0)
 		return err
 	}); err != nil {
 		return errors.Join(err, bpf.Cleanup())
 	}
 
 	r.Lock()
-	r.sandboxes[pid] = sandbox{activator: bpf, ips: sandboxIPs}
+	r.sandboxes[pid] = sandbox{activator: bpf}
 	r.Unlock()
 
 	return nil
@@ -211,36 +207,6 @@ func (r *Redirector) getSandboxPids() ([]int, error) {
 	}
 
 	return intPids, nil
-}
-
-func getSandboxIPs(ifaceName string) ([]netip.Addr, error) {
-	ips := []netip.Addr{}
-	iface, err := net.InterfaceByName(ifaceName)
-	if err != nil {
-		return ips, fmt.Errorf("could not get interface: %w", err)
-	}
-	addrs, err := iface.Addrs()
-	if err != nil {
-		return ips, fmt.Errorf("could not get interface addrs: %w", err)
-	}
-	for _, addr := range addrs {
-		if ipnet, ok := addr.(*net.IPNet); ok {
-			// no need to track link local addresses
-			if ipnet.IP.IsLinkLocalUnicast() {
-				continue
-			}
-			ip, ok := netip.AddrFromSlice(ipnet.IP)
-			if !ok {
-				return ips, fmt.Errorf("unable to convert net.IP to netip.Addr: %s", ipnet.IP)
-			}
-			// use Unmap as the ipv4 might be mapped in v6
-			ips = append(ips, ip.Unmap())
-		}
-	}
-	if len(ips) == 0 {
-		return ips, fmt.Errorf("sandbox IPs not found")
-	}
-	return ips, nil
 }
 
 func ignoredDir(dir string) bool {

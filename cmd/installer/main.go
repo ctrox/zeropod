@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -21,6 +22,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/cmd/containerd/server/config"
 	"github.com/coreos/go-systemd/v22/dbus"
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager/node"
 	"github.com/pelletier/go-toml/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -31,12 +33,14 @@ import (
 )
 
 var (
-	criuImage      = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v4.2", "criu image to use.")
-	runtime        = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
-	hostOptPath    = flag.String("host-opt-path", defaultOptPath, "path where zeropod binaries are stored on the host")
-	uninstall      = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
-	installTimeout = flag.Duration("timeout", time.Minute, "duration the installer waits for the installation to complete")
-	versionFlag    = flag.Bool("version", false, "output version and exit")
+	criuImage              = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v4.2", "criu image to use.")
+	runtime                = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
+	hostOptPath            = flag.String("host-opt-path", defaultOptPath, "path where zeropod binaries are stored on the host")
+	uninstall              = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
+	installTimeout         = flag.Duration("timeout", time.Minute, "duration the installer waits for the installation to complete")
+	versionFlag            = flag.Bool("version", false, "output version and exit")
+	probeBinaryName        = flag.String("probe-binary-name", v1.DefaultProbeBinaryName, "set the probe binary name for probe detection")
+	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", v1.DefaultTrackerIgnoreLocalhost, "set to ignore traffic from localhost in socket tracker")
 
 	version   = ""
 	revision  = ""
@@ -60,15 +64,12 @@ const (
 	configBackupSuffix          = ".original"
 	templateSuffix              = ".tmpl"
 	caSecretName                = "ca-cert"
-	defaultCriuBin              = "criu"
-	criuIPTablesBin             = "criu-iptables"
 	criuConfig                  = `tcp-close
 skip-in-flight
 network-lock skip
 `
 	defaultOptPath    = "/opt/zeropod"
 	containerdOptKey  = "io.containerd.internal.v1.opt"
-	criPluginKey      = "io.containerd.grpc.v1.cri"
 	zeropodRuntimeKey = "containerd.runtimes.zeropod"
 	optPlugin         = `
 [plugins."io.containerd.internal.v1.opt"]
@@ -239,10 +240,11 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 		return fmt.Errorf("unable to connect to dbus: %w", err)
 	}
 
+	opt := optPath(ctx, runtime)
 	// note that if the shim binary already exists, we simply switch it out with
 	// the new one but existing zeropods will have to be deleted to use the
 	// updated shim.
-	shimDest := filepath.Join(optPath(ctx, runtime), binPath, shimBinaryName)
+	shimDest := filepath.Join(opt, binPath, shimBinaryName)
 	if err := os.Remove(shimDest); err != nil {
 		log.Printf("unable to remove shim binary, continuing with install: %s", err)
 	}
@@ -253,6 +255,20 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 	}
 
 	if err := os.WriteFile(shimDest, shim, 0755); err != nil {
+		return fmt.Errorf("unable to write shim file: %w", err)
+	}
+
+	b, err := json.MarshalIndent(&v1.Config{
+		ProbeBinaryName:        *probeBinaryName,
+		TrackerIgnoreLocalhost: *trackerIgnoreLocalhost,
+	}, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(opt, v1.ConfigDir), os.ModePerm); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(opt, v1.ConfigDir, v1.ConfigFileName), b, 0600); err != nil {
 		return fmt.Errorf("unable to write shim file: %w", err)
 	}
 

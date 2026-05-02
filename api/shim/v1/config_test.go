@@ -1,4 +1,4 @@
-package shim
+package v1
 
 import (
 	"context"

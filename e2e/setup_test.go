@@ -23,7 +23,6 @@ import (
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager"
-	"github.com/ctrox/zeropod/shim"
 	"github.com/go-logr/logr"
 	"github.com/phayes/freeport"
 	"github.com/pkg/errors"
@@ -196,12 +195,12 @@ func startKind(t testing.TB, name, kubeconfig string, port int) (c *rest.Config,
 				},
 				{
 					Role:        v1alpha4.WorkerRole,
-					Labels:      map[string]string{shim.NodeLabel: "true"},
+					Labels:      map[string]string{shimv1.NodeLabel: "true"},
 					ExtraMounts: extraMounts,
 				},
 				{
 					Role:        v1alpha4.WorkerRole,
-					Labels:      map[string]string{shim.NodeLabel: "true"},
+					Labels:      map[string]string{shimv1.NodeLabel: "true"},
 					ExtraMounts: extraMounts,
 				},
 			},
@@ -378,43 +377,43 @@ func annotations(annotations map[string]string) podOption {
 
 func preDump(preDump bool) podOption {
 	return annotations(map[string]string{
-		shim.PreDumpAnnotationKey: strconv.FormatBool(preDump),
+		shimv1.PreDumpAnnotationKey: strconv.FormatBool(preDump),
 	})
 }
 
 func disableCheckpointing(disable bool) podOption {
 	return annotations(map[string]string{
-		shim.DisableCheckpoiningAnnotationKey: strconv.FormatBool(disable),
+		shimv1.DisableCheckpoiningAnnotationKey: strconv.FormatBool(disable),
 	})
 }
 
 func scaleDownAfter(dur time.Duration) podOption {
 	return annotations(map[string]string{
-		shim.ScaleDownDurationAnnotationKey: dur.String(),
+		shimv1.ScaleDownDurationAnnotationKey: dur.String(),
 	})
 }
 
 func containerNamesAnnotation(names ...string) podOption {
 	return annotations(map[string]string{
-		shim.ContainerNamesAnnotationKey: strings.Join(names, ","),
+		shimv1.ContainerNamesAnnotationKey: strings.Join(names, ","),
 	})
 }
 
 func portsAnnotation(portsMap string) podOption {
 	return annotations(map[string]string{
-		shim.PortsAnnotationKey: portsMap,
+		shimv1.PortsAnnotationKey: portsMap,
 	})
 }
 
 func migrateAnnotation(container string) podOption {
 	return annotations(map[string]string{
-		shim.MigrateAnnotationKey: container,
+		shimv1.MigrateAnnotationKey: container,
 	})
 }
 
 func liveMigrateAnnotation(container string) podOption {
 	return annotations(map[string]string{
-		shim.LiveMigrateAnnotationKey: container,
+		shimv1.LiveMigrateAnnotationKey: container,
 	})
 }
 
@@ -442,7 +441,7 @@ func readinessProbe(probe *corev1.Probe, index int) podOption {
 
 func disableDataMigration() podOption {
 	return annotations(map[string]string{
-		shim.DisableMigrateDataAnnotationKey: "true",
+		shimv1.DisableMigrateDataAnnotationKey: "true",
 	})
 }
 

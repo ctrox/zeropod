@@ -3,15 +3,27 @@ package main
 import (
 	"context"
 	"io"
+	"log/slog"
+	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/containerd/containerd/api/types"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/manager"
 	"github.com/containerd/containerd/v2/pkg/shim"
+	"github.com/ctrox/zeropod/activator"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	zshim "github.com/ctrox/zeropod/shim"
 	_ "github.com/ctrox/zeropod/shim/task/plugin"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
+
+func main() {
+	if attachActivator() {
+		return
+	}
+	shim.Run(context.Background(), newCompatManager())
+}
 
 // compatManager is a wrapper around [shim.Manager] that allows us to control
 // the task API version. This makes it possible to use the containerd v2 shim
@@ -56,6 +68,33 @@ func newCompatManager() shim.Manager {
 	return &compatManager{mgr: manager.NewShimManager(zshim.RuntimeName)}
 }
 
-func main() {
-	shim.Run(context.Background(), newCompatManager())
+func attachActivator() bool {
+	if len(os.Args) < 3 || os.Args[1] != activator.AttachActivatorFlag {
+		return false
+	}
+	log := slog.Default()
+	pid, err := strconv.Atoi(os.Args[2])
+	if err != nil {
+		log.Error("converting pid", "error", err)
+		os.Exit(1)
+	}
+	cfg, err := shimv1.NewConfig(context.Background(), &specs.Spec{})
+	if err != nil {
+		log.Error("loading config", "error", err)
+		os.Exit(1)
+	}
+	bpf, err := activator.InitBPF(
+		pid, log,
+		activator.ProbeBinaryName(cfg.ProbeBinaryName),
+		activator.TrackerIgnoreLocalhost(cfg.TrackerIgnoreLocalhost),
+	)
+	if err != nil {
+		log.Error("unable to initialize BPF", "error", err)
+		os.Exit(1)
+	}
+	if err := bpf.AttachInNetNS(pid, activator.DefaultIfaces...); err != nil {
+		log.Error("attaching activator", "error", err)
+		os.Exit(1)
+	}
+	return true
 }

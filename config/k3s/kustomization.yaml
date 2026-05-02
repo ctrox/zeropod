@@ -10,7 +10,7 @@ patches:
       kind: DaemonSet
   - patch: |-
       - op: add
-        path: /spec/template/spec/containers/0/args/-
+        path: /spec/template/spec/initContainers/0/args/-
         value: -probe-binary-name=k3s
     target:
       kind: DaemonSet

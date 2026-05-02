@@ -11,7 +11,6 @@ import (
 
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager"
-	"github.com/ctrox/zeropod/shim"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
@@ -191,7 +190,7 @@ func TestE2E(t *testing.T) {
 		"pod with large HTTP probe and increased buffer": {
 			pod: testPod(
 				scaleDownAfter(time.Second),
-				annotations(map[string]string{shim.ProbeBufferSizeAnnotationKey: "2048"}),
+				annotations(map[string]string{v1.ProbeBufferSizeAnnotationKey: "2048"}),
 				addContainer("nginx", "nginx", nil, 80),
 				livenessProbe(&corev1.Probe{
 					InitialDelaySeconds: 3,

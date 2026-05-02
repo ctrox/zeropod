@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"testing"
 
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -37,7 +38,7 @@ func TestDetectProbe(t *testing.T) {
 		},
 		"probe request header bigger than buffer": {
 			clientFunc: httpRequest("kube-probe/1.32", http.StatusOK, func(req *http.Request) {
-				rnd, err := randomData(defaultProbeBufferSize * 10)
+				rnd, err := randomData(v1.DefaultProbeBufferSize * 10)
 				assert.NoError(t, err)
 				req.Header.Set("random-stuff", base64.URLEncoding.EncodeToString(rnd))
 			}),
@@ -45,7 +46,7 @@ func TestDetectProbe(t *testing.T) {
 		},
 		"probe request path bigger than buffer": {
 			clientFunc: httpRequest("kube-probe/1.32", http.StatusOK, func(req *http.Request) {
-				rnd, err := randomData(defaultProbeBufferSize * 10)
+				rnd, err := randomData(v1.DefaultProbeBufferSize * 10)
 				assert.NoError(t, err)
 				req.URL.Path = "/" + base64.URLEncoding.EncodeToString(rnd)
 			}),
@@ -56,7 +57,7 @@ func TestDetectProbe(t *testing.T) {
 			probeDetected: false,
 		},
 		"random TCP data bigger than buffer": {
-			clientFunc:    writeRandomTCPData(defaultProbeBufferSize * 1024),
+			clientFunc:    writeRandomTCPData(v1.DefaultProbeBufferSize * 1024),
 			probeDetected: false,
 		},
 	} {
@@ -72,7 +73,7 @@ func TestDetectProbe(t *testing.T) {
 
 			conn, err := l.Accept()
 			require.NoError(t, err)
-			c := &Container{cfg: &Config{ProbeBufferSize: defaultProbeBufferSize}}
+			c := &Container{cfg: &v1.Config{AnnotationConfig: v1.AnnotationConfig{ProbeBufferSize: v1.DefaultProbeBufferSize}}}
 			newConn, cont, err := c.detectProbe(ctx)(conn)
 			require.NoError(t, err)
 			if cont {
