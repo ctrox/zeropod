@@ -81,21 +81,7 @@ network-lock skip
 [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.zeropod]
   runtime_type = "io.containerd.runc.v2"
   runtime_path = "%s/bin/containerd-shim-zeropod-v2"
-  pod_annotations = [
-    "zeropod.ctrox.dev/ports-map",
-    "zeropod.ctrox.dev/container-names",
-    "zeropod.ctrox.dev/scaledown-duration",
-    "zeropod.ctrox.dev/disable-checkpointing",
-    "zeropod.ctrox.dev/pre-dump",
-    "zeropod.ctrox.dev/migrate",
-    "zeropod.ctrox.dev/live-migrate",
-    "zeropod.ctrox.dev/disable-probe-detection",
-    "zeropod.ctrox.dev/probe-buffer-size",
-    "zeropod.ctrox.dev/disable-migrate-data",
-    "zeropod.ctrox.dev/connect-timeout",
-    "zeropod.ctrox.dev/proxy-timeout",
-    "io.containerd.runc.v2.group"
-  ]
+  pod_annotations = %s
 
   [plugins."io.containerd.cri.v1.runtime".containerd.runtimes.zeropod.options]
     # use systemd cgroup by default
@@ -106,21 +92,7 @@ network-lock skip
 [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod]
   runtime_type = "io.containerd.runc.v2"
   runtime_path = "%s/bin/containerd-shim-zeropod-v2"
-  pod_annotations = [
-    "zeropod.ctrox.dev/ports-map",
-    "zeropod.ctrox.dev/container-names",
-    "zeropod.ctrox.dev/scaledown-duration",
-    "zeropod.ctrox.dev/disable-checkpointing",
-    "zeropod.ctrox.dev/pre-dump",
-    "zeropod.ctrox.dev/migrate",
-    "zeropod.ctrox.dev/live-migrate",
-    "zeropod.ctrox.dev/disable-probe-detection",
-    "zeropod.ctrox.dev/probe-buffer-size",
-    "zeropod.ctrox.dev/disable-migrate-data",
-    "zeropod.ctrox.dev/connect-timeout",
-    "zeropod.ctrox.dev/proxy-timeout",
-    "io.containerd.runc.v2.group"
-  ]
+  pod_annotations = %s
 
   [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.zeropod.options]
     # use systemd cgroup by default
@@ -444,7 +416,11 @@ func configureContainerdv1(ctx context.Context, runtime containerRuntime, contai
 		optPath = containerdOptPath
 	}
 
-	if _, err := fmt.Fprintf(cfg, runtimeConfig, strings.TrimSuffix(optPath, "/")); err != nil {
+	if _, err := fmt.Fprintf(
+		cfg, runtimeConfig,
+		strings.TrimSuffix(optPath, "/"),
+		annotationsToml(),
+	); err != nil {
 		return false, err
 	}
 
@@ -542,7 +518,12 @@ func writeZeropodRuntimeConfig(containerdConfig, optPath string, existingOpt boo
 	if version == 3 {
 		zeropodRuntimeConfig = runtimeConfigV3
 	}
-	zeropodRuntimeConfig = fmt.Sprintf(zeropodRuntimeConfig, strings.TrimSuffix(optPath, "/"))
+
+	zeropodRuntimeConfig = fmt.Sprintf(
+		zeropodRuntimeConfig,
+		strings.TrimSuffix(optPath, "/"),
+		annotationsToml(),
+	)
 	if !existingOpt {
 		zeropodRuntimeConfig = zeropodRuntimeConfig + fmt.Sprintf(optPlugin, optPath)
 	}
@@ -550,6 +531,17 @@ func writeZeropodRuntimeConfig(containerdConfig, optPath string, existingOpt boo
 		return fmt.Errorf("writing zeropod runtime config: %w", err)
 	}
 	return nil
+}
+
+func annotationsToml() string {
+	var buf bytes.Buffer
+	enc := toml.NewEncoder(&buf)
+	enc.SetArraysMultiline(true)
+	enc.SetIndentSymbol("    ")
+	if err := enc.Encode(v1.ContainerdAnnotations); err != nil {
+		return "[]"
+	}
+	return buf.String()
 }
 
 func restoreContainerdConfig(runtime containerRuntime, containerdConfigPath string) error {

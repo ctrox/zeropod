@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"testing"
 
@@ -90,11 +91,12 @@ imports = [
   "runtime_zeropod.toml",
 ]
 `
-	containerdv1AlreadyConfigured = fullContainerdConfigV2 + runtimeConfig + `
-[plugins."io.containerd.internal.v1.opt"]
-  path = "/opt/zeropod"
-`
 )
+
+var containerdv1AlreadyConfigured = fullContainerdConfigV2 + fmt.Sprintf(runtimeConfig, "", "[]") + `
+[plugins."io.containerd.internal.v1.opt"]
+ path = "/opt/zeropod"
+`
 
 type testConfig struct {
 	containerdConfig       string

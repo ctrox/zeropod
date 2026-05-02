@@ -55,6 +55,22 @@ const (
 	DefaultTrackerIgnoreLocalhost = true
 )
 
+var ContainerdAnnotations = []string{
+	PortsAnnotationKey,
+	ContainerNamesAnnotationKey,
+	ScaleDownDurationAnnotationKey,
+	DisableCheckpoiningAnnotationKey,
+	PreDumpAnnotationKey,
+	MigrateAnnotationKey,
+	LiveMigrateAnnotationKey,
+	DisableProbeDetectAnnotationKey,
+	ProbeBufferSizeAnnotationKey,
+	ProxyTimeoutAnnotationKey,
+	ConnectTimeoutAnnotationKey,
+	DisableMigrateDataAnnotationKey,
+	"io.containerd.runc.v2.group",
+}
+
 type AnnotationConfig struct {
 	ZeropodContainerNames []string
 	Ports                 []uint16
