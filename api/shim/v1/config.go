@@ -1,8 +1,11 @@
-package shim
+package v1
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"slices"
 	"strconv"
@@ -15,6 +18,8 @@ import (
 )
 
 const (
+	ConfigDir                        = "etc"
+	ConfigFileName                   = "shim.json"
 	NodeLabel                        = "zeropod.ctrox.dev/node"
 	PortsAnnotationKey               = "zeropod.ctrox.dev/ports-map"
 	ContainerNamesAnnotationKey      = "zeropod.ctrox.dev/container-names"
@@ -42,9 +47,31 @@ const (
 	mappingDelim             = ";"
 	mapDelim                 = "="
 	defaultContainerdNS      = "k8s.io"
+	// DefaultProbeBufferSize should be able to fit kube-probe HTTP requests with
+	// reasonable path and header sizes but should still be small enough to not
+	// impact performance.
+	DefaultProbeBufferSize        = 1024
+	DefaultProbeBinaryName        = "kubelet"
+	DefaultTrackerIgnoreLocalhost = true
 )
 
-type Config struct {
+var ContainerdAnnotations = []string{
+	PortsAnnotationKey,
+	ContainerNamesAnnotationKey,
+	ScaleDownDurationAnnotationKey,
+	DisableCheckpoiningAnnotationKey,
+	PreDumpAnnotationKey,
+	MigrateAnnotationKey,
+	LiveMigrateAnnotationKey,
+	DisableProbeDetectAnnotationKey,
+	ProbeBufferSizeAnnotationKey,
+	ProxyTimeoutAnnotationKey,
+	ConnectTimeoutAnnotationKey,
+	DisableMigrateDataAnnotationKey,
+	"io.containerd.runc.v2.group",
+}
+
+type AnnotationConfig struct {
 	ZeropodContainerNames []string
 	Ports                 []uint16
 	ScaleDownDuration     time.Duration
@@ -63,7 +90,13 @@ type Config struct {
 	ProxyTimeout          time.Duration
 	ConnectTimeout        time.Duration
 	DisableMigrateData    bool
-	spec                  *specs.Spec
+	Spec                  *specs.Spec
+}
+
+type Config struct {
+	ProbeBinaryName        string `json:"probeBinaryName"`
+	TrackerIgnoreLocalhost bool   `json:"trackerIgnoreLocalhost"`
+	AnnotationConfig       `json:"-"`
 }
 
 // NewConfig uses the annotations from the container spec to create a new
@@ -156,7 +189,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 
-	probeBufferSize := defaultProbeBufferSize
+	probeBufferSize := DefaultProbeBufferSize
 	probeBufferSizeValue := spec.Annotations[ProbeBufferSizeAnnotationKey]
 	if probeBufferSizeValue != "" {
 		probeBufferSize, err = strconv.Atoi(probeBufferSizeValue)
@@ -191,8 +224,22 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 			return nil, err
 		}
 	}
+	cfg := &Config{
+		ProbeBinaryName:        DefaultProbeBinaryName,
+		TrackerIgnoreLocalhost: DefaultTrackerIgnoreLocalhost,
+	}
+	e, err := os.Executable()
+	if err != nil {
+		return nil, fmt.Errorf("getting executable dir: %w", err)
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(e), "..", ConfigDir, ConfigFileName))
+	if err == nil {
+		if err := json.Unmarshal(b, cfg); err != nil {
+			return nil, err
+		}
+	}
 
-	return &Config{
+	cfg.AnnotationConfig = AnnotationConfig{
 		Ports:                 containerPorts,
 		ScaleDownDuration:     dur,
 		DisableCheckpointing:  disableCheckpointing,
@@ -211,8 +258,9 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		ProxyTimeout:          proxyTimeout,
 		ConnectTimeout:        connectTimeout,
 		DisableMigrateData:    disableMigrateData,
-		spec:                  spec,
-	}, nil
+		Spec:                  spec,
+	}
+	return cfg, nil
 }
 
 func (cfg Config) IsZeropodContainer() bool {

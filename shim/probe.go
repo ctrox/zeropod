@@ -13,11 +13,6 @@ import (
 	"github.com/ctrox/zeropod/activator"
 )
 
-// defaultProbeBufferSize should be able to fit kube-probe HTTP requests with
-// reasonable path and header sizes but should still be small enough to not
-// impact performance.
-const defaultProbeBufferSize = 1024
-
 func (c *Container) detectProbe(ctx context.Context) activator.ConnHook {
 	if c.cfg.DisableProbeDetection {
 		return func(conn net.Conn) (net.Conn, bool, error) {

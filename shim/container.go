@@ -38,7 +38,7 @@ type Container struct {
 	id               string
 	createOpts       *anypb.Any
 	activator        *activator.Server
-	cfg              *Config
+	cfg              *v1.Config
 	initialProcess   process.Process
 	process          process.Process
 	cgroup           any
@@ -60,9 +60,9 @@ type Container struct {
 	runcVersion      string
 }
 
-func New(ctx context.Context, cfg *Config, r *taskAPI.CreateTaskRequest, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
+func New(ctx context.Context, cfg *v1.Config, r *taskAPI.CreateTaskRequest, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
 	// get network ns of our container and store it for later use
-	netNSPath, err := GetNetworkNS(cfg.spec)
+	netNSPath, err := GetNetworkNS(cfg.Spec)
 	if err != nil {
 		return nil, err
 	}
@@ -126,7 +126,7 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 	return nil
 }
 
-func (c *Container) Config() *Config {
+func (c *Container) Config() *v1.Config {
 	return c.cfg
 }
 
@@ -440,12 +440,17 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	if c.activator.Started() {
 		return nil
 	}
+	if err := c.activator.AttachExec(); err != nil {
+		log.G(ctx).WithError(err).Error("failed to attach activator")
+		return err
+	}
+	log.G(ctx).Infof("attached %s", time.Now().Format(time.RFC3339Nano))
 	if err := c.activator.Start(c.context, c.detectProbe(c.context), c.restoreHandler(c.context), ports...); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}
 
-		log.G(ctx).Errorf("failed to start activator: %s", err)
+		log.G(ctx).WithError(err).Error("failed to start activator")
 		return err
 	}
 	log.G(ctx).Printf("activator started")

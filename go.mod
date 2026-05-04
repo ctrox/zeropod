@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/checkpoint-restore/go-criu/v7 v7.2.0
-	github.com/cilium/ebpf v0.19.0
+	github.com/cilium/ebpf v0.21.0
 	github.com/containerd/cgroups/v3 v3.0.5
 	github.com/containerd/containerd/api v1.9.0
 	github.com/containerd/containerd/v2 v2.1.6

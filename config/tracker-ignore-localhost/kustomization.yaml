@@ -3,7 +3,7 @@ kind: Component
 patches:
   - patch: |-
       - op: add
-        path: /spec/template/spec/containers/0/args/-
+        path: /spec/template/spec/initContainers/0/args/-
         value: -tracker-ignore-localhost=true
     target:
       kind: DaemonSet

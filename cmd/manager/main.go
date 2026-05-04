@@ -40,8 +40,8 @@ var (
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
 	statusLabels            = flag.Bool("status-labels", false, "update pod labels to reflect container status")
-	probeBinaryName         = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection")
-	trackerIgnoreLocalhost  = flag.Bool("tracker-ignore-localhost", false, "set to ignore traffic from localhost in socket tracker")
+	probeBinaryName         = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection (Deprecated: this has moved to the installer)")
+	trackerIgnoreLocalhost  = flag.Bool("tracker-ignore-localhost", true, "set to ignore traffic from localhost in socket tracker (Deprecated: this has moved to the installer)")
 	statusEvents            = flag.Bool("status-events", false, "create status events to reflect container status")
 	versionFlag             = flag.Bool("version", false, "output version and exit")
 	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 10, "num reconciles the pod controller processes concurrently")

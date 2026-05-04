@@ -123,7 +123,7 @@ func (w *wrapper) Create(ctx context.Context, r *taskAPI.CreateTaskRequest) (_ *
 		return nil, err
 	}
 
-	cfg, err := zshim.NewConfig(ctx, spec)
+	cfg, err := v1.NewConfig(ctx, spec)
 	if err != nil {
 		return nil, err
 	}

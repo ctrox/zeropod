@@ -11,8 +11,10 @@ import (
 	"strconv"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
+	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/vishvananda/netlink"
 	"golang.org/x/sys/unix"
 )
@@ -28,6 +30,7 @@ const (
 	PodKubeletAddrsMapv4           = "kubelet_addrs_v4"
 	PodKubeletAddrsMapv6           = "kubelet_addrs_v6"
 	trackerIgnoreLocalhostVariable = "tracker_ignore_localhost"
+	taskCommOffsetVariable         = "task_comm_offset"
 	tcxIngressPinName              = "tcx_ingress"
 	tcxEgressPinName               = "tcx_egress"
 )
@@ -89,8 +92,8 @@ func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 		return nil, err
 	}
 
-	// as a single shim process can host multiple containers, we store the map
-	// in a directory per shim process.
+	// as a single shim process can host multiple pods, we store the map in a
+	// directory per sandbox pid.
 	path := PinPath(pid)
 	if err := os.MkdirAll(path, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
@@ -109,11 +112,23 @@ func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 	}
 	binName := [probeBinaryNameMaxLength]byte{}
 	copy(binName[:], cfg.probeBinaryName[:])
-	if err := spec.Variables[probeBinaryNameVariable].Set(binName); err != nil {
+	if err := setVar(spec, probeBinaryNameVariable, binName); err != nil {
 		return nil, fmt.Errorf("setting probe binary variable: %w", err)
 	}
-	if err := spec.Variables[trackerIgnoreLocalhostVariable].Set(cfg.trackerIgnoreLocalhost); err != nil {
+	if err := setVar(spec, trackerIgnoreLocalhostVariable, cfg.trackerIgnoreLocalhost); err != nil {
 		return nil, fmt.Errorf("setting trackerIgnoreLocalhost variable: %w", err)
+	}
+	// in case you wonder why we do this instead of just accessing comm directly
+	// in the task struct in eBPF: this would make the btf loading way more
+	// expensive, at least the way cilium/ebpf behaves at the moment. It is
+	// about 3x slower and uses 3x the amount of memory. This is rather ugly but
+	// I think the performance gains are worth it.
+	commOffset, err := getTaskCommOffset()
+	if err != nil {
+		return nil, err
+	}
+	if err := setVar(spec, taskCommOffsetVariable, commOffset); err != nil {
+		return nil, fmt.Errorf("setting probe binary variable: %w", err)
 	}
 
 	for mapName, size := range cfg.mapSizes {
@@ -129,6 +144,46 @@ func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 	}
 
 	return &BPF{pid: pid, log: log, objs: &objs, noPin: cfg.disablePinning}, nil
+}
+
+// TCXPinned returns true if all TCX programs for the pid are pinned.
+func TCXPinned(pid int, ifaces ...string) bool {
+	for _, iface := range ifaces {
+		for _, attach := range []ebpf.AttachType{ebpf.AttachTCXIngress, ebpf.AttachTCXEgress} {
+			_, err := os.Stat(tcxLinkPath(pid, iface, attach))
+			if err != nil {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func setVar(spec *ebpf.CollectionSpec, name string, value any) error {
+	if _, ok := spec.Variables[name]; !ok {
+		return fmt.Errorf("could not find var %s in spec", name)
+	}
+	if err := spec.Variables[name].Set(value); err != nil {
+		return fmt.Errorf("setting spec variable: %w", err)
+	}
+	return nil
+}
+
+func getTaskCommOffset() (uint32, error) {
+	kernelSpec, err := btf.LoadKernelSpec()
+	if err != nil {
+		return 0, fmt.Errorf("failed to load kernel BTF: %w", err)
+	}
+	var taskStruct *btf.Struct
+	if err := kernelSpec.TypeByName("task_struct", &taskStruct); err != nil {
+		return 0, fmt.Errorf("task_struct not found in kernel BTF: %w", err)
+	}
+	for _, member := range taskStruct.Members {
+		if member.Name == "comm" {
+			return member.Offset.Bytes(), nil
+		}
+	}
+	return 0, fmt.Errorf("comm field not found in task_struct")
 }
 
 func (bpf *BPF) Cleanup() error {
@@ -155,6 +210,22 @@ func (bpf *BPF) Cleanup() error {
 	bpf.log.Info("deleting", "path", PinPath(bpf.pid))
 	errs = append(errs, os.RemoveAll(PinPath(bpf.pid)))
 	return errors.Join(errs...)
+}
+
+func (bpf *BPF) AttachInNetNS(pid int, ifaces ...string) error {
+	netNS, err := ns.GetNS(netNSPath(pid))
+	if err != nil {
+		return err
+	}
+	if err := netNS.Do(func(nn ns.NetNS) error {
+		if err := bpf.AttachRedirector(ifaces...); err != nil {
+			return err
+		}
+		return err
+	}); err != nil {
+		return errors.Join(err, bpf.Cleanup())
+	}
+	return nil
 }
 
 func (bpf *BPF) AttachRedirector(ifaces ...string) error {
@@ -193,11 +264,7 @@ func (bpf *BPF) attachTCX(iface *net.Interface) error {
 }
 
 func (bpf *BPF) loadOrAttachTCXLink(iface *net.Interface, program *ebpf.Program, attach ebpf.AttachType) (link.Link, error) {
-	name := tcxIngressPinName
-	if attach == ebpf.AttachTCXEgress {
-		name = tcxEgressPinName
-	}
-	pinPath := filepath.Join(PinPath(bpf.pid), fmt.Sprintf("%s_%s", name, iface.Name))
+	pinPath := tcxLinkPath(bpf.pid, iface.Name, attach)
 	l, err := link.LoadPinnedLink(pinPath, nil)
 	if err == nil {
 		return l, nil
@@ -208,12 +275,20 @@ func (bpf *BPF) loadOrAttachTCXLink(iface *net.Interface, program *ebpf.Program,
 		Attach:    attach,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("could not attach TCX %s: %w", name, err)
+		return nil, fmt.Errorf("could not attach TCX %s: %w", pinPath, err)
 	}
 	if bpf.noPin {
 		return l, nil
 	}
 	return l, l.Pin(pinPath)
+}
+
+func tcxLinkPath(pid int, ifaceName string, attach ebpf.AttachType) string {
+	name := tcxIngressPinName
+	if attach == ebpf.AttachTCXEgress {
+		name = tcxEgressPinName
+	}
+	return filepath.Join(PinPath(pid), fmt.Sprintf("%s_%s", name, ifaceName))
 }
 
 func (bpf *BPF) attachQdisc(iface *net.Interface) error {

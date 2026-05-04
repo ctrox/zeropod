@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -74,7 +75,15 @@ func parsePidFromNetNS(nn ns.NetNS) int {
 	return pid
 }
 
-var ErrMapNotFound = errors.New("bpf map could not be found")
+const (
+	IfaceETH0     = "eth0"
+	IfaceLoopback = "lo"
+)
+
+var (
+	ErrMapNotFound = errors.New("bpf map could not be found")
+	DefaultIfaces  = []string{IfaceLoopback, IfaceETH0}
+)
 
 func (s *Server) Start(ctx context.Context, connHook ConnHook, restoreHook RestoreHook, ports ...uint16) error {
 	s.connHook = connHook
@@ -104,6 +113,17 @@ func (s *Server) Start(ctx context.Context, connHook ConnHook, restoreHook Resto
 	}
 
 	s.started = true
+	return nil
+}
+
+const AttachActivatorFlag = "-zeropod-attach-activator"
+
+// AttachExec attaches the activator using exec on itself.
+func (s *Server) AttachExec() error {
+	out, err := exec.Command(os.Args[0], AttachActivatorFlag, strconv.Itoa(s.sandboxPid)).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("executing external attach: %s: %s", err, out)
+	}
 	return nil
 }
 
@@ -463,6 +483,10 @@ func (s *Server) initActivityTracker() error {
 		}
 	}
 	return nil
+}
+
+func netNSPath(pid int) string {
+	return fmt.Sprintf("/proc/%d/ns/net", pid)
 }
 
 // convertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
