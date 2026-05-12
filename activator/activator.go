@@ -339,6 +339,9 @@ func (s *Server) connect(ctx context.Context, port uint16, remoteAddr *net.TCPAd
 		}
 		targetAddr.Port = int(port)
 		backendAddr = targetAddr
+		// if we dial a remote target we want a smaller timeout as we might run
+		// into an io timeout instead of connection refused
+		dialer.Timeout = time.Millisecond * 10
 		log.G(ctx).Infof("connecting to target address %s", backendAddr.String())
 	} else {
 		// use v4/v6 local and backend addr depending on remoteAddr type
@@ -369,6 +372,11 @@ func (s *Server) connect(ctx context.Context, port uint16, remoteAddr *net.TCPAd
 				var serr syscall.Errno
 				if errors.As(err, &serr) && serr == syscall.ECONNREFUSED {
 					// executed program might not be ready yet, so retry in a bit.
+					continue
+				}
+				var operr *net.OpError
+				if errors.As(err, &operr) && operr.Temporary() {
+					log.G(ctx).Errorf("temporary operr: %s", operr)
 					continue
 				}
 				return nil, fmt.Errorf("unable to connect to process: %s", err)

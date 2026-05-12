@@ -19,6 +19,7 @@ import (
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager"
+	"github.com/ctrox/zeropod/manager/capacity"
 	"github.com/ctrox/zeropod/manager/node"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -49,6 +50,7 @@ var (
 	migrationServersTimeout = flag.Duration("migration-servers-timeout", time.Second*10, "how long to wait for migration servers")
 	migrationClaimTimeout   = flag.Duration("migration-claim-timeout", time.Second*10, "how long to wait for migration to be claimed")
 	migrationReadyTimeout   = flag.Duration("migration-ready-timeout", time.Minute*5, "how long to wait for migration to be ready")
+	evictionTimeout         = flag.Duration("eviction-timeout", time.Second*10, "how long to wait for eviction")
 	autoGCMigrations        = flag.Bool("auto-gc-migrations", true, "automatically garbage collect migrations when owning pod is deleted")
 
 	version   = ""
@@ -157,6 +159,7 @@ func main() {
 		}
 	}()
 
+	cap := capacity.NewNodeTracker()
 	nodeServer, err := node.NewServer(
 		*nodeServerAddr,
 		mgr.GetClient(),
@@ -166,7 +169,9 @@ func main() {
 			MigrationServers: *migrationServersTimeout,
 			MigrationClaim:   *migrationClaimTimeout,
 			MigrationReady:   *migrationReadyTimeout,
+			EvictionTimeout:  *evictionTimeout,
 		},
+		cap,
 	)
 	if err != nil {
 		log.Error("creating node server", "err", err)
@@ -179,6 +184,7 @@ func main() {
 		manager.AutoGCMigrations(*autoGCMigrations),
 		manager.RegisterPodLabeller(labeller),
 		manager.RegisterPodScaler(scaler),
+		manager.CapacityTracker(cap),
 	); err != nil {
 		log.Error("running pod controller", "error", err)
 	}
@@ -227,6 +233,11 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 				&corev1.Pod{}: cache.ByObject{
 					Field: fields.SelectorFromSet(fields.Set{
 						"spec.nodeName": nodeName,
+					}),
+				},
+				&corev1.Node{}: cache.ByObject{
+					Field: fields.SelectorFromSet(fields.Set{
+						"metadata.name": nodeName,
 					}),
 				},
 			},
