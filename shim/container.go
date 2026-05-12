@@ -7,6 +7,7 @@ import (
 	"os"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
@@ -49,6 +50,9 @@ type Container struct {
 	scaleDownTimer   *time.Timer
 	initTimer        *time.Timer
 	initBackoff      time.Duration
+	evacDrainStarted atomic.Bool
+	drainTimer       *time.Timer
+	drainStartTime   time.Time
 	platform         stdio.Platform
 	preRestore       func() HandleStartedFunc
 	postRestore      func(*runc.Container, HandleStartedFunc)
@@ -326,6 +330,16 @@ func (c *Container) Stop(ctx context.Context) {
 	_ = c.netNS.Close()
 }
 
+func (c *Container) ExitOK(ctx context.Context) {
+	if c.drainTimer != nil {
+		c.drainTimer.Stop()
+		c.drainTimer = nil
+	}
+	c.Process().SetExited(0)
+	c.InitialProcess().SetExited(0)
+	c.Stop(ctx)
+}
+
 func (c *Container) cleanupImage(ctx context.Context) {
 	// with migration, the shim might exit before the image data has been
 	// transferred to the new node. The cleanup is the responsibility of the
@@ -354,6 +368,10 @@ func (c *Container) RegisterPreRestore(f func() HandleStartedFunc) {
 
 func (c *Container) RegisterPostRestore(f func(*runc.Container, HandleStartedFunc)) {
 	c.postRestore = f
+}
+
+func (c *Container) EvacDrainStarted() bool {
+	return c.evacDrainStarted.Load()
 }
 
 func (c *Container) initActivator(ctx context.Context, enableRedirects bool) error {
@@ -407,7 +425,7 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 // initRetry returns the duration in which the next init should be retried. It
 // backs off exponentially with an initial wait of 100 milliseconds.
 func (c *Container) initRetry() time.Duration {
-	const initial, max = time.Millisecond * 100, time.Minute * 5
+	const initial, max = time.Millisecond * 10, time.Minute * 5
 	c.initBackoff = min(max, c.initBackoff*2)
 
 	if c.initBackoff == 0 {
@@ -463,6 +481,10 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 		if err != nil {
 			if errors.Is(err, ErrAlreadyRestored) {
 				log.G(ctx).Info("container is already restored, ignoring request")
+				return nil
+			}
+			if errors.Is(err, ErrNoCapacity) {
+				log.G(ctx).Info("no capacity to restore, requests are being forwarded")
 				return nil
 			}
 			// restore failed, this is currently unrecoverable, so we set the

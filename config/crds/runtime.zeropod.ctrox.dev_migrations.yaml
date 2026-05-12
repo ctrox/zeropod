@@ -124,6 +124,9 @@ spec:
               targetPod:
                 description: TargetPod of the migration
                 type: string
+              targetPodIP:
+                description: TargetPodIP of the migration
+                type: string
             required:
             - containers
             - podTemplateHash

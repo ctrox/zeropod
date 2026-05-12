@@ -44,7 +44,7 @@ func (ps *PodScaler) reconcileContainerResources(ctx context.Context, pod *corev
 	clog := ps.log.With("container", name, "pod", pod.Name,
 		"namespace", pod.Namespace, "phase", phase)
 
-	if err := ps.setAnnotations(pod); err != nil {
+	if err := SetAnnotations(pod); err != nil {
 		return err
 	}
 
@@ -60,7 +60,7 @@ func (ps *PodScaler) reconcileContainerResources(ctx context.Context, pod *corev
 			continue
 		}
 
-		initial, err := ps.initialRequests(container, pod.Annotations)
+		initial, err := InitialRequests(container, pod.Annotations)
 		if err != nil {
 			return fmt.Errorf("getting initial requests from pod failed: %w", err)
 		}
@@ -109,7 +109,7 @@ func (ps *PodScaler) newRequests(initial, current corev1.ResourceList, phase v1.
 	}
 }
 
-func (ps *PodScaler) initialRequests(container corev1.Container, podAnnotations map[string]string) (corev1.ResourceList, error) {
+func InitialRequests(container corev1.Container, podAnnotations map[string]string) (corev1.ResourceList, error) {
 	initial := container.DeepCopy().Resources.Requests
 	containerCPUs := containerResource{}
 	if cpuReq, ok := podAnnotations[CPUAnnotationKey]; ok {
@@ -136,7 +136,7 @@ func (ps *PodScaler) initialRequests(container corev1.Container, podAnnotations 
 	return initial, nil
 }
 
-func (ps *PodScaler) setAnnotations(pod *corev1.Pod) error {
+func SetAnnotations(pod *corev1.Pod) error {
 	containerCPUs := containerResource{}
 	containerMemory := containerResource{}
 	for _, container := range pod.Spec.Containers {

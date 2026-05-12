@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"time"
@@ -20,6 +21,8 @@ import (
 	"github.com/containerd/containerd/v2/pkg/stdio"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+	"github.com/containernetworking/plugins/pkg/ns"
+	"github.com/ctrox/zeropod/activator"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	crio "github.com/ctrox/zeropod/shim/io"
@@ -29,6 +32,7 @@ import (
 
 var (
 	ErrAlreadyRestored      = errors.New("container is already restored")
+	ErrNoCapacity           = errors.New("no capacity to restore")
 	ErrRestoreRequestFailed = errors.New("restore request failed")
 	ErrRestoreDial          = errors.New("failed to connect to node socket")
 	ErrInvalidCheckpoint    = errors.New("checkpoint data invalid")
@@ -43,6 +47,16 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 	defer c.CheckpointRestore.Unlock()
 	if !c.ScaledDown() {
 		return nil, nil, ErrAlreadyRestored
+	}
+	resp, err := c.restoreCapacityRequest(ctx)
+	if err != nil {
+		// log the error but continue with restoring
+		log.G(ctx).WithError(err).Error("requesting restore capacity")
+	} else if !resp.Allowed {
+		if resp.RedirectAddr != "" {
+			c.activator.ForwardToTarget(resp.RedirectAddr)
+		}
+		return nil, nil, ErrNoCapacity
 	}
 	cont, p, err := c.restore(ctx)
 	if err != nil && !c.cfg.DisableCheckpointing {
@@ -215,12 +229,21 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Co
 	}
 	log.G(ctx).Infof("creating restore request for container: %s", cfg.ContainerName)
 
+	podIP := ""
+	sandboxIP, err := getSandboxIP(cfg)
+	if err != nil {
+		log.G(ctx).Warnf("getting sandbox IP failed: %s, connections won't be forwarded during migration", err)
+	} else {
+		podIP = sandboxIP.String()
+	}
+
 	restoreReq := &nodev1.RestoreRequest{
 		MigrationInfo: &nodev1.MigrationInfo{ImageId: r.ID},
 		PodInfo: &nodev1.PodInfo{
 			Name:          cfg.PodName,
 			Namespace:     cfg.PodNamespace,
 			ContainerName: cfg.ContainerName,
+			Ip:            podIP,
 		},
 	}
 	nodeClient := nodev1.NewNodeClient(ttrpc.NewClient(conn))
@@ -330,4 +353,26 @@ func FinishRestore(ctx context.Context, id string, cfg *v1.Config, startTime tim
 func validateCheckpointData(snapshotPath string) error {
 	_, err := os.Stat(filepath.Join(snapshotPath, "descriptors.json"))
 	return err
+}
+
+func getSandboxIP(cfg *v1.Config) (*netip.Addr, error) {
+	netNSPath, err := GetNetworkNS(cfg.Spec)
+	if err != nil {
+		return nil, err
+	}
+	targetNS, err := ns.GetNS(netNSPath)
+	if err != nil {
+		return nil, err
+	}
+	var sandboxIPs []netip.Addr
+	if err := targetNS.Do(func(nn ns.NetNS) error {
+		sandboxIPs, err = activator.GetSandboxIPs("eth0")
+		return err
+	}); err != nil {
+		return nil, err
+	}
+	if len(sandboxIPs) == 0 {
+		return nil, fmt.Errorf("sandbox IP not found")
+	}
+	return &sandboxIPs[0], nil
 }

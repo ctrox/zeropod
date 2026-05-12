@@ -281,3 +281,14 @@ func (cfg Config) LiveMigrationEnabled() bool {
 func (cfg Config) AnyMigrationEnabled() bool {
 	return cfg.migrationEnabled() || cfg.LiveMigrationEnabled()
 }
+
+func AnyMigrationEnabled(annotations map[string]string) bool {
+	_, migrate := annotations[MigrateAnnotationKey]
+	_, liveMigrate := annotations[LiveMigrateAnnotationKey]
+	return migrate || liveMigrate
+}
+
+func LiveMigrationEnabled(annotations map[string]string) bool {
+	_, ok := annotations[LiveMigrateAnnotationKey]
+	return ok
+}
