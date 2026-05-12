@@ -173,6 +173,7 @@ func TestActivator(t *testing.T) {
 				// disable pinning for this test since this is flaky on some
 				// systems (gh actions mostly)
 				DisablePinning(),
+				ShimManaged(),
 			)
 			require.NoError(t, err)
 			require.NoError(t, bpf.AttachRedirector("lo"))

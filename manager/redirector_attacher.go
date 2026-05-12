@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/containernetworking/plugins/pkg/ns"
@@ -64,6 +65,11 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...a
 			continue
 		}
 
+		if activator.ManagedByShim(pid) {
+			r.log.Debug("skipping shim managed attach", "pid", pid)
+			continue
+		}
+
 		if activator.TCXPinned(pid) {
 			r.log.Debug("skipping already pinned attach", "pid", pid)
 			continue
@@ -98,6 +104,11 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 			pid, err := strconv.Atoi(filepath.Base(event.Name))
 			if err != nil {
 				r.log.Warn("unable to parse pid from added name", "name", filepath.Base(event.Name))
+				continue
+			}
+
+			if activator.ManagedByShim(pid) {
+				r.log.Debug("skipping shim managed attach", "pid", pid)
 				continue
 			}
 
@@ -212,7 +223,8 @@ func (r *Redirector) getSandboxPids() ([]int, error) {
 func ignoredDir(dir string) bool {
 	return dir == activator.SocketTrackerMap ||
 		dir == activator.PodKubeletAddrsMapv4 ||
-		dir == activator.PodKubeletAddrsMapv6
+		dir == activator.PodKubeletAddrsMapv6 ||
+		strings.HasSuffix(dir, activator.ManagedByShimSuffix)
 }
 
 func (sb sandbox) Remove() error {

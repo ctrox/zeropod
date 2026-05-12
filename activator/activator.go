@@ -55,9 +55,6 @@ func NewServer(ctx context.Context, nn ns.NetNS) (*Server, error) {
 		ns:             nn,
 		sandboxPid:     parsePidFromNetNS(nn),
 	}
-	if err := os.MkdirAll(PinPath(s.sandboxPid), os.ModePerm); err != nil {
-		return nil, err
-	}
 	return s, nil
 }
 
@@ -211,7 +208,9 @@ func (s *Server) Stop(ctx context.Context) {
 	}
 
 	log.G(ctx).Debugf("removing %s", PinPath(s.sandboxPid))
-	_ = os.RemoveAll(PinPath(s.sandboxPid))
+	if err := cleanPinPath(s.sandboxPid); err != nil {
+		log.G(ctx).WithError(err).Error("cleaning pin path")
+	}
 
 	s.wg.Wait()
 	log.G(ctx).Debug("activator stopped")

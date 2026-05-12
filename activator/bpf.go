@@ -33,6 +33,7 @@ const (
 	taskCommOffsetVariable         = "task_comm_offset"
 	tcxIngressPinName              = "tcx_ingress"
 	tcxEgressPinName               = "tcx_egress"
+	ManagedByShimSuffix            = "_managed_by_shim"
 )
 
 type BPF struct {
@@ -50,6 +51,7 @@ type BPFConfig struct {
 	probeBinaryName        string
 	trackerIgnoreLocalhost bool
 	disablePinning         bool
+	managedByShim          bool
 }
 
 type BPFOpts func(cfg *BPFConfig)
@@ -78,6 +80,12 @@ func DisablePinning() BPFOpts {
 	}
 }
 
+func ShimManaged() BPFOpts {
+	return func(cfg *BPFConfig) {
+		cfg.managedByShim = true
+	}
+}
+
 func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 	cfg := &BPFConfig{
 		mapSizes: map[string]uint32{
@@ -94,8 +102,13 @@ func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 
 	// as a single shim process can host multiple pods, we store the map in a
 	// directory per sandbox pid.
-	path := PinPath(pid)
-	if err := os.MkdirAll(path, os.ModePerm); err != nil {
+	pinPath := PinPath(pid)
+	if cfg.managedByShim {
+		if err := os.MkdirAll(pinPath+ManagedByShimSuffix, os.ModePerm); err != nil {
+			return nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
+		}
+	}
+	if err := os.MkdirAll(pinPath, os.ModePerm); err != nil {
 		return nil, fmt.Errorf("failed to create bpf fs subpath: %w", err)
 	}
 
@@ -137,13 +150,21 @@ func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 	objs := bpfObjects{}
 	if err := spec.LoadAndAssign(&objs, &ebpf.CollectionOptions{
 		Maps: ebpf.MapOptions{
-			PinPath: path,
+			PinPath: pinPath,
 		},
 	}); err != nil {
 		return nil, fmt.Errorf("loading objects: %w", err)
 	}
 
 	return &BPF{pid: pid, log: log, objs: &objs, noPin: cfg.disablePinning}, nil
+}
+
+// ManagedByShim returns true if loading/pinning is managed by the shim itself.
+func ManagedByShim(pid int) bool {
+	if _, err := os.Stat(PinPath(pid) + ManagedByShimSuffix); err == nil {
+		return true
+	}
+	return false
 }
 
 // TCXPinned returns true if all TCX programs for the pid are pinned.
@@ -193,8 +214,10 @@ func (bpf *BPF) Cleanup() error {
 			errs = append(errs, fmt.Errorf("closing link: %w", err))
 		}
 	}
-	if err := bpf.objs.Close(); err != nil {
-		errs = append(errs, fmt.Errorf("unable to close bpf objects: %w", err))
+	if bpf.objs != nil {
+		if err := bpf.objs.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("unable to close bpf objects: %w", err))
+		}
 	}
 	for _, qdisc := range bpf.qdiscs {
 		if err := netlink.QdiscDel(qdisc); !os.IsNotExist(err) {
@@ -208,8 +231,15 @@ func (bpf *BPF) Cleanup() error {
 	}
 
 	bpf.log.Info("deleting", "path", PinPath(bpf.pid))
-	errs = append(errs, os.RemoveAll(PinPath(bpf.pid)))
+	errs = append(errs, cleanPinPath(bpf.pid))
 	return errors.Join(errs...)
+}
+
+func cleanPinPath(pid int) error {
+	return errors.Join(
+		os.RemoveAll(PinPath(pid)),
+		os.RemoveAll(PinPath(pid)+ManagedByShimSuffix),
+	)
 }
 
 func (bpf *BPF) AttachInNetNS(pid int, ifaces ...string) error {

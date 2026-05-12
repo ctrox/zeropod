@@ -87,6 +87,7 @@ func attachActivator() bool {
 		pid, log,
 		activator.ProbeBinaryName(cfg.ProbeBinaryName),
 		activator.TrackerIgnoreLocalhost(cfg.TrackerIgnoreLocalhost),
+		activator.ShimManaged(),
 	)
 	if err != nil {
 		log.Error("unable to initialize BPF", "error", err)
