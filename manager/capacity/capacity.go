@@ -1,3 +1,4 @@
+// Package capacity implements a tracker for node resource capacity.
 package capacity
 
 import (
@@ -5,6 +6,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -14,6 +17,14 @@ import (
 const (
 	TaintKey         = "zeropod.ctrox.dev/at-capacity"
 	MinTaintDuration = time.Minute
+
+	metricsNamespace    = "zeropod"
+	MetricNodeCapacity  = "node_capacity"
+	MetricNodeRequested = "node_requested"
+	MetricNodeEvictions = "node_evictions"
+
+	labelNode     = "node"
+	labelResource = "resource"
 )
 
 type Tracker interface {
@@ -21,12 +32,21 @@ type Tracker interface {
 	Requested(name corev1.ResourceName) resource.Quantity
 	SetCapacity(name corev1.ResourceName, q resource.Quantity)
 	SetRequested(name corev1.ResourceName, q resource.Quantity)
+	IncEvicted()
 }
 
 type NodeTracker struct {
+	name      string
 	capacity  corev1.ResourceList
 	requested corev1.ResourceList
 	mu        sync.RWMutex
+	metrics   metrics
+}
+
+type metrics struct {
+	capacity  *prometheus.GaugeVec
+	requested *prometheus.GaugeVec
+	evicted   *prometheus.CounterVec
 }
 
 // Capacity returns the node capacity for the [corev1.ResourceName].
@@ -47,6 +67,7 @@ func (c *NodeTracker) Requested(name corev1.ResourceName) resource.Quantity {
 func (c *NodeTracker) SetCapacity(name corev1.ResourceName, q resource.Quantity) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.metrics.capacity.With(c.metricLabels(name.String())).Set(q.AsApproximateFloat64())
 	c.capacity[name] = q
 }
 
@@ -54,15 +75,42 @@ func (c *NodeTracker) SetCapacity(name corev1.ResourceName, q resource.Quantity)
 func (c *NodeTracker) SetRequested(name corev1.ResourceName, q resource.Quantity) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	c.metrics.requested.With(c.metricLabels(name.String())).Set(q.AsApproximateFloat64())
 	c.requested[name] = q
 }
 
+func (c *NodeTracker) IncEvicted() {
+	c.metrics.evicted.With(prometheus.Labels{labelNode: c.name}).Inc()
+}
+
+func (c *NodeTracker) metricLabels(resource string) prometheus.Labels {
+	return prometheus.Labels{labelNode: c.name, labelResource: resource}
+}
+
 // NewNodeTracker creates a [NodeTracker].
-func NewNodeTracker() Tracker {
+func NewNodeTracker(reg prometheus.Registerer, name string) Tracker {
 	return &NodeTracker{
+		name:      name,
 		capacity:  corev1.ResourceList{},
 		requested: corev1.ResourceList{},
 		mu:        sync.RWMutex{},
+		metrics: metrics{
+			capacity: promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: metricsNamespace,
+				Name:      MetricNodeCapacity,
+				Help:      "Node resource capacity.",
+			}, []string{labelNode, labelResource}),
+			requested: promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
+				Namespace: metricsNamespace,
+				Name:      MetricNodeRequested,
+				Help:      "Node resources requested.",
+			}, []string{labelNode, labelResource}),
+			evicted: promauto.With(reg).NewCounterVec(prometheus.CounterOpts{
+				Namespace: metricsNamespace,
+				Name:      MetricNodeEvictions,
+				Help:      "Counts node capacity evictions.",
+			}, []string{labelNode}),
+		},
 	}
 }
 

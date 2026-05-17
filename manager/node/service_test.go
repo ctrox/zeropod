@@ -8,6 +8,7 @@ import (
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager"
 	"github.com/ctrox/zeropod/manager/capacity"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -128,7 +129,7 @@ func TestRestoreCapacity(t *testing.T) {
 				objs = append(objs, tc.migration)
 			}
 			kube := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
-			cap := capacity.NewNodeTracker()
+			cap := capacity.NewNodeTracker(prometheus.NewRegistry(), "name")
 			for name, q := range tc.node.Status.Capacity {
 				cap.SetCapacity(name, q)
 			}

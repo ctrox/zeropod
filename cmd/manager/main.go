@@ -108,7 +108,11 @@ func main() {
 		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
 	}
 
-	mgr, err := newControllerManager()
+	nodeName, ok := os.LookupEnv(nodev1.NodeNameEnvKey)
+	if !ok {
+		log.Error("could not find node name, env is not set", "env", nodev1.NodeNameEnvKey)
+	}
+	mgr, err := newControllerManager(nodeName)
 	if err != nil {
 		log.Error("creating controller manager", "err", err)
 		os.Exit(1)
@@ -159,7 +163,7 @@ func main() {
 		}
 	}()
 
-	cap := capacity.NewNodeTracker()
+	cap := capacity.NewNodeTracker(registry, nodeName)
 	nodeServer, err := node.NewServer(
 		*nodeServerAddr,
 		mgr.GetClient(),
@@ -206,7 +210,7 @@ func main() {
 	}
 }
 
-func newControllerManager() (ctrlmanager.Manager, error) {
+func newControllerManager(nodeName string) (ctrlmanager.Manager, error) {
 	cfg, err := config.GetConfig()
 	if err != nil {
 		return nil, fmt.Errorf("getting client config: %w", err)
@@ -217,10 +221,6 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 	}
 	if err := v1.AddToScheme(scheme); err != nil {
 		return nil, err
-	}
-	nodeName, ok := os.LookupEnv(nodev1.NodeNameEnvKey)
-	if !ok {
-		return nil, fmt.Errorf("could not find node name, env %s is not set", nodev1.NodeNameEnvKey)
 	}
 	mgr, err := ctrlmanager.New(cfg, ctrlmanager.Options{
 		Scheme: scheme, Metrics: server.Options{BindAddress: "0"},

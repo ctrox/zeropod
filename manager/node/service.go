@@ -281,6 +281,7 @@ func (ns *nodeService) evictPod(ctx context.Context, req *nodev1.RestoreCapacity
 		log.Error("waiting for target pod failed", "name", migration.Name, "error", err)
 		return nil, err
 	}
+	ns.cap.IncEvicted()
 	return &nodev1.RestoreCapacityResponse{
 		Allowed:      false,
 		RedirectAddr: migration.Spec.TargetPodIP,
