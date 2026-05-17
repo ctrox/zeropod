@@ -3,6 +3,7 @@ package capacity
 import (
 	"testing"
 
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -11,7 +12,7 @@ import (
 )
 
 func TestNodeTracker(t *testing.T) {
-	tracker := NewNodeTracker()
+	tracker := NewNodeTracker(prometheus.NewRegistry(), "name")
 	assert.Empty(t, tracker.Capacity(corev1.ResourceCPU))
 	assert.Empty(t, tracker.Capacity(corev1.ResourceMemory))
 	assert.Empty(t, tracker.Requested(corev1.ResourceCPU))

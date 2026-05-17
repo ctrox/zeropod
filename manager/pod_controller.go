@@ -108,7 +108,7 @@ func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, err
 		log:      log,
 		kube:     kube,
 		nodeName: nodeName,
-		cap:      capacity.NewNodeTracker(),
+		cap:      capacity.NewNoopTracker(),
 	}, nil
 }
 
