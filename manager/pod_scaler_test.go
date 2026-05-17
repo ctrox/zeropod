@@ -167,7 +167,7 @@ func TestHandlePod(t *testing.T) {
 			}
 
 			initialPod := newPod(resourceList)
-			ps.setAnnotations(initialPod)
+			SetAnnotations(initialPod)
 			pod := newPod(tc.beforeEvent)
 			pod.SetAnnotations(initialPod.GetAnnotations())
 

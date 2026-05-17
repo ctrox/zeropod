@@ -21,7 +21,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-const evacTimeout = time.Second * 10
+const (
+	evacTimeout        = time.Second * 10
+	drainTimeout       = time.Minute
+	drainCheckInterval = time.Second
+)
 
 func (c *Container) MigrationEnabled() bool {
 	return c.cfg.AnyMigrationEnabled()
@@ -31,6 +35,11 @@ func (c *Container) Evac(ctx context.Context, scaledDown bool) error {
 	var err error
 	c.evacuation.Do(func() {
 		if scaledDown {
+			defer func() {
+				log.G(ctx).Info("migration done, starting drain")
+				c.startConnectionDrain()
+				c.evacDrainStarted.Store(true)
+			}()
 			err = c.evacScaledDown(ctx)
 			return
 		}
@@ -296,4 +305,39 @@ func findUpperDir(containerID string) (string, error) {
 	}
 
 	return "", fmt.Errorf("upper dir not found for container %s", containerID)
+}
+
+func (c *Container) startConnectionDrain() {
+	c.drainStartTime = time.Now()
+	c.checkConnectionDrainIn(drainCheckInterval, drainTimeout)
+}
+
+func (c *Container) checkConnectionDrainIn(in time.Duration, timeout time.Duration) {
+	if c.drainTimer != nil {
+		c.drainTimer.Stop()
+	}
+	c.drainTimer = time.AfterFunc(in, func() {
+		if time.Now().After(c.drainStartTime.Add(timeout)) {
+			log.G(c.context).Info("drain timed out")
+			c.ExitOK(c.context)
+			return
+		}
+		var last time.Time
+		var err error
+		for _, port := range c.cfg.Ports {
+			last, err = c.activator.LastActivity(port)
+			if err != nil {
+				log.G(c.context).Warnf("error checking for activity during drain: %s", err)
+				c.ExitOK(c.context)
+				return
+			}
+			if time.Since(last) < drainCheckInterval {
+				log.G(c.context).Infof("last activity was %s ago, waiting for drain to complete", time.Since(last))
+				c.checkConnectionDrainIn(in, timeout)
+				return
+			}
+		}
+		log.G(c.context).Infof("no activity detected in %s, completed drain", drainCheckInterval)
+		c.ExitOK(c.context)
+	})
 }

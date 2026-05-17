@@ -41,6 +41,9 @@ type MigrationSpec struct {
 	// TargetPod of the migration
 	// +optional
 	TargetPod string `json:"targetPod,omitempty"`
+	// TargetPodIP of the migration
+	// +optional
+	TargetPodIP string `json:"targetPodIP,omitempty"`
 	// PodTemplateHash of the source pod. This is used to find a suitable target
 	// pod.
 	PodTemplateHash string `json:"podTemplateHash"`

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -27,27 +28,37 @@ import (
 )
 
 type Server struct {
-	listeners      []net.Listener
-	ports          []uint16
-	quit           chan any
-	wg             sync.WaitGroup
-	connHook       ConnHook
-	restoreHook    RestoreHook
-	connectTimeout time.Duration
-	proxyTimeout   time.Duration
-	proxyCancel    context.CancelFunc
-	ns             ns.NetNS
-	maps           bpfMaps
-	sandboxPid     int
-	started        bool
-	peekBufferSize int
-	lastAddr       string
+	listeners       []net.Listener
+	ports           []uint16
+	quit            chan any
+	wg              sync.WaitGroup
+	connHook        ConnHook
+	restoreHook     RestoreHook
+	connectTimeout  time.Duration
+	proxyTimeout    time.Duration
+	proxyCancel     context.CancelFunc
+	ns              ns.NetNS
+	maps            bpfMaps
+	sandboxPid      int
+	started         bool
+	peekBufferSize  int
+	lastAddr        string
+	forwardToTarget bool
+	targetAddr      string
 }
 
 type ConnHook func(net.Conn) (conn net.Conn, cont bool, err error)
 type RestoreHook func() error
 
-func NewServer(ctx context.Context, nn ns.NetNS) (*Server, error) {
+type Option func(s *Server)
+
+func SetTargetAddr(addr string) Option {
+	return func(s *Server) {
+		s.targetAddr = addr
+	}
+}
+
+func NewServer(ctx context.Context, nn ns.NetNS, opts ...Option) (*Server, error) {
 	s := &Server{
 		quit:           make(chan any),
 		connectTimeout: time.Second * 5,
@@ -156,6 +167,16 @@ func (s *Server) SetConnectTimeout(d time.Duration) {
 
 func (s *Server) SetPeekBufferSize(size int) {
 	s.peekBufferSize = size
+}
+
+// ForwardToTarget instructs the activator to forward any incoming traffic to
+// the specified address. The connHook and restoreHook will both be disabled.
+func (s *Server) ForwardToTarget(addr string) {
+	// disable hooks
+	s.connHook = func(c net.Conn) (net.Conn, bool, error) { return c, true, nil }
+	s.restoreHook = func() error { return nil }
+	s.targetAddr = addr
+	s.forwardToTarget = true
 }
 
 func (s *Server) listen(ctx context.Context, port uint16) (int, error) {
@@ -307,16 +328,29 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 
 func (s *Server) connect(ctx context.Context, port uint16, remoteAddr *net.TCPAddr) (net.Conn, error) {
 	var backendConn net.Conn
-	// use v4/v6 local and backend addr depending on remoteAddr type
-	addr := loopbackV4(0)
 	backendAddr := loopbackV4(port)
-	if remoteAddr.IP.To4() == nil {
-		addr = loopbackV6(0)
-		backendAddr = loopbackV6(port)
-	}
 	dialer := net.Dialer{
-		LocalAddr: addr,
-		Timeout:   s.connectTimeout,
+		Timeout: s.connectTimeout,
+	}
+	if s.forwardToTarget {
+		targetAddr, err := net.ResolveTCPAddr("tcp", s.targetAddr+":0")
+		if err != nil {
+			return nil, fmt.Errorf("parsing target addr: %w", err)
+		}
+		targetAddr.Port = int(port)
+		backendAddr = targetAddr
+		// if we dial a remote target we want a smaller timeout as we might run
+		// into an io timeout instead of connection refused
+		dialer.Timeout = time.Millisecond * 10
+		log.G(ctx).Infof("connecting to target address %s", backendAddr.String())
+	} else {
+		// use v4/v6 local and backend addr depending on remoteAddr type
+		addr := loopbackV4(0)
+		if remoteAddr.IP.To4() == nil {
+			addr = loopbackV6(0)
+			backendAddr = loopbackV6(port)
+		}
+		dialer.LocalAddr = addr
 	}
 
 	ticker := time.NewTicker(time.Millisecond)
@@ -338,6 +372,11 @@ func (s *Server) connect(ctx context.Context, port uint16, remoteAddr *net.TCPAd
 				var serr syscall.Errno
 				if errors.As(err, &serr) && serr == syscall.ECONNREFUSED {
 					// executed program might not be ready yet, so retry in a bit.
+					continue
+				}
+				var operr *net.OpError
+				if errors.As(err, &operr) && operr.Temporary() {
+					log.G(ctx).Errorf("temporary operr: %s", operr)
 					continue
 				}
 				return nil, fmt.Errorf("unable to connect to process: %s", err)
@@ -587,4 +626,34 @@ func freePort() (int, error) {
 	}
 
 	return addr.Port, nil
+}
+
+func GetSandboxIPs(ifaceName string) ([]netip.Addr, error) {
+	ips := []netip.Addr{}
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return ips, fmt.Errorf("could not get interface: %w", err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ips, fmt.Errorf("could not get interface addrs: %w", err)
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok {
+			// no need to track link local addresses
+			if ipnet.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			ip, ok := netip.AddrFromSlice(ipnet.IP)
+			if !ok {
+				return ips, fmt.Errorf("unable to convert net.IP to netip.Addr: %s", ipnet.IP)
+			}
+			// use Unmap as the ipv4 might be mapped in v6
+			ips = append(ips, ip.Unmap())
+		}
+	}
+	if len(ips) == 0 {
+		return ips, fmt.Errorf("sandbox IPs not found")
+	}
+	return ips, nil
 }
