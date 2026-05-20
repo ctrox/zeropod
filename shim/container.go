@@ -444,7 +444,6 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 		log.G(ctx).WithError(err).Error("failed to attach activator")
 		return err
 	}
-	log.G(ctx).Infof("attached %s", time.Now().Format(time.RFC3339Nano))
 	if err := c.activator.Start(c.context, c.detectProbe(c.context), c.restoreHandler(c.context), ports...); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
