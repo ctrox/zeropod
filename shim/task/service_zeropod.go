@@ -24,6 +24,7 @@ import (
 	"github.com/containerd/ttrpc"
 
 	"github.com/containerd/typeurl/v2"
+	"github.com/ctrox/zeropod/activator"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	zshim "github.com/ctrox/zeropod/shim"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -296,6 +297,9 @@ func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 	log.G(ctx).Info("delete called")
 	zeropodContainer, ok := w.getZeropodContainer(r.ID)
 	if !ok {
+		if err := w.cleanSandboxPin(ctx, r); err != nil {
+			log.G(ctx).WithError(err).Error("cleaning up sandbox pin")
+		}
 		return w.service.Delete(ctx, r)
 	}
 	log.G(ctx).Infof("delete called in zeropod: %s", zeropodContainer.ID())
@@ -464,4 +468,30 @@ func (w *wrapper) postRestore(container *runc.Container, handleStarted zshim.Han
 	if handleStarted != nil {
 		handleStarted(container, p)
 	}
+}
+
+// cleanSandboxPin cleanes the eBPF pin path of the sandbox container.
+func (w *wrapper) cleanSandboxPin(ctx context.Context, r *taskAPI.DeleteRequest) error {
+	if r.ExecID != "" {
+		return nil
+	}
+	container, err := w.getContainer(r.ID)
+	if err != nil {
+		return err
+	}
+	spec, err := zshim.GetSpec(container.Bundle)
+	if err != nil {
+		return err
+	}
+	cfg, err := v1.NewConfig(ctx, spec)
+	if err != nil {
+		return err
+	}
+	if cfg.ContainerType != containerTypeSandbox {
+		return nil
+	}
+	if err := activator.CleanPinPath(container.Pid()); err != nil {
+		return err
+	}
+	return nil
 }

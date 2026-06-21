@@ -207,11 +207,6 @@ func (s *Server) Stop(ctx context.Context) {
 		log.G(ctx).WithError(err).Error("closing bpf maps")
 	}
 
-	log.G(ctx).Debugf("removing %s", PinPath(s.sandboxPid))
-	if err := cleanPinPath(s.sandboxPid); err != nil {
-		log.G(ctx).WithError(err).Error("cleaning pin path")
-	}
-
 	s.wg.Wait()
 	log.G(ctx).Debug("activator stopped")
 }
