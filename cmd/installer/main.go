@@ -39,8 +39,9 @@ var (
 	uninstall              = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
 	installTimeout         = flag.Duration("timeout", time.Minute, "duration the installer waits for the installation to complete")
 	versionFlag            = flag.Bool("version", false, "output version and exit")
-	probeBinaryName        = flag.String("probe-binary-name", v1.DefaultProbeBinaryName, "set the probe binary name for probe detection")
 	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", v1.DefaultTrackerIgnoreLocalhost, "set to ignore traffic from localhost in socket tracker")
+	//lint:ignore U1000 kept for compatibility
+	probeBinaryName = flag.String("probe-binary-name", v1.DefaultProbeBinaryName, "Deprecated: this is no longer used, flag will be removed in future release")
 
 	version   = ""
 	revision  = ""
@@ -231,7 +232,6 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 	}
 
 	b, err := json.MarshalIndent(&v1.Config{
-		ProbeBinaryName:        *probeBinaryName,
 		TrackerIgnoreLocalhost: *trackerIgnoreLocalhost,
 	}, "", "  ")
 	if err != nil {
