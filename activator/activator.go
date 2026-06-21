@@ -119,6 +119,9 @@ const AttachActivatorFlag = "-zeropod-attach-activator"
 func (s *Server) AttachExec() error {
 	out, err := exec.Command(os.Args[0], AttachActivatorFlag, strconv.Itoa(s.sandboxPid)).CombinedOutput()
 	if err != nil {
+		if strings.Contains(err.Error(), "no child processes") {
+			return nil
+		}
 		return fmt.Errorf("executing external attach: %s: %s", err, out)
 	}
 	return nil
