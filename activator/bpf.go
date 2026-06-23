@@ -231,11 +231,11 @@ func (bpf *BPF) Cleanup() error {
 	}
 
 	bpf.log.Info("deleting", "path", PinPath(bpf.pid))
-	errs = append(errs, cleanPinPath(bpf.pid))
+	errs = append(errs, CleanPinPath(bpf.pid))
 	return errors.Join(errs...)
 }
 
-func cleanPinPath(pid int) error {
+func CleanPinPath(pid int) error {
 	return errors.Join(
 		os.RemoveAll(PinPath(pid)),
 		os.RemoveAll(PinPath(pid)+ManagedByShimSuffix),
