@@ -18,7 +18,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/utils/ptr"
 )
 
 func TestE2E(t *testing.T) {
@@ -451,12 +450,12 @@ func TestE2E(t *testing.T) {
 		}{
 			"running": {
 				metric:     prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRunning),
-				gaugeValue: ptr.To(float64(1)),
+				gaugeValue: new(float64(1)),
 				pod:        runningPod,
 			},
 			"not running": {
 				metric:     prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRunning),
-				gaugeValue: ptr.To(float64(0)),
+				gaugeValue: new(float64(0)),
 				pod:        checkpointedPod,
 			},
 			"last checkpoint time": {
@@ -466,7 +465,7 @@ func TestE2E(t *testing.T) {
 			"checkpoint duration": {
 				metric:                  prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricCheckpointDuration),
 				pod:                     checkpointedPod,
-				minHistogramSampleCount: ptr.To(uint64(1)),
+				minHistogramSampleCount: new(uint64(1)),
 			},
 			"last restore time": {
 				metric: prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricLastRestoreTime),
@@ -475,17 +474,17 @@ func TestE2E(t *testing.T) {
 			"restore duration": {
 				metric:                  prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRestoreDuration),
 				pod:                     restoredPod,
-				minHistogramSampleCount: ptr.To(uint64(1)),
+				minHistogramSampleCount: new(uint64(1)),
 			},
 			"checkpoint errors": {
 				metric:       prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricCheckpointErrorsTotal),
 				pod:          restoredPod,
-				counterValue: ptr.To(float64(0)),
+				counterValue: new(float64(0)),
 			},
 			"restore errors": {
 				metric:       prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRestoreErrorsTotal),
 				pod:          restoredPod,
-				counterValue: ptr.To(float64(0)),
+				counterValue: new(float64(0)),
 			},
 		}
 

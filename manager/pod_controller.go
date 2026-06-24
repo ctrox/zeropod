@@ -144,8 +144,9 @@ func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request
 			return reconcile.Result{}, fmt.Errorf("preparing migration target: %w", err)
 		}
 		if requeue {
-			requeueAfter = time.Second
+			requeueAfter = time.Millisecond * 100
 		}
+		return reconcile.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	return reconcile.Result{RequeueAfter: requeueAfter}, nil

@@ -18,7 +18,6 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 )
 
 type testCase struct {
@@ -124,7 +123,7 @@ func TestActivator(t *testing.T) {
 			expectedCode:       http.StatusOK,
 			ipv6:               false,
 			expectLastActivity: false,
-			kubeletAddr:        ptr.To(netip.MustParseAddr("127.0.0.1")),
+			kubeletAddr:        new(netip.MustParseAddr("127.0.0.1")),
 		},
 		"ignore kubelet traffic ipv6": {
 			parallelReqs:       1,
@@ -132,7 +131,7 @@ func TestActivator(t *testing.T) {
 			expectedCode:       http.StatusOK,
 			ipv6:               true,
 			expectLastActivity: false,
-			kubeletAddr:        ptr.To(netip.MustParseAddr("::1")),
+			kubeletAddr:        new(netip.MustParseAddr("::1")),
 		},
 		"loop detection": {
 			parallelReqs:       1,

@@ -1,6 +1,6 @@
 ARG CRIU_IMAGE=ghcr.io/ctrox/zeropod-criu:v4.2
 
-FROM --platform=$BUILDPLATFORM golang:1.25 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 
 WORKDIR /workspace
 COPY go.mod go.mod
