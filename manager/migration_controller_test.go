@@ -35,7 +35,6 @@ func TestMigrationReconcilerCheckpointCleanup(t *testing.T) {
 		sourceNodeName            string
 		migration                 *v1.Migration
 		migrationStatus           *v1.MigrationStatus
-		expectedRequeue           bool
 		expectedFinalizer         bool
 		expectedCheckpointCleaned bool
 		delete                    bool
@@ -151,18 +150,17 @@ func TestMigrationReconcilerCheckpointCleanup(t *testing.T) {
 				tc.migration.Status = *tc.migrationStatus
 				require.NoError(t, kube.Status().Update(ctx, tc.migration))
 			}
-			res, err := r.Reconcile(ctx, reconcile.Request{
+			_, err := r.Reconcile(ctx, reconcile.Request{
 				NamespacedName: client.ObjectKeyFromObject(tc.migration),
 			})
 			assert.NoError(t, err)
-			assert.Equal(t, tc.expectedRequeue, res.Requeue)
 
 			require.NoError(t, kube.Get(ctx, client.ObjectKeyFromObject(tc.migration), tc.migration))
 			assert.Equal(t, tc.expectedFinalizer, controllerutil.ContainsFinalizer(tc.migration, checkpointCleanupFinalizer))
 
 			if tc.delete {
 				require.NoError(t, kube.Delete(ctx, tc.migration))
-				res, err = r.Reconcile(ctx, reconcile.Request{
+				_, err = r.Reconcile(ctx, reconcile.Request{
 					NamespacedName: client.ObjectKeyFromObject(tc.migration),
 				})
 				assert.NoError(t, err)

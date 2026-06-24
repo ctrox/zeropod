@@ -29,6 +29,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -48,7 +49,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
@@ -478,7 +478,7 @@ func testPod(opts ...podOption) *corev1.Pod {
 			Labels:       map[string]string{"app": "zeropod-e2e"},
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: ptr.To(v1.RuntimeClassName),
+			RuntimeClassName: new(v1.RuntimeClassName),
 		},
 	}
 
@@ -554,7 +554,7 @@ func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption)
 					"name": name,
 				},
 			},
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
@@ -563,7 +563,7 @@ func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption)
 					},
 				},
 				Spec: corev1.PodSpec{
-					RuntimeClassName: ptr.To(v1.RuntimeClassName),
+					RuntimeClassName: new(v1.RuntimeClassName),
 					Containers: []corev1.Container{{
 						Name:            "freezer",
 						Image:           "ghcr.io/ctrox/zeropod-freezer",
@@ -943,7 +943,7 @@ func getNodeMetrics(ctx context.Context, c client.Client, cfg *rest.Config) (map
 			return nil, err
 		}
 
-		var parser expfmt.TextParser
+		parser := expfmt.NewTextParser(model.UTF8Validation)
 		m, err := parser.TextToMetricFamilies(resp.Body)
 		if err != nil {
 			return nil, err

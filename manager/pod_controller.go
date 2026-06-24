@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"time"
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
@@ -126,7 +127,11 @@ func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("preparing migration target: %w", err)
 		}
-		return reconcile.Result{Requeue: requeue}, nil
+		requeueAfter := time.Duration(0)
+		if requeue {
+			requeueAfter = time.Millisecond * 100
+		}
+		return reconcile.Result{RequeueAfter: requeueAfter}, nil
 	}
 
 	return reconcile.Result{}, nil
