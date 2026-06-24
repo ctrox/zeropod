@@ -5,16 +5,16 @@ go 1.26.3
 require (
 	github.com/checkpoint-restore/go-criu/v7 v7.2.0
 	github.com/cilium/ebpf v0.21.0
-	github.com/containerd/cgroups/v3 v3.1.3
-	github.com/containerd/containerd/api v1.11.1
+	github.com/containerd/cgroups/v3 v3.1.2
+	github.com/containerd/containerd/api v1.10.0
 	github.com/containerd/containerd/v2 v2.2.5
 	github.com/containerd/errdefs v1.0.0
 	github.com/containerd/errdefs/pkg v0.3.0
 	github.com/containerd/fifo v1.1.0
 	github.com/containerd/go-runc v1.1.0
 	github.com/containerd/log v0.1.0
-	github.com/containerd/plugin v1.1.0
-	github.com/containerd/ttrpc v1.2.8
+	github.com/containerd/plugin v1.0.0
+	github.com/containerd/ttrpc v1.2.7
 	github.com/containerd/typeurl/v2 v2.2.3
 	github.com/containernetworking/plugins v1.9.1
 	github.com/coreos/go-systemd/v22 v22.7.0
