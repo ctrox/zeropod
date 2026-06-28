@@ -413,10 +413,19 @@ func (w *wrapper) processExits() {
 				preventExit = true
 			}
 		}
-		if !preventExit {
-			// pass event to service exit channel
-			w.service.ec <- e
+		if preventExit {
+			// cleanup running and exec maps
+			w.lifecycleMu.Lock()
+			delete(w.running, e.Pid)
+			for _, cp := range cps {
+				delete(w.execCountSubscribers, cp.Container)
+				delete(w.runningExecs, cp.Container)
+			}
+			w.lifecycleMu.Unlock()
+			continue
 		}
+		// pass event to service exit channel
+		w.service.ec <- e
 	}
 }
 
