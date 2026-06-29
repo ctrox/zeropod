@@ -1,53 +1,56 @@
 syntax = "proto3";
 
 package zeropod.node.v1;
-option go_package = "github.com/ctrox/zeropod/api/node/v1/;v1";
 
 import "google/protobuf/empty.proto";
 import "google/protobuf/timestamp.proto";
 
+option go_package = "github.com/ctrox/zeropod/api/node/v1/;v1";
+
 service Node {
-	rpc Evac(EvacRequest) returns (EvacResponse);
-	rpc PrepareEvac(EvacRequest) returns (EvacResponse);
-	rpc Restore(RestoreRequest) returns (RestoreResponse);
-	rpc FinishRestore(RestoreRequest) returns (RestoreResponse);
-    rpc NewCriuLazyPages(CriuLazyPagesRequest) returns (google.protobuf.Empty);
-    rpc PullImage(PullImageRequest) returns (stream Image);
+  rpc Evac(EvacRequest) returns (EvacResponse);
+  rpc PrepareEvac(EvacRequest) returns (EvacResponse);
+  rpc Restore(RestoreRequest) returns (RestoreResponse);
+  rpc FinishRestore(RestoreRequest) returns (RestoreResponse);
+  rpc NewCriuLazyPages(CriuLazyPagesRequest) returns (google.protobuf.Empty);
+  rpc PullImage(PullImageRequest) returns (stream Image);
+  rpc RestoreCapacity(RestoreCapacityRequest) returns (RestoreCapacityResponse);
 }
 
 message EvacRequest {
-    PodInfo pod_info = 1;
-    MigrationInfo migration_info = 2;
+  PodInfo pod_info = 1;
+  MigrationInfo migration_info = 2;
 }
 
 message EvacResponse {
-	google.protobuf.Empty empty = 1;
+  google.protobuf.Empty empty = 1;
 }
 
 message RestoreRequest {
-    PodInfo pod_info = 1;
-    MigrationInfo migration_info = 2;
+  PodInfo pod_info = 1;
+  MigrationInfo migration_info = 2;
 }
 
 message RestoreResponse {
-    MigrationInfo migration_info = 1;
+  MigrationInfo migration_info = 1;
 }
 
 message PodInfo {
-    string name = 1;
-    string namespace = 2;
-    string container_name = 3;
-    repeated int32 ports = 4;
+  string name = 1;
+  string namespace = 2;
+  string container_name = 3;
+  repeated int32 ports = 4;
+  string ip = 5;
 }
 
 message MigrationInfo {
-    string image_id = 1;
-    string bundle_dir = 2;
-    bool live_migration = 3;
-    google.protobuf.Timestamp paused_at = 4;
-    google.protobuf.Timestamp restore_start = 5;
-    google.protobuf.Timestamp restore_end = 6;
-    repeated int32 ports = 7;
+  string image_id = 1;
+  string bundle_dir = 2;
+  bool live_migration = 3;
+  google.protobuf.Timestamp paused_at = 4;
+  google.protobuf.Timestamp restore_start = 5;
+  google.protobuf.Timestamp restore_end = 6;
+  repeated int32 ports = 7;
 }
 
 message Image {
@@ -62,5 +65,14 @@ message CriuLazyPagesRequest {
 }
 
 message PullImageRequest {
-    string image_id = 1;
+  string image_id = 1;
+}
+
+message RestoreCapacityRequest {
+  PodInfo pod_info = 1;
+}
+
+message RestoreCapacityResponse {
+  bool allowed = 1;
+  string redirect_addr = 2;
 }

@@ -12,16 +12,21 @@ import (
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager"
+	"github.com/ctrox/zeropod/manager/capacity"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 )
 
 type testCase struct {
 	deploy                *appsv1.Deployment
 	svc                   *corev1.Service
 	sameNode              bool
+	noCordon              bool
 	migrationCount        int
 	liveMigration         bool
 	expectDataNotMigrated bool
@@ -29,6 +34,7 @@ type testCase struct {
 	afterMigration        func(t *testing.T, tc testCase)
 	expectFailed          bool
 	skipWaitScaledDown    bool
+	migrateByReq          bool
 }
 
 func TestMigration(t *testing.T) {
@@ -94,6 +100,54 @@ func TestMigration(t *testing.T) {
 			expectDataNotMigrated: true,
 			migrationCount:        1,
 		},
+		"node capacity eviction": {
+			deploy: freezerDeployment(
+				"capacity-eviction", "default", 1,
+				migrateAnnotation("freezer"),
+				scaleDownAfter(time.Second),
+				resources(corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("100m"),
+						corev1.ResourceMemory: resource.MustParse("100Mi"),
+					},
+				}),
+			),
+			svc:            testService(8080),
+			noCordon:       true,
+			liveMigration:  false,
+			migrationCount: 1,
+			migrateByReq:   true,
+			beforeMigration: func(t *testing.T) {
+				defaultBeforeMigration(t)
+				pod := migrationPod(t, freezerDeployment("capacity-eviction", "default", 1))
+				waitUntilScaledDown(t, ctx, e2e.client, pod)
+				node := &corev1.Node{}
+				require.NoError(t, e2e.client.Get(ctx, types.NamespacedName{Name: pod.Spec.NodeName}, node))
+				nodeMemory := node.Status.Capacity.Memory()
+				// add node capacity +1Gi so out pod is over capacity
+				nodeMemory.Add(resource.MustParse("1Gi"))
+				assert.NoError(t, retry.RetryOnConflict(retry.DefaultRetry, func() error {
+					pod = migrationPod(t, freezerDeployment("capacity-eviction", "default", 1))
+					pod.Annotations[manager.MemoryAnnotationKey] = fmt.Sprintf(`{"freezer":"%s"}`, nodeMemory.String())
+					return e2e.client.Update(ctx, pod)
+				}))
+			},
+			afterMigration: func(t *testing.T, tc testCase) {
+				defaultAfterMigration(t, tc)
+				nodeList := &corev1.NodeList{}
+				require.NoError(t, e2e.client.List(ctx, nodeList))
+				expectedTainted := 1
+				taintedNodes := 0
+				for _, node := range nodeList.Items {
+					if ok, _ := capacity.HasTaint(&node); ok {
+						taintedNodes++
+					}
+					capacity.RemoveTaint(&node)
+					require.NoError(t, e2e.client.Update(ctx, &node))
+				}
+				assert.Equal(t, expectedTainted, taintedNodes)
+			},
+		},
 	}
 
 	migrate := func(t *testing.T, ctx context.Context, e2e *e2eConfig, tc testCase) {
@@ -103,17 +157,27 @@ func TestMigration(t *testing.T) {
 		}
 		pod := pods[0]
 
-		if tc.sameNode {
-			uncordon := cordonOtherNodes(t, ctx, e2e.client, pod.Spec.NodeName)
-			defer uncordon()
-		} else {
-			uncordon := cordonNode(t, ctx, e2e.client, pod.Spec.NodeName)
-			defer uncordon()
+		if !tc.noCordon {
+			if tc.sameNode {
+				uncordon := cordonOtherNodes(t, ctx, e2e.client, pod.Spec.NodeName)
+				defer uncordon()
+			} else {
+				uncordon := cordonNode(t, ctx, e2e.client, pod.Spec.NodeName)
+				defer uncordon()
+			}
 		}
 		if !tc.liveMigration && !tc.skipWaitScaledDown {
 			waitUntilScaledDown(t, ctx, e2e.client, &pod)
 		}
-		require.NoError(t, e2e.client.Delete(ctx, &pod))
+		if tc.migrateByReq {
+			beforeEvictReq := time.Now()
+			f, err := freezerRead(e2e.port)
+			assert.NoError(t, err)
+			assert.Equal(t, t.Name(), f.Data, "freezer memory has persisted eviction migration")
+			t.Logf("evict request took %s", time.Since(beforeEvictReq))
+		} else {
+			require.NoError(t, e2e.client.Delete(ctx, &pod))
+		}
 		assert.Eventually(t, func() bool {
 			pods := podsOfDeployment(t, e2e.client, tc.deploy)
 			if len(pods) != 1 {

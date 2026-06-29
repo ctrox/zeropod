@@ -371,6 +371,11 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 			log.G(ctx).Info("migrating instead of killing process")
 			if err := zeropodContainer.Evac(ctx, zeropodContainer.ScaledDown()); err != nil {
 				log.G(ctx).WithError(err).Error("evac failed, exiting normally")
+			} else if zeropodContainer.EvacDrainStarted() {
+				// after a successful evac we start the connection draining
+				// asynchronously. Return here to signal that we received the
+				// kill.
+				return &emptypb.Empty{}, nil
 			}
 		}
 
