@@ -14,7 +14,6 @@ import (
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
 	"github.com/containerd/containerd/v2/pkg/oom"
 	oomv1 "github.com/containerd/containerd/v2/pkg/oom/v1"
-	oomv2 "github.com/containerd/containerd/v2/pkg/oom/v2"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 	"github.com/containerd/containerd/v2/pkg/sys/reaper"
@@ -43,21 +42,19 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		ep  oom.Watcher
 		err error
 	)
-	if cgroups.Mode() == cgroups.Unified {
-		ep, err = oomv2.New(publisher)
-	} else {
+	if cgroups.Mode() != cgroups.Unified {
 		ep, err = oomv1.New(publisher)
+		if err != nil {
+			return nil, err
+		}
+		go ep.Run(ctx)
 	}
-	if err != nil {
-		return nil, err
-	}
-
-	go ep.Run(ctx)
 	s := &service{
 		context:              ctx,
-		events:               make(chan any, 128),
+		events:               make(chan interface{}, 128),
 		ec:                   make(chan runcC.Exit, 32),
-		ep:                   ep,
+		cg1oom:               ep,
+		publisher:            publisher,
 		shutdown:             sd,
 		containers:           make(map[string]*runc.Container),
 		running:              make(map[int][]containerProcess),

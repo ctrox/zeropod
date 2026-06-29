@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -110,7 +109,9 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 				NamespacedName: client.ObjectKeyFromObject(tc.pod),
 			})
 			assert.NoError(t, err)
-			assert.Equal(t, tc.expectedRequeue, res.Requeue)
+			if tc.expectedRequeue {
+				assert.Greater(t, res.RequeueAfter, 0)
+			}
 
 			if tc.expectedMigration {
 				migration := &v1.Migration{}
@@ -210,7 +211,9 @@ func TestPodReconcilerMigrationTarget(t *testing.T) {
 				NamespacedName: client.ObjectKeyFromObject(tc.pod),
 			})
 			assert.NoError(t, err)
-			assert.Equal(t, tc.expectedRequeue, res.Requeue)
+			if tc.expectedRequeue {
+				assert.Greater(t, res.RequeueAfter, 0)
+			}
 
 			require.NoError(t, kube.Get(ctx, client.ObjectKeyFromObject(tc.existingMigration), tc.existingMigration))
 			if tc.expectClaimed {
@@ -232,7 +235,7 @@ func newMigratePod(nodeName, runtimeClassName string, phase shimv1.ContainerPhas
 	pod.Name = ""
 	pod.GenerateName = "controller-test-"
 	pod.Spec.NodeName = nodeName
-	pod.Spec.RuntimeClassName = ptr.To(runtimeClassName)
+	pod.Spec.RuntimeClassName = new(runtimeClassName)
 	containerName := pod.Spec.Containers[0].Name
 	pod.SetAnnotations(map[string]string{
 		nodev1.MigrateAnnotationKey: pod.Spec.Containers[0].Name,

@@ -13,13 +13,13 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
-	"k8s.io/apimachinery/pkg/util/httpstream"
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+	"k8s.io/streaming/pkg/httpstream"
 )
 
 // Used for creating a port forward into a Kubernetes pod
@@ -90,7 +90,7 @@ func (p *PortForward) Start() error {
 	}
 
 	discard := io.Discard
-	pf, err := portforward.New(dialer, ports, p.stopChan, readyChan, discard, discard)
+	pf, err := portforward.NewForStreaming(dialer, ports, p.stopChan, readyChan, discard, discard)
 	if err != nil {
 		return errors.Wrap(err, "Could not port forward into pod")
 	}
@@ -160,7 +160,7 @@ func (p *PortForward) dialer() (httpstream.Dialer, error) {
 		return nil, errors.Wrap(err, "Could not create round tripper")
 	}
 
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, "POST", url)
+	dialer := spdy.NewDialerForStreaming(upgrader, &http.Client{Transport: transport}, "POST", url)
 	return dialer, nil
 }
 
