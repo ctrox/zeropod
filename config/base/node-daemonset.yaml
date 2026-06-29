@@ -64,6 +64,11 @@ spec:
               containerPort: 8080
             - name: node-server
               containerPort: 8090
+          livenessProbe:
+            periodSeconds: 1
+            httpGet:
+              path: /probe
+              port: 8080
           env:
             - name: POD_IP
               valueFrom:

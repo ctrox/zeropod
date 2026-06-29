@@ -9,8 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +18,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/utils/ptr"
 )
 
 type testCase struct {
@@ -27,9 +28,9 @@ type testCase struct {
 	expectedCode           int
 	expectLastActivity     bool
 	ipv6                   bool
-	setBinaryName          bool
 	trackerIgnoreLocalhost bool
 	loopConnection         bool
+	kubeletAddr            *netip.Addr
 }
 
 func TestActivator(t *testing.T) {
@@ -101,21 +102,6 @@ func TestActivator(t *testing.T) {
 			expectLastActivity: true,
 			ipv6:               true,
 		},
-		"ignore activity with binary name set": {
-			parallelReqs:       1,
-			expectedBody:       "ok",
-			expectedCode:       http.StatusOK,
-			setBinaryName:      true,
-			expectLastActivity: false,
-		},
-		"ignore activity with binary name set ipv6": {
-			parallelReqs:       1,
-			expectedBody:       "ok",
-			expectedCode:       http.StatusOK,
-			ipv6:               true,
-			setBinaryName:      true,
-			expectLastActivity: false,
-		},
 		"ignore activity from localhost v4": {
 			parallelReqs:           1,
 			expectedBody:           "ok",
@@ -131,6 +117,22 @@ func TestActivator(t *testing.T) {
 			ipv6:                   true,
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
+		},
+		"ignore kubelet traffic ipv4": {
+			parallelReqs:       1,
+			expectedBody:       "ok",
+			expectedCode:       http.StatusOK,
+			ipv6:               false,
+			expectLastActivity: false,
+			kubeletAddr:        ptr.To(netip.MustParseAddr("127.0.0.1")),
+		},
+		"ignore kubelet traffic ipv6": {
+			parallelReqs:       1,
+			expectedBody:       "ok",
+			expectedCode:       http.StatusOK,
+			ipv6:               true,
+			expectLastActivity: false,
+			kubeletAddr:        ptr.To(netip.MustParseAddr("::1")),
 		},
 		"loop detection": {
 			parallelReqs:       1,
@@ -155,14 +157,7 @@ func TestActivator(t *testing.T) {
 				cancel()
 			})
 
-			exeName := ""
-			if tc.setBinaryName {
-				currentExe, err := os.Executable()
-				require.NoError(t, err)
-				exeName = filepath.Base(currentExe)
-			}
 			bpf, err := InitBPF(os.Getpid(), slog.Default(),
-				ProbeBinaryName(exeName),
 				OverrideMapSize(
 					// not completely sure why this happens but when testing in
 					// github actions, the default map size of 128 makes the test
@@ -177,6 +172,9 @@ func TestActivator(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NoError(t, bpf.AttachRedirector("lo"))
+			if tc.kubeletAddr != nil {
+				require.NoError(t, SetKubeletAddr(os.Getpid(), *tc.kubeletAddr))
+			}
 
 			startServer(t, ctx, s, uint16(port), &tc)
 			for i := 0; i < tc.parallelReqs; i++ {

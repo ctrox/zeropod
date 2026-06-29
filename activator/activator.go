@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,6 +25,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"golang.org/x/sys/unix"
+	"k8s.io/utils/ptr"
 )
 
 type Server struct {
@@ -42,6 +44,7 @@ type Server struct {
 	started        bool
 	peekBufferSize int
 	lastAddr       string
+	kubeletAddr    *netip.Addr
 }
 
 type ConnHook func(net.Conn) (conn net.Conn, cont bool, err error)
@@ -585,4 +588,40 @@ func freePort() (int, error) {
 	}
 
 	return addr.Port, nil
+}
+
+func (s *Server) SetKubeletAddr(addr *netip.Addr) {
+	s.kubeletAddr = addr
+}
+
+func (s *Server) GetKubeletAddr(isV6 bool) (*netip.Addr, error) {
+	if s.kubeletAddr != nil {
+		return s.kubeletAddr, nil
+	}
+
+	mapName := PodKubeletAddrMapv4
+	if isV6 {
+		mapName = PodKubeletAddrMapv6
+	}
+
+	kubeletAddrMap, err := ebpf.LoadPinnedMap(filepath.Join(PinPath(s.sandboxPid), mapName), &ebpf.LoadPinOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("loading pinned kubelet addr: %w", err)
+	}
+	defer kubeletAddrMap.Close()
+
+	key := uint32(0)
+	if isV6 {
+		value := [16]byte{}
+		if err := kubeletAddrMap.Lookup(key, &value); err != nil {
+			return nil, fmt.Errorf("looking up kubelet addr from map %s: %w", mapName, err)
+		}
+		return ptr.To(netip.AddrFrom16(value)), nil
+	}
+	value := [4]byte{}
+	if err := kubeletAddrMap.Lookup(key, &value); err != nil {
+		return nil, fmt.Errorf("looking up kubelet addr from map %s: %w", mapName, err)
+	}
+	s.kubeletAddr = ptr.To(netip.AddrFrom4(value))
+	return ptr.To(netip.AddrFrom4(value)), nil
 }
