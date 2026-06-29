@@ -231,10 +231,7 @@ func (w *wrapper) Start(ctx context.Context, r *taskAPI.StartRequest) (*taskAPI.
 		return resp, nil
 	}
 
-	if err := zeropodContainer.ScheduleScaleDown(); err != nil {
-		return nil, err
-	}
-
+	zeropodContainer.ScheduleScaleDown()
 	return resp, err
 }
 
@@ -311,9 +308,7 @@ func (w *wrapper) Delete(ctx context.Context, r *taskAPI.DeleteRequest) (*taskAP
 		// on delete of an exec container we want to schedule scaling down again
 		// but only if there are no other running execs.
 		if w.runningExecs[zeropodContainer.Container] == 0 {
-			if err := zeropodContainer.ScheduleScaleDown(); err != nil {
-				return nil, err
-			}
+			zeropodContainer.ScheduleScaleDown()
 		}
 		w.lifecycleMu.Unlock()
 	}

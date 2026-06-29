@@ -130,17 +130,17 @@ func (c *Container) Config() *v1.Config {
 	return c.cfg
 }
 
-func (c *Container) ScheduleScaleDown() error {
-	return c.scheduleScaleDownIn(c.cfg.ScaleDownDuration)
+func (c *Container) ScheduleScaleDown() {
+	c.scheduleScaleDownIn(c.cfg.ScaleDownDuration)
 }
 
-func (c *Container) scheduleScaleDownIn(in time.Duration) error {
+func (c *Container) scheduleScaleDownIn(in time.Duration) {
 	// cancel any potential pending scaledonws
 	c.CancelScaleDown()
 
 	if in == 0 {
 		log.G(c.context).Info("scale down is disabled")
-		return nil
+		return
 	}
 
 	log.G(c.context).Infof("scheduling scale down in %s", in)
@@ -182,7 +182,6 @@ func (c *Container) scheduleScaleDownIn(in time.Duration) error {
 		}
 	})
 	c.scaleDownTimer = timer
-	return nil
 }
 
 func (c *Container) CancelScaleDown() {
@@ -473,8 +472,8 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 			log.G(ctx).Errorf("error restoring container, exiting process: %s", err)
 		}
 		c.Container = restoredContainer
-
-		return c.ScheduleScaleDown()
+		c.ScheduleScaleDown()
+		return nil
 	}
 }
 
