@@ -53,6 +53,7 @@ const (
 	DefaultProbeBufferSize        = 1024
 	DefaultProbeBinaryName        = "kubelet"
 	DefaultTrackerIgnoreLocalhost = true
+	DefaultCapacityRequest        = false
 )
 
 var ContainerdAnnotations = []string{
@@ -95,6 +96,7 @@ type AnnotationConfig struct {
 
 type Config struct {
 	TrackerIgnoreLocalhost bool `json:"trackerIgnoreLocalhost"`
+	CapacityRequest        bool `json:"capacityRequest"`
 	AnnotationConfig       `json:"-"`
 }
 
@@ -225,6 +227,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 	}
 	cfg := &Config{
 		TrackerIgnoreLocalhost: DefaultTrackerIgnoreLocalhost,
+		CapacityRequest:        DefaultCapacityRequest,
 	}
 	e, err := os.Executable()
 	if err != nil {

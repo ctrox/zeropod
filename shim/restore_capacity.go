@@ -11,6 +11,9 @@ import (
 )
 
 func (c *Container) restoreCapacityRequest(ctx context.Context) (*nodev1.RestoreCapacityResponse, error) {
+	if !c.cfg.CapacityRequest {
+		return &nodev1.RestoreCapacityResponse{Allowed: true}, nil
+	}
 	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
 		return nil, fmt.Errorf("%w: dialing node service: %w", ErrRestoreDial, err)
