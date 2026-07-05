@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -39,9 +41,10 @@ var (
 	debugFlag      = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
-	statusLabels            = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	statusLabels           = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", true, "set to ignore traffic from localhost in socket tracker (Deprecated: this has moved to the installer)")
+	//lint:ignore U1000 kept for compatibility
 	probeBinaryName         = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection (Deprecated: this has moved to the installer)")
-	trackerIgnoreLocalhost  = flag.Bool("tracker-ignore-localhost", true, "set to ignore traffic from localhost in socket tracker (Deprecated: this has moved to the installer)")
 	statusEvents            = flag.Bool("status-events", false, "create status events to reflect container status")
 	versionFlag             = flag.Bool("version", false, "output version and exit")
 	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 10, "num reconciles the pod controller processes concurrently")
@@ -99,10 +102,10 @@ func main() {
 	defer stop()
 
 	activatorOpts := []activator.BPFOpts{
-		activator.ProbeBinaryName(*probeBinaryName),
 		activator.TrackerIgnoreLocalhost(*trackerIgnoreLocalhost),
 	}
-	if err := manager.AttachRedirectors(ctx, log, activatorOpts...); err != nil {
+	redirector, err := manager.AttachRedirectors(ctx, log, activatorOpts...)
+	if err != nil {
 		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
 	}
 
@@ -146,6 +149,7 @@ func main() {
 			EnableOpenMetrics: true,
 		}),
 	)
+	mux.Handle("/probe", http.HandlerFunc(probeHander(redirector)))
 	server := &http.Server{Addr: *metricsAddr, Handler: mux}
 
 	go func() {
@@ -236,6 +240,25 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 		return nil, err
 	}
 	return mgr, nil
+}
+
+// probeHandler responds to kublet probes and extracts the remoteAddr to
+// populate the kubeletAddr of the redirector which is used for probe detection.
+func probeHander(redirector *manager.Redirector) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err == nil {
+			addr, err := netip.ParseAddr(host)
+			if err == nil {
+				if redirector != nil {
+					redirector.InitKubeletAddr(addr)
+				}
+			}
+		}
+		_ = r.Body.Close()
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprint(w, http.StatusText(http.StatusOK))
+	}
 }
 
 func printVersion() {

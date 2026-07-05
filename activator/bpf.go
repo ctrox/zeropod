@@ -6,12 +6,12 @@ import (
 	"log/slog"
 	"maps"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/containernetworking/plugins/pkg/ns"
@@ -24,13 +24,10 @@ import (
 
 const (
 	BPFFSPath                      = "/sys/fs/bpf"
-	probeBinaryNameVariable        = "probe_binary_name"
-	probeBinaryNameMaxLength       = 16
 	SocketTrackerMap               = "socket_tracker"
-	PodKubeletAddrsMapv4           = "kubelet_addrs_v4"
-	PodKubeletAddrsMapv6           = "kubelet_addrs_v6"
+	PodKubeletAddrMapv4            = "kubelet_addr_v4"
+	PodKubeletAddrMapv6            = "kubelet_addr_v6"
 	trackerIgnoreLocalhostVariable = "tracker_ignore_localhost"
-	taskCommOffsetVariable         = "task_comm_offset"
 	tcxIngressPinName              = "tcx_ingress"
 	tcxEgressPinName               = "tcx_egress"
 	ManagedByShimSuffix            = "_managed_by_shim"
@@ -48,7 +45,6 @@ type BPF struct {
 
 type BPFConfig struct {
 	mapSizes               map[string]uint32
-	probeBinaryName        string
 	trackerIgnoreLocalhost bool
 	disablePinning         bool
 	managedByShim          bool
@@ -59,12 +55,6 @@ type BPFOpts func(cfg *BPFConfig)
 func OverrideMapSize(mapSizes map[string]uint32) BPFOpts {
 	return func(cfg *BPFConfig) {
 		maps.Copy(cfg.mapSizes, mapSizes)
-	}
-}
-
-func ProbeBinaryName(name string) BPFOpts {
-	return func(cfg *BPFConfig) {
-		cfg.probeBinaryName = name
 	}
 }
 
@@ -117,31 +107,8 @@ func InitBPF(pid int, log *slog.Logger, opts ...BPFOpts) (*BPF, error) {
 		return nil, fmt.Errorf("loading bpf objects: %w", err)
 	}
 
-	if len([]byte(cfg.probeBinaryName)) > probeBinaryNameMaxLength {
-		return nil, fmt.Errorf(
-			"probe binary name %s is too long (%d bytes), max is %d bytes",
-			cfg.probeBinaryName, len([]byte(cfg.probeBinaryName)), probeBinaryNameMaxLength,
-		)
-	}
-	binName := [probeBinaryNameMaxLength]byte{}
-	copy(binName[:], cfg.probeBinaryName[:])
-	if err := setVar(spec, probeBinaryNameVariable, binName); err != nil {
-		return nil, fmt.Errorf("setting probe binary variable: %w", err)
-	}
 	if err := setVar(spec, trackerIgnoreLocalhostVariable, cfg.trackerIgnoreLocalhost); err != nil {
 		return nil, fmt.Errorf("setting trackerIgnoreLocalhost variable: %w", err)
-	}
-	// in case you wonder why we do this instead of just accessing comm directly
-	// in the task struct in eBPF: this would make the btf loading way more
-	// expensive, at least the way cilium/ebpf behaves at the moment. It is
-	// about 3x slower and uses 3x the amount of memory. This is rather ugly but
-	// I think the performance gains are worth it.
-	commOffset, err := getTaskCommOffset()
-	if err != nil {
-		return nil, err
-	}
-	if err := setVar(spec, taskCommOffsetVariable, commOffset); err != nil {
-		return nil, fmt.Errorf("setting probe binary variable: %w", err)
 	}
 
 	for mapName, size := range cfg.mapSizes {
@@ -180,6 +147,56 @@ func TCXPinned(pid int, ifaces ...string) bool {
 	return true
 }
 
+// SetKubeletAddr puts the kubelet addr in the respective BPF map for v4/v6. It
+// will create and pin the map if it does not exist and freeze it afterwards. If
+// the map already exists and is frozen, this is a noop.
+func SetKubeletAddr(pid int, addr netip.Addr) error {
+	spec, err := loadBpf()
+	if err != nil {
+		return fmt.Errorf("loading bpf objects: %w", err)
+	}
+
+	mapName := PodKubeletAddrMapv4
+	if addr.Is6() {
+		mapName = PodKubeletAddrMapv6
+	}
+
+	// try to load pinned map first
+	kubeletAddrMap, err := ebpf.LoadPinnedMap(filepath.Join(PinPath(pid), mapName), &ebpf.LoadPinOptions{})
+	if err != nil {
+		mapSpec, ok := spec.Maps[mapName]
+		if !ok {
+			return fmt.Errorf("map %s not found", mapName)
+		}
+		kubeletAddrMap, err = ebpf.NewMapWithOptions(mapSpec, ebpf.MapOptions{PinPath: PinPath(pid)})
+		if err != nil {
+			return fmt.Errorf("failed to create map: %w", err)
+		}
+	}
+	defer kubeletAddrMap.Close()
+
+	info, err := kubeletAddrMap.Info()
+	if err != nil {
+		return err
+	}
+	if info.Frozen() {
+		return nil
+	}
+
+	var key uint32 = 0
+	var value any
+	if addr.Is4() {
+		value = addr.As4()
+	} else {
+		value = addr.As16()
+	}
+	if err := kubeletAddrMap.Put(key, value); err != nil {
+		return err
+	}
+
+	return kubeletAddrMap.Freeze()
+}
+
 func setVar(spec *ebpf.CollectionSpec, name string, value any) error {
 	if _, ok := spec.Variables[name]; !ok {
 		return fmt.Errorf("could not find var %s in spec", name)
@@ -188,23 +205,6 @@ func setVar(spec *ebpf.CollectionSpec, name string, value any) error {
 		return fmt.Errorf("setting spec variable: %w", err)
 	}
 	return nil
-}
-
-func getTaskCommOffset() (uint32, error) {
-	kernelSpec, err := btf.LoadKernelSpec()
-	if err != nil {
-		return 0, fmt.Errorf("failed to load kernel BTF: %w", err)
-	}
-	var taskStruct *btf.Struct
-	if err := kernelSpec.TypeByName("task_struct", &taskStruct); err != nil {
-		return 0, fmt.Errorf("task_struct not found in kernel BTF: %w", err)
-	}
-	for _, member := range taskStruct.Members {
-		if member.Name == "comm" {
-			return member.Offset.Bytes(), nil
-		}
-	}
-	return 0, fmt.Errorf("comm field not found in task_struct")
 }
 
 func (bpf *BPF) Cleanup() error {

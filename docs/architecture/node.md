@@ -67,18 +67,28 @@ in the production deployment.
 ### All Flags
 
 ```
+-auto-gc-migrations
+      automatically garbage collect migrations when owning pod is deleted (default true)
 -debug
       enable debug logs
 -in-place-scaling
       enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag
 -kubeconfig string
       Paths to a kubeconfig. Only required if out-of-cluster.
+-max-concurrent-reconciles int
+      num reconciles the pod controller processes concurrently (default 10)
 -metrics-addr string
       address of the metrics server (default ":8080")
+-migration-claim-timeout duration
+      how long to wait for migration to be claimed (default 10s)
+-migration-ready-timeout duration
+      how long to wait for migration to be ready (default 5m0s)
+-migration-servers-timeout duration
+      how long to wait for migration servers (default 10s)
 -node-server-addr string
       address of the node server (default ":8090")
--probe-binary-name string
-      set the probe binary name for probe detection (default "kubelet")
+-pages-transfer-timeout duration
+      how long to wait for pages transfer (default 5m0s)
 -status-events
       create status events to reflect container status
 -status-labels

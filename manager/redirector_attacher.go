@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
@@ -18,9 +20,11 @@ import (
 
 type Redirector struct {
 	sync.Mutex
+	syncInterval  time.Duration
 	sandboxes     map[int]sandbox
 	log           *slog.Logger
 	activatorOpts []activator.BPFOpts
+	kubeletAddr   *netip.Addr
 }
 
 type sandbox struct {
@@ -34,20 +38,37 @@ type sandbox struct {
 // can be found it attaches the redirector BPF programs to the network
 // interfaces of the sandbox. The directories are expected to be created by
 // the zeropod shim on startup.
-func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...activator.BPFOpts) error {
+func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...activator.BPFOpts) (*Redirector, error) {
 	r := &Redirector{
 		sandboxes:     make(map[int]sandbox),
 		log:           log,
 		activatorOpts: activatorOpts,
+		syncInterval:  time.Minute * 15,
 	}
 
 	if _, err := os.Stat(activator.MapsPath()); os.IsNotExist(err) {
 		r.log.Info("maps path not found, creating", "path", activator.MapsPath())
 		if err := os.Mkdir(activator.MapsPath(), os.ModePerm); err != nil {
-			return err
+			return nil, err
 		}
 	}
 
+	go r.syncLoop(ctx)
+	go r.watchForSandboxPids(ctx)
+	return r, r.reconcile()
+}
+
+// InitKubeletAddr sets the kubelet addr on the [Redirector] if it's unset.
+func (r *Redirector) InitKubeletAddr(addr netip.Addr) {
+	if r.kubeletAddr != nil {
+		return
+	}
+	r.log.Info("redirector kubelet addr set", "addr", addr)
+	r.kubeletAddr = &addr
+}
+
+func (r *Redirector) reconcile() error {
+	r.log.Info("reconciling redirectors")
 	pids, err := r.getSandboxPids()
 	if err != nil {
 		return err
@@ -65,6 +86,10 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...a
 			continue
 		}
 
+		if err := r.insertKubeletAddr(pid); err != nil {
+			r.log.Warn("inserting kubelet addr", "pid", pid, "error", err)
+		}
+
 		if activator.ManagedByShim(pid) {
 			r.log.Debug("skipping shim managed attach", "pid", pid)
 			continue
@@ -76,10 +101,21 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...a
 		}
 		errs = append(errs, r.attachRedirector(pid))
 	}
-
-	go r.watchForSandboxPids(ctx)
-
 	return errors.Join(errs...)
+}
+
+func (r *Redirector) syncLoop(ctx context.Context) error {
+	t := time.NewTicker(r.syncInterval)
+	for {
+		select {
+		case <-t.C:
+			if err := r.reconcile(); err != nil {
+				r.log.Error("error reconciling redirector", "error", err)
+			}
+		case <-ctx.Done():
+			return nil
+		}
+	}
 }
 
 func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
@@ -107,6 +143,17 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 				continue
 			}
 
+			if err := statNetNS(pid); err != nil {
+				r.log.Warn("ignoring pid as net ns was not found", "pid", pid)
+				continue
+			}
+
+			if event.Op == fsnotify.Create {
+				if err := r.insertKubeletAddr(pid); err != nil {
+					r.log.Warn("inserting kubelet addr", "pid", pid, "error", err)
+				}
+			}
+
 			if activator.ManagedByShim(pid) {
 				r.log.Debug("skipping shim managed attach", "pid", pid)
 				continue
@@ -114,11 +161,6 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 
 			if activator.TCXPinned(pid, activator.DefaultIfaces...) {
 				r.log.Debug("skipping already pinned attach", "pid", pid)
-				continue
-			}
-
-			if err := statNetNS(pid); err != nil {
-				r.log.Warn("ignoring pid as net ns was not found", "pid", pid)
 				continue
 			}
 
@@ -220,10 +262,17 @@ func (r *Redirector) getSandboxPids() ([]int, error) {
 	return intPids, nil
 }
 
+func (r *Redirector) insertKubeletAddr(pid int) error {
+	if r.kubeletAddr == nil {
+		return nil
+	}
+	return activator.SetKubeletAddr(pid, *r.kubeletAddr)
+}
+
 func ignoredDir(dir string) bool {
 	return dir == activator.SocketTrackerMap ||
-		dir == activator.PodKubeletAddrsMapv4 ||
-		dir == activator.PodKubeletAddrsMapv6 ||
+		dir == activator.PodKubeletAddrMapv4 ||
+		dir == activator.PodKubeletAddrMapv6 ||
 		strings.HasSuffix(dir, activator.ManagedByShimSuffix)
 }
 

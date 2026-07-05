@@ -13,9 +13,12 @@ import (
 	"github.com/cilium/ebpf"
 )
 
-type bpfIpv6Addr struct {
-	_       structs.HostLayout
-	U6Addr8 [16]uint8
+type bpfIn6Addr struct {
+	_    structs.HostLayout
+	In6U struct {
+		_       structs.HostLayout
+		U6Addr8 [16]uint8
+	}
 }
 
 // loadBpf returns the embedded CollectionSpec for bpf.
@@ -72,8 +75,8 @@ type bpfMapSpecs struct {
 	DisableRedirect   *ebpf.MapSpec `ebpf:"disable_redirect"`
 	EgressRedirects   *ebpf.MapSpec `ebpf:"egress_redirects"`
 	IngressRedirects  *ebpf.MapSpec `ebpf:"ingress_redirects"`
-	KubeletAddrsV4    *ebpf.MapSpec `ebpf:"kubelet_addrs_v4"`
-	KubeletAddrsV6    *ebpf.MapSpec `ebpf:"kubelet_addrs_v6"`
+	KubeletAddrV4     *ebpf.MapSpec `ebpf:"kubelet_addr_v4"`
+	KubeletAddrV6     *ebpf.MapSpec `ebpf:"kubelet_addr_v6"`
 	SocketTracker     *ebpf.MapSpec `ebpf:"socket_tracker"`
 }
 
@@ -81,8 +84,6 @@ type bpfMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type bpfVariableSpecs struct {
-	ProbeBinaryName        *ebpf.VariableSpec `ebpf:"probe_binary_name"`
-	TaskCommOffset         *ebpf.VariableSpec `ebpf:"task_comm_offset"`
 	TrackerIgnoreLocalhost *ebpf.VariableSpec `ebpf:"tracker_ignore_localhost"`
 }
 
@@ -110,8 +111,8 @@ type bpfMaps struct {
 	DisableRedirect   *ebpf.Map `ebpf:"disable_redirect"`
 	EgressRedirects   *ebpf.Map `ebpf:"egress_redirects"`
 	IngressRedirects  *ebpf.Map `ebpf:"ingress_redirects"`
-	KubeletAddrsV4    *ebpf.Map `ebpf:"kubelet_addrs_v4"`
-	KubeletAddrsV6    *ebpf.Map `ebpf:"kubelet_addrs_v6"`
+	KubeletAddrV4     *ebpf.Map `ebpf:"kubelet_addr_v4"`
+	KubeletAddrV6     *ebpf.Map `ebpf:"kubelet_addr_v6"`
 	SocketTracker     *ebpf.Map `ebpf:"socket_tracker"`
 }
 
@@ -121,8 +122,8 @@ func (m *bpfMaps) Close() error {
 		m.DisableRedirect,
 		m.EgressRedirects,
 		m.IngressRedirects,
-		m.KubeletAddrsV4,
-		m.KubeletAddrsV6,
+		m.KubeletAddrV4,
+		m.KubeletAddrV6,
 		m.SocketTracker,
 	)
 }
@@ -131,8 +132,6 @@ func (m *bpfMaps) Close() error {
 //
 // It can be passed to loadBpfObjects or ebpf.CollectionSpec.LoadAndAssign.
 type bpfVariables struct {
-	ProbeBinaryName        *ebpf.Variable `ebpf:"probe_binary_name"`
-	TaskCommOffset         *ebpf.Variable `ebpf:"task_comm_offset"`
 	TrackerIgnoreLocalhost *ebpf.Variable `ebpf:"tracker_ignore_localhost"`
 }
 

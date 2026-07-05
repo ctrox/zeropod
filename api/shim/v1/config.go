@@ -94,8 +94,7 @@ type AnnotationConfig struct {
 }
 
 type Config struct {
-	ProbeBinaryName        string `json:"probeBinaryName"`
-	TrackerIgnoreLocalhost bool   `json:"trackerIgnoreLocalhost"`
+	TrackerIgnoreLocalhost bool `json:"trackerIgnoreLocalhost"`
 	AnnotationConfig       `json:"-"`
 }
 
@@ -225,7 +224,6 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 	cfg := &Config{
-		ProbeBinaryName:        DefaultProbeBinaryName,
 		TrackerIgnoreLocalhost: DefaultTrackerIgnoreLocalhost,
 	}
 	e, err := os.Executable()
