@@ -541,7 +541,7 @@ func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, p
 	}
 }
 
-func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption) *appsv1.Deployment {
+func freezerDeployment(name, namespace string, memoryMiB int, opts ...podOption) *appsv1.Deployment {
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -569,7 +569,7 @@ func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption)
 						Image:           "ghcr.io/ctrox/zeropod-freezer",
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"/freezer"},
-						Args:            []string{"-memory", strconv.Itoa(memoryGiB)},
+						Args:            []string{"-memory", strconv.Itoa(memoryMiB)},
 						Ports: []corev1.ContainerPort{{
 							Name:          "freezer",
 							ContainerPort: 8080,
@@ -607,13 +607,16 @@ func createDeployAndWait(t testing.TB, ctx context.Context, c client.Client, dep
 	}, time.Minute, time.Second, "waiting for pods of deployment to be running")
 
 	return func() {
-		c.Delete(ctx, deploy)
-		assert.NoError(t, err)
+		assert.NoError(t, c.Delete(ctx, deploy))
 		require.Eventually(t, func() bool {
 			if err := c.Get(ctx, objectName(deploy), deploy); err != nil {
 				return true
 			}
-			return false
+			podList := &corev1.PodList{}
+			if err := c.List(ctx, podList, client.MatchingLabels(deploy.Spec.Selector.MatchLabels)); err != nil {
+				return false
+			}
+			return len(podList.Items) == 0
 		}, time.Minute*2, time.Second, "waiting for deployment to be deleted")
 	}
 }

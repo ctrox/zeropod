@@ -40,6 +40,7 @@ var (
 	installTimeout         = flag.Duration("timeout", time.Minute, "duration the installer waits for the installation to complete")
 	versionFlag            = flag.Bool("version", false, "output version and exit")
 	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", v1.DefaultTrackerIgnoreLocalhost, "set to ignore traffic from localhost in socket tracker")
+	capacityRequest        = flag.Bool("capacity-request", v1.DefaultCapacityRequest, "enable shim to make a capacity request before restoring")
 	//lint:ignore U1000 kept for compatibility
 	probeBinaryName = flag.String("probe-binary-name", v1.DefaultProbeBinaryName, "Deprecated: this is no longer used, flag will be removed in future release")
 
@@ -233,6 +234,7 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 
 	b, err := json.MarshalIndent(&v1.Config{
 		TrackerIgnoreLocalhost: *trackerIgnoreLocalhost,
+		CapacityRequest:        *capacityRequest,
 	}, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshaling config: %w", err)

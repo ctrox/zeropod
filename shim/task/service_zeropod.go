@@ -267,6 +267,11 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*emp
 		log.G(ctx).Printf("got exec for scaled down container, restoring")
 
 		if _, _, err := zeropodContainer.Restore(ctx); err != nil {
+			if errors.Is(err, zshim.ErrNoCapacity) {
+				log.G(ctx).Info("no capacity to restore for exec")
+				return &emptypb.Empty{}, fmt.Errorf("no capacity to restore for exec")
+			}
+
 			// restore failed, this is currently unrecoverable, so we set the
 			// process to exited and let the runtime recreate it.
 			zeropodContainer.Process().SetExited(1)
@@ -371,6 +376,11 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 			log.G(ctx).Info("migrating instead of killing process")
 			if err := zeropodContainer.Evac(ctx, zeropodContainer.ScaledDown()); err != nil {
 				log.G(ctx).WithError(err).Error("evac failed, exiting normally")
+			} else if zeropodContainer.EvacDrainStarted() {
+				// after a successful evac we start the connection draining
+				// asynchronously. Return here to signal that we received the
+				// kill.
+				return &emptypb.Empty{}, nil
 			}
 		}
 

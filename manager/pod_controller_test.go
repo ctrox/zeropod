@@ -92,6 +92,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(nodev1.NodeNameEnvKey, tc.nodeName)
+			ensureNode(t, kube, tc.nodeName)
 			r, err := newPodReconciler(kube, slog.Default())
 			require.NoError(t, err)
 			r.autoGCMigrations = tc.garbageCollection
@@ -194,6 +195,7 @@ func TestPodReconcilerMigrationTarget(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			require.NoError(t, kube.Create(ctx, tc.existingMigration))
 			t.Setenv(nodev1.NodeNameEnvKey, tc.nodeName)
+			ensureNode(t, kube, tc.nodeName)
 			r, err := newPodReconciler(kube, slog.Default())
 			require.NoError(t, err)
 			r.autoGCMigrations = tc.garbageCollection
@@ -274,4 +276,12 @@ func setPodTemplateHash(pod *corev1.Pod, podTemplateHash string) *corev1.Pod {
 func setPhase(pod *corev1.Pod, phase corev1.PodPhase) *corev1.Pod {
 	pod.Status.Phase = phase
 	return pod
+}
+
+func ensureNode(t *testing.T, kube client.Client, nodeName string) {
+	if err := kube.Create(t.Context(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			t.Fatal(err)
+		}
+	}
 }
