@@ -148,44 +148,51 @@ func (c *Container) scheduleScaleDownIn(in time.Duration) {
 	}
 
 	log.G(c.context).Infof("scheduling scale down in %s", in)
-	timer := time.AfterFunc(in, func() {
-		if !c.activator.Started() {
-			log.G(c.context).Infof("activator not ready, delaying scale down by %s", c.initBackoff)
-			c.scaleDownTimer.Reset(c.initBackoff)
-			return
-		}
-		last, err := c.lastActivity()
-		if errors.Is(err, activator.NoActivityRecordedErr{}) {
-			log.G(c.context).Info(err)
-		} else if err != nil {
-			log.G(c.context).Warnf("unable to get last TCP activity from tracker: %s", err)
-		} else {
-			log.G(c.context).Infof("last activity was %s ago", time.Since(last))
+	if c.scaleDownTimer == nil {
+		c.scaleDownTimer = time.AfterFunc(in, func() {
+			c.scaleDownCheck(in)
+		})
+		return
+	}
+	c.scaleDownTimer.Reset(in)
+}
 
-			if time.Since(last) < c.cfg.ScaleDownDuration {
-				// we want to delay the scaledown by c.cfg.ScaleDownDuration
-				// after the last activity
-				delay := c.cfg.ScaleDownDuration - time.Since(last)
-				// do not schedule into the past :)
-				if delay < 0 {
-					return
-				}
+func (c *Container) scaleDownCheck(in time.Duration) {
+	if !c.activator.Started() {
+		log.G(c.context).Infof("activator not ready, delaying scale down by %s", c.initBackoff)
+		c.scaleDownTimer.Reset(c.initBackoff)
+		return
+	}
+	last, err := c.lastActivity()
+	if errors.Is(err, activator.NoActivityRecordedErr{}) {
+		log.G(c.context).Info(err)
+	} else if err != nil {
+		log.G(c.context).Warnf("unable to get last TCP activity from tracker: %s", err)
+	} else {
+		log.G(c.context).Infof("last activity was %s ago", time.Since(last))
 
-				log.G(c.context).Infof("delaying scale down by %s", delay)
-				c.scaleDownTimer.Reset(delay)
+		if time.Since(last) < c.cfg.ScaleDownDuration {
+			// we want to delay the scaledown by c.cfg.ScaleDownDuration
+			// after the last activity
+			delay := c.cfg.ScaleDownDuration - time.Since(last)
+			// do not schedule into the past :)
+			if delay < 0 {
 				return
 			}
-		}
 
-		log.G(c.context).Info("scaling down after scale down duration is up")
-
-		if err := c.scaleDown(c.context); err != nil {
-			log.G(c.context).Errorf("scale down failed, disabling checkpointing: %s", err)
-			c.cfg.DisableCheckpointing = true
-			c.scaleDownTimer.Reset(c.cfg.ScaleDownDuration)
+			log.G(c.context).Infof("delaying scale down by %s", delay)
+			c.scaleDownTimer.Reset(delay)
+			return
 		}
-	})
-	c.scaleDownTimer = timer
+	}
+
+	log.G(c.context).Info("scaling down after scale down duration is up")
+
+	if err := c.scaleDown(c.context); err != nil {
+		log.G(c.context).Errorf("scale down failed, disabling checkpointing: %s", err)
+		c.cfg.DisableCheckpointing = true
+		c.scaleDownTimer.Reset(c.cfg.ScaleDownDuration)
+	}
 }
 
 func (c *Container) CancelScaleDown() {
