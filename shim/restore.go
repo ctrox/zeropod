@@ -54,7 +54,8 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		log.G(ctx).WithError(err).Error("requesting restore capacity")
 	} else if !resp.Allowed {
 		if resp.RedirectAddr != "" {
-			c.activator.ForwardToTarget(resp.RedirectAddr)
+			// TODO: implement ForwardToTarget
+			// c.activator.ForwardToTarget(resp.RedirectAddr)
 		}
 		return nil, nil, ErrNoCapacity
 	}
@@ -138,9 +139,10 @@ func (c *Container) restore(ctx context.Context) (*runc.Container, process.Proce
 	}
 
 	// process is running again, we don't need to redirect traffic anymore
-	if err := c.activator.DisableRedirects(); err != nil {
-		return nil, nil, fmt.Errorf("could not disable redirects: %w", err)
-	}
+	// TODO: probably no longer needed with the reuse activator?
+	// if err := c.activator.DisableRedirects(); err != nil {
+	// 	return nil, nil, fmt.Errorf("could not disable redirects: %w", err)
+	// }
 
 	return container, p, nil
 }

@@ -19,6 +19,7 @@ import (
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
+	"github.com/ctrox/zeropod/activator/reuse"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"google.golang.org/protobuf/proto"
@@ -38,7 +39,7 @@ type Container struct {
 	context          context.Context
 	id               string
 	createOpts       *anypb.Any
-	activator        *activator.Server
+	activator        *reuse.Activator
 	cfg              *v1.Config
 	initialProcess   process.Process
 	process          process.Process
@@ -300,7 +301,7 @@ func (c *Container) InitialProcess() process.Process {
 
 func (c *Container) StopActivator(ctx context.Context) {
 	if c.activator != nil {
-		c.activator.Stop(ctx)
+		c.activator.Stop()
 	}
 }
 
@@ -385,16 +386,16 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 	c.cancelInit()
 
 	if c.activator == nil {
-		act, err := activator.NewServer(ctx, c.netNS)
+		act, err := reuse.New(ctx, c.netNS, c.cfg.Spec.Linux.CgroupsPath)
 		if err != nil {
 			return err
 		}
-		if c.cfg.ProxyTimeout > 0 {
-			act.SetProxyTimeout(c.cfg.ProxyTimeout)
-		}
-		if c.cfg.ConnectTimeout > 0 {
-			act.SetConnectTimeout(c.cfg.ConnectTimeout)
-		}
+		// if c.cfg.ProxyTimeout > 0 {
+		// 	act.SetProxyTimeout(c.cfg.ProxyTimeout)
+		// }
+		// if c.cfg.ConnectTimeout > 0 {
+		// 	act.SetConnectTimeout(c.cfg.ConnectTimeout)
+		// }
 		c.activator = act
 	}
 
@@ -416,7 +417,7 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 
 	log.G(ctx).Infof("starting activator with ports: %v", c.cfg.Ports)
 	if err := c.startActivator(ctx, c.cfg.Ports...); err != nil {
-		if errors.Is(err, activator.ErrMapNotFound) {
+		if errors.Is(err, activator.ErrMapNotFound) || errors.Is(err, reuse.ErrListenersNotFound) {
 			c.retryInitIn(c.initRetry(), enableRedirects)
 			return nil
 		}
@@ -424,7 +425,7 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 	}
 
 	if enableRedirects {
-		return c.activator.Reset()
+		return c.activator.ScaleDown()
 	}
 	return nil
 }
@@ -464,11 +465,12 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	if c.activator.Started() {
 		return nil
 	}
-	if err := c.activator.AttachExec(); err != nil {
-		log.G(ctx).WithError(err).Error("failed to attach activator")
-		return err
-	}
-	if err := c.activator.Start(c.context, c.detectProbe(c.context), c.restoreHandler(c.context), ports...); err != nil {
+	// if err := c.activator.AttachExec(); err != nil {
+	// 	log.G(ctx).WithError(err).Error("failed to attach activator")
+	// 	return err
+	// }
+
+	if err := c.activator.Start(c.context, c.detectProbe(c.context), c.restoreHandler(c.context), c.Pid(), ports...); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}
@@ -481,18 +483,16 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 }
 
 func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
-	return func() error {
-		log.G(ctx).Printf("got a request")
-
+	return func() (int, error) {
 		restoredContainer, _, err := c.Restore(ctx)
 		if err != nil {
 			if errors.Is(err, ErrAlreadyRestored) {
 				log.G(ctx).Info("container is already restored, ignoring request")
-				return nil
+				return c.Pid(), nil
 			}
 			if errors.Is(err, ErrNoCapacity) {
 				log.G(ctx).Info("no capacity to restore, requests are being forwarded")
-				return nil
+				return 0, nil
 			}
 			// restore failed, this is currently unrecoverable, so we set the
 			// process to exited and let the runtime recreate it.
@@ -502,7 +502,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 		}
 		c.Container = restoredContainer
 		c.ScheduleScaleDown()
-		return nil
+		return c.Container.Pid(), nil
 	}
 }
 

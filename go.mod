@@ -48,6 +48,8 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.16.0
 )
 
+// replace github.com/vishvananda/netlink => ../netlink
+
 require (
 	al.essio.dev/pkg/shellescape v1.5.1 // indirect
 	cyphar.com/go-pathrs v0.2.1 // indirect

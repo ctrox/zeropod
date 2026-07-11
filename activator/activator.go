@@ -49,7 +49,7 @@ type Server struct {
 }
 
 type ConnHook func(net.Conn) (conn net.Conn, cont bool, err error)
-type RestoreHook func() error
+type RestoreHook func() (int, error)
 
 type Option func(s *Server)
 
@@ -178,7 +178,7 @@ func (s *Server) SetPeekBufferSize(size int) {
 func (s *Server) ForwardToTarget(addr string) {
 	// disable hooks
 	s.connHook = func(c net.Conn) (net.Conn, bool, error) { return c, true, nil }
-	s.restoreHook = func() error { return nil }
+	s.restoreHook = func() (int, error) { return 0, nil }
 	s.targetAddr = addr
 	s.forwardToTarget = true
 }
@@ -294,7 +294,7 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 		}
 	}()
 
-	if err := s.restoreHook(); err != nil {
+	if _, err := s.restoreHook(); err != nil {
 		log.G(ctx).Errorf("restoreHook: %s", err)
 		return
 	}
