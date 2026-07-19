@@ -95,8 +95,9 @@ type AnnotationConfig struct {
 }
 
 type Config struct {
-	TrackerIgnoreLocalhost bool `json:"trackerIgnoreLocalhost"`
-	CapacityRequest        bool `json:"capacityRequest"`
+	TrackerIgnoreLocalhost bool   `json:"trackerIgnoreLocalhost"`
+	CapacityRequest        bool   `json:"capacityRequest"`
+	ProbeAddress           string `json:"probeAddress"`
 	AnnotationConfig       `json:"-"`
 }
 
@@ -229,11 +230,11 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		TrackerIgnoreLocalhost: DefaultTrackerIgnoreLocalhost,
 		CapacityRequest:        DefaultCapacityRequest,
 	}
-	e, err := os.Executable()
+	path, err := relativeConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf("getting executable dir: %w", err)
+		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(filepath.Dir(e), "..", ConfigDir, ConfigFileName))
+	b, err := os.ReadFile(path)
 	if err == nil {
 		if err := json.Unmarshal(b, cfg); err != nil {
 			return nil, err
@@ -262,6 +263,14 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		Spec:                  spec,
 	}
 	return cfg, nil
+}
+
+func relativeConfigFile() (string, error) {
+	e, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("getting executable dir: %w", err)
+	}
+	return filepath.Join(filepath.Dir(e), "..", ConfigDir, ConfigFileName), nil
 }
 
 func (cfg Config) IsZeropodContainer() bool {
@@ -294,4 +303,16 @@ func AnyMigrationEnabled(annotations map[string]string) bool {
 func LiveMigrationEnabled(annotations map[string]string) bool {
 	_, ok := annotations[LiveMigrateAnnotationKey]
 	return ok
+}
+
+func (cfg Config) LastModified() time.Time {
+	configPath, err := relativeConfigFile()
+	if err != nil {
+		return time.Time{}
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
 }

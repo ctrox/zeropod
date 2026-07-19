@@ -48,6 +48,9 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 	if !c.ScaledDown() {
 		return nil, nil, ErrAlreadyRestored
 	}
+	if err := c.reloadConfig(ctx); err != nil {
+		log.G(ctx).WithError(err).Error("reloading config")
+	}
 	resp, err := c.restoreCapacityRequest(ctx)
 	if err != nil {
 		// log the error but continue with restoring

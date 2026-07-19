@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"slices"
 	"sync"
@@ -63,6 +64,7 @@ type Container struct {
 	evacuation       sync.Once
 	metrics          *v1.ContainerMetrics
 	runcVersion      string
+	lastConfigReload time.Time
 }
 
 func New(ctx context.Context, cfg *v1.Config, r *taskAPI.CreateTaskRequest, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
@@ -133,6 +135,33 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 
 func (c *Container) Config() *v1.Config {
 	return c.cfg
+}
+
+func (c *Container) reloadConfig(ctx context.Context) error {
+	if c.cfg.LastModified().Equal(c.lastConfigReload) {
+		log.G(ctx).Infof("config file up to date: %s", c.lastConfigReload)
+		return nil
+	}
+	log.G(ctx).Infof("reloading config")
+	spec, err := GetSpec(c.Bundle)
+	if err != nil {
+		return fmt.Errorf("getting container spec: %w", err)
+	}
+	// copy ports since they might have been discovered on first startup
+	ports := c.cfg.Ports
+	cfg, err := v1.NewConfig(ctx, spec)
+	if err != nil {
+		return fmt.Errorf("creating config: %w", err)
+	}
+	c.cfg = cfg
+	if len(c.cfg.Ports) == 0 {
+		c.cfg.Ports = ports
+	}
+	if err := c.activator.Reload(c.activatorOpts(ctx)...); err != nil {
+		return err
+	}
+	c.lastConfigReload = c.cfg.LastModified()
+	return nil
 }
 
 func (c *Container) ScheduleScaleDown() {
@@ -382,11 +411,27 @@ func (c *Container) EvacDrainStarted() bool {
 	return c.evacDrainStarted.Load()
 }
 
+func (c *Container) activatorOpts(ctx context.Context) []reuse.Option {
+	opts := []reuse.Option{
+		reuse.RestoreHook(c.restoreHandler(c.context)),
+		reuse.TrackerIgnoreLocalhost(c.cfg.TrackerIgnoreLocalhost),
+	}
+	if c.cfg.ProbeAddress != "" {
+		addr, err := netip.ParseAddr(c.cfg.ProbeAddress)
+		if err != nil {
+			log.G(ctx).WithError(err).Warn("invalid probe address configured")
+		} else {
+			opts = append(opts, reuse.ProbeAddr(&addr))
+		}
+	}
+	return opts
+}
+
 func (c *Container) initActivator(ctx context.Context, enableRedirects bool) error {
 	c.cancelInit()
 
 	if c.activator == nil {
-		act, err := reuse.New(ctx, c.netNS, c.cfg.Spec.Linux.CgroupsPath)
+		act, err := reuse.New(ctx, c.netNS, c.cfg.Spec.Linux.CgroupsPath, c.activatorOpts(ctx)...)
 		if err != nil {
 			return err
 		}
@@ -470,7 +515,7 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	// 	return err
 	// }
 
-	if err := c.activator.Start(c.context, c.detectProbe(c.context), c.restoreHandler(c.context), c.Pid(), ports...); err != nil {
+	if err := c.activator.Start(c.context, c.Pid(), ports); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}

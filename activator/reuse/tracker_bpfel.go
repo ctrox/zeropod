@@ -8,9 +8,16 @@ import (
 	_ "embed"
 	"fmt"
 	"io"
+	"structs"
 
 	"github.com/cilium/ebpf"
 )
+
+type trackerIpKey struct {
+	_         structs.HostLayout
+	Prefixlen uint32
+	Addr      [16]uint8
+}
 
 // loadTracker returns the embedded CollectionSpec for tracker.
 func loadTracker() (*ebpf.CollectionSpec, error) {
@@ -61,6 +68,7 @@ type trackerProgramSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type trackerMapSpecs struct {
+	IgnoredAddrs  *ebpf.MapSpec `ebpf:"ignored_addrs"`
 	SocketTracker *ebpf.MapSpec `ebpf:"socket_tracker"`
 }
 
@@ -90,11 +98,13 @@ func (o *trackerObjects) Close() error {
 //
 // It can be passed to loadTrackerObjects or ebpf.CollectionSpec.LoadAndAssign.
 type trackerMaps struct {
+	IgnoredAddrs  *ebpf.Map `ebpf:"ignored_addrs"`
 	SocketTracker *ebpf.Map `ebpf:"socket_tracker"`
 }
 
 func (m *trackerMaps) Close() error {
 	return _TrackerClose(
+		m.IgnoredAddrs,
 		m.SocketTracker,
 	)
 }

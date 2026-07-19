@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -33,13 +34,13 @@ const (
 )
 
 type Activator struct {
+	*Config
 	ports          []uint16
 	mu             sync.Mutex
 	wakeListeners  map[listenerKey]*wakeListener
 	probeListeners map[listenerKey]*probeListener
 	appListeners   map[listenerKey]*appListener
 	wakeInodes     []uint64
-	restoreHook    activator.RestoreHook
 	log            *log.Entry
 	ns             ns.NetNS
 	started        atomic.Bool
@@ -57,14 +58,20 @@ const (
 	probeKey = 2
 )
 
-func New(ctx context.Context, ns ns.NetNS, cgroupsPath string) (*Activator, error) {
+func New(ctx context.Context, ns ns.NetNS, cgroupsPath string, opts ...Option) (*Activator, error) {
+	cfg := &Config{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
 	act := &Activator{
-		ns:            ns,
-		cgroupsPath:   cgroupsPath,
-		log:           log.GetLogger(ctx),
-		sandboxPid:    parsePidFromNetNS(ns),
-		wakeListeners: make(map[listenerKey]*wakeListener),
-		appListeners:  make(map[listenerKey]*appListener),
+		ns:             ns,
+		cgroupsPath:    cgroupsPath,
+		log:            log.GetLogger(ctx),
+		sandboxPid:     parsePidFromNetNS(ns),
+		wakeListeners:  make(map[listenerKey]*wakeListener),
+		appListeners:   make(map[listenerKey]*appListener),
+		probeListeners: make(map[listenerKey]*probeListener),
+		Config:         cfg,
 	}
 	if err := act.LoadBPF(); err != nil {
 		return nil, fmt.Errorf("loading ebpf: %w", err)
@@ -132,19 +139,44 @@ func parsePidFromNetNS(nn ns.NetNS) int {
 	return pid
 }
 
-func (act *Activator) Start(ctx context.Context, connHook activator.ConnHook, restoreHook activator.RestoreHook, pid int, ports ...uint16) error {
+type Config struct {
+	trackerIgnoreLocalhost bool
+	probeAddr              *netip.Addr
+	restoreHook            activator.RestoreHook
+}
+
+type Option func(cfg *Config)
+
+func TrackerIgnoreLocalhost(ignore bool) Option {
+	return func(cfg *Config) {
+		cfg.trackerIgnoreLocalhost = ignore
+	}
+}
+
+func RestoreHook(restoreHook activator.RestoreHook) Option {
+	return func(cfg *Config) {
+		cfg.restoreHook = restoreHook
+	}
+}
+
+func ProbeAddr(addr *netip.Addr) Option {
+	return func(cfg *Config) {
+		cfg.probeAddr = addr
+	}
+}
+
+func (act *Activator) Start(ctx context.Context, pid int, ports []uint16) error {
 	act.ports = ports
-	act.restoreHook = restoreHook
 
 	before := time.Now()
 	if err := act.registerListeners(pid); err != nil {
 		act.log.WithError(err).Error("registering listeners")
 		return err
 	}
-	act.log.Infof("registered listeners in %s", time.Since(before))
+	act.log.Debugf("registered listeners in %s", time.Since(before))
 
 	act.started.Store(true)
-	return act.initActivityTracker()
+	return act.initSocketTracker()
 }
 
 func (act *Activator) Started() bool {
@@ -156,6 +188,9 @@ func (act *Activator) Stop() error {
 	defer act.mu.Unlock()
 	for _, wl := range act.wakeListeners {
 		wl.close()
+	}
+	for _, pl := range act.probeListeners {
+		pl.close()
 	}
 	if act.sockoptObjects != nil {
 		act.sockoptObjects.Close()
@@ -191,7 +226,26 @@ func (act *Activator) LastActivity(port uint16) (time.Time, error) {
 	return activator.ConvertBPFTime(val)
 }
 
-func (act *Activator) initActivityTracker() error {
+func (act *Activator) initSocketTracker() error {
+	if err := act.clearIgnoredAddrs(); err != nil {
+		return err
+	}
+	if err := act.clearSocketTracker(); err != nil {
+		return err
+	}
+	if act.trackerIgnoreLocalhost {
+		if err := IgnoreAddr(act.trackerObjs.IgnoredAddrs, "127.0.0.0/8"); err != nil {
+			return err
+		}
+		if err := IgnoreAddr(act.trackerObjs.IgnoredAddrs, "::1/128"); err != nil {
+			return err
+		}
+	}
+	if act.probeAddr != nil {
+		if err := IgnoreAddr(act.trackerObjs.IgnoredAddrs, act.probeAddr.String()); err != nil {
+			return err
+		}
+	}
 	for _, port := range act.ports {
 		val := uint64(0)
 		puint32 := uint32(port)
@@ -200,6 +254,78 @@ func (act *Activator) initActivityTracker() error {
 		}
 	}
 	return nil
+}
+
+func (act *Activator) Reload(opts ...Option) error {
+	cfg := &Config{}
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	act.Config = cfg
+	if err := act.initSocketTracker(); err != nil {
+		return err
+	}
+	act.mu.Lock()
+	defer act.mu.Unlock()
+	for _, wl := range act.wakeListeners {
+		if err := wl.reuse.ProbeAddr.Set(act.probeAddrValue()); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (act *Activator) clearIgnoredAddrs() error {
+	var key trackerIpKey
+	var val byte
+	iter := act.trackerObjs.IgnoredAddrs.Iterate()
+	for iter.Next(&key, &val) {
+		if err := act.trackerObjs.IgnoredAddrs.Delete(key); err != nil {
+			return err
+		}
+	}
+	return iter.Err()
+}
+
+func (act *Activator) clearSocketTracker() error {
+	var key uint32
+	var val uint64
+	iter := act.trackerObjs.SocketTracker.Iterate()
+	for iter.Next(&key, &val) {
+		if err := act.trackerObjs.SocketTracker.Delete(key); err != nil {
+			return err
+		}
+	}
+	return iter.Err()
+}
+
+func IgnoreAddr(addrMap *ebpf.Map, ip string) error {
+	prefix, err := netip.ParsePrefix(ip)
+	if err != nil {
+		noPrefix, err := netip.ParseAddr(ip)
+		if err != nil {
+			return err
+		}
+		prefix, err = noPrefix.Prefix(noPrefix.BitLen())
+		if err != nil {
+			return err
+		}
+	}
+	key := trackerIpKey{
+		Prefixlen: uint32(prefix.Bits()),
+	}
+
+	addr := prefix.Addr()
+	if addr.Is4() {
+		ip4 := addr.As4()
+		copy(key.Addr[:4], ip4[:])
+	} else {
+		ip6 := addr.As16()
+		copy(key.Addr[:], ip6[:])
+	}
+
+	var value byte = 0
+	return addrMap.Put(&key, value)
 }
 
 func (act *Activator) wake(network network) error {
@@ -214,12 +340,15 @@ func (act *Activator) wake(network network) error {
 			act.log.WithError(err).Error("registering listeners")
 			return err
 		}
-		act.log.Infof("registered listeners in %s", time.Since(before))
+		act.log.Debugf("registered listeners in %s", time.Since(before))
 	}
 	act.mu.Lock()
 	defer act.mu.Unlock()
 	for _, wl := range act.wakeListeners {
 		wl.closeListener()
+	}
+	for _, pl := range act.probeListeners {
+		pl.closeListener()
 	}
 	// sk_reuseport/migrate only seems to migrate pending connections to the
 	// wake listener only when a new conn comes in. We call poke which just
@@ -253,14 +382,20 @@ func (act *Activator) ScaleDown() error {
 	for _, wl := range act.wakeListeners {
 		wl.closeListener()
 	}
+	for _, pl := range act.probeListeners {
+		pl.closeListener()
+	}
 	act.wakeInodes = []uint64{}
 	for k := range act.wakeListeners {
-		act.log.Infof("spawning wake listener: %v", k)
 		if err := act.listenWake(k.port, k.network, act.wakeListeners[k]); err != nil {
 			return err
 		}
+		pl := &probeListener{}
+		if err := act.listenProbe(k.port, k.network, act.wakeListeners[k], pl); err != nil {
+			return err
+		}
+		act.probeListeners[k] = pl
 	}
-	act.log.Info("listening for new connections on wake listener")
-	act.log.Infof("wakeListeners: %d: %v", len(act.wakeListeners), act.wakeListeners)
+	act.log.Debugf("listening for new connections on %d wake listeners: %v", len(act.wakeListeners), act.wakeListeners)
 	return nil
 }

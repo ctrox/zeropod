@@ -20,9 +20,10 @@ import (
 )
 
 type wakeListener struct {
-	ln    *net.TCPListener
-	lnFd  *os.File
-	reuse *reuseportObjects
+	ln      *net.TCPListener
+	lnFd    *os.File
+	reuse   *reuseportObjects
+	epollFd int
 }
 
 type appListener struct {
@@ -71,49 +72,41 @@ func (act *Activator) listenWake(port uint16, network network, wl *wakeListener)
 	}); err != nil {
 		return err
 	}
-	f, err := wl.ln.File()
+
+	var dupFd int
+	var dupErr error
+	if err := act.attachNetListener(wl.ln, wakeKey, wl.reuse.Listeners, wl.reuse.SelectOrMigrate, func(fd uintptr) {
+		dupFd, dupErr = syscall.Dup(int(fd))
+	}); err != nil {
+		return err
+	}
+	if dupErr != nil {
+		return dupErr
+	}
+	wl.lnFd = os.NewFile(uintptr(dupFd), "")
+	epfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
-		wl.ln.Close()
+		act.log.WithError(err).Error("epoll create")
 		return err
 	}
-	wl.lnFd = f
-	var stat syscall.Stat_t
-	if err := syscall.Fstat(int(f.Fd()), &stat); err != nil {
-		return err
-	}
-	act.wakeInodes = append(act.wakeInodes, stat.Ino)
-	if err := unix.SetsockoptInt(int(wl.lnFd.Fd()), unix.SOL_SOCKET,
-		unix.SO_ATTACH_REUSEPORT_EBPF, wl.reuse.SelectOrMigrate.FD()); err != nil {
-		return fmt.Errorf("attach reuseport prog: %w", err)
-	}
-	key := uint32(wakeKey)
-	if err := wl.reuse.Listeners.Update(&key, uint64(wl.lnFd.Fd()), ebpf.UpdateAny); err != nil {
-		wl.lnFd.Close()
-		wl.ln.Close()
-		act.log.WithError(err).Error("inserting wake listener")
-		return fmt.Errorf("inserting wake listener: %w", err)
-	}
-	go act.watchWake(wl.lnFd, network)
+	wl.epollFd = epfd
+
+	go act.watchWake(epfd, wl.lnFd.Fd(), network)
 	return nil
 }
 
 // watchWake polls the wake listener without ever accepting and calls wake as
 // soon as the poll returns something.
-func (act *Activator) watchWake(f *os.File, network network) {
-	epfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
-	if err != nil {
-		act.log.WithError(err).Error("epoll create")
-		return
-	}
+func (act *Activator) watchWake(epfd int, fd uintptr, network network) {
 	defer func() {
-		_ = unix.EpollCtl(epfd, unix.EPOLL_CTL_DEL, int(f.Fd()), nil)
+		_ = unix.EpollCtl(epfd, unix.EPOLL_CTL_DEL, int(fd), nil)
 		_ = unix.Close(epfd)
 	}()
 	event := unix.EpollEvent{
 		Events: unix.EPOLLIN,
-		Fd:     int32(f.Fd()),
+		Fd:     int32(fd),
 	}
-	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, int(f.Fd()), &event); err != nil {
+	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, int(fd), &event); err != nil {
 		act.log.WithError(err).Error("failed to register socket with epoll")
 		return
 	}
@@ -124,11 +117,13 @@ func (act *Activator) watchWake(f *os.File, network network) {
 			if err == unix.EINTR {
 				continue
 			}
+			// TODO: figure out how to close this EpollWait
 			act.log.WithError(err).Error("epoll wait failed")
+			break
 		}
 
 		for i := range n {
-			if int(events[i].Fd) != int(f.Fd()) {
+			if int(events[i].Fd) != int(fd) {
 				continue
 			}
 			act.log.Info("socket activity detected, waking up")
@@ -139,6 +134,7 @@ func (act *Activator) watchWake(f *os.File, network network) {
 			return
 		}
 	}
+	act.log.Info("wake listener exited")
 }
 
 func (act *Activator) registerListeners(pid int) error {
@@ -153,39 +149,58 @@ func (act *Activator) registerListeners(pid int) error {
 	if len(listeners) < len(act.ports) {
 		return fmt.Errorf("%w: expected at least %d listeners, found %d", ErrNoListeningSockets, len(act.ports), len(listeners))
 	}
-	act.log.Infof("getting listeners in %s", time.Since(before))
+	act.log.Debugf("getting listeners in %s", time.Since(before))
 
 	for _, l := range listeners {
 		if l.fd == nil {
 			continue
 		}
 		defer l.fd.Close()
-		act.log.Infof("registering ln %d port %d family %d ino %d", l.fd.Fd(), l.port, l.family, l.inode)
-		objs := &reuseportObjects{}
-		if err := loadReuseportObjects(objs, &ebpf.CollectionOptions{}); err != nil {
-			return fmt.Errorf("loading reuseport objects: %w", err)
-		}
-		if err := act.registerLn(l.fd, objs.Listeners, objs.SelectOrMigrate); err != nil {
-			return fmt.Errorf("registering listener: %w", err)
-		}
+
 		net := networkTCP4
 		if l.family == unix.AF_INET6 {
 			net = networkTCP6ONLY
 		}
 		key := listenerKey{port: l.port, network: net}
-		wl, ok := act.wakeListeners[key]
-		if !ok {
+		if _, ok := act.wakeListeners[key]; !ok {
+			objs := &reuseportObjects{}
+			if err := loadReuseportObjects(objs, &ebpf.CollectionOptions{}); err != nil {
+				return fmt.Errorf("loading reuseport objects: %w", err)
+			}
+			if act.probeAddr != nil {
+				if err := objs.ProbeAddr.Set(act.probeAddrValue()); err != nil {
+					return err
+				}
+			}
 			act.wakeListeners[key] = &wakeListener{reuse: objs}
-		} else {
-			wl.reuse = objs
 		}
-		act.log.Infof("caching port %d fd %d", l.port, l.origFd)
+		wl := act.wakeListeners[key]
+		act.log.Debugf("registering ln %d port %d family %d ino %d", l.fd.Fd(), l.port, l.family, l.inode)
+		if err := act.attachListener(appKey, l.fd.Fd(), wl.reuse.Listeners, wl.reuse.SelectOrMigrate); err != nil {
+			return fmt.Errorf("registering listener: %w", err)
+		}
+		act.log.Debugf("caching port %d fd %d", l.port, l.origFd)
 		act.appListeners[key] = &appListener{fd: l.origFd}
 	}
 	if len(listeners) == 0 {
 		return ErrNoListeningSockets
 	}
 	return nil
+}
+
+func (act *Activator) probeAddrValue() [16]byte {
+	if act.probeAddr == nil {
+		return [16]byte{}
+	}
+	var ebpfProbeAddr [16]byte
+	if act.probeAddr.Is4() {
+		a4 := act.probeAddr.As4()
+		copy(ebpfProbeAddr[:], a4[:])
+	} else {
+		a16 := act.probeAddr.As16()
+		copy(ebpfProbeAddr[:], a16[:])
+	}
+	return ebpfProbeAddr
 }
 
 func (act *Activator) listenerFds(pid int, minListeners int) ([]listener, error) {
@@ -236,17 +251,43 @@ func (act *Activator) listenerFds(pid int, minListeners int) ([]listener, error)
 	return listenersWithFd, nil
 }
 
-// registerLn attaches select_or_migrate to the listerners reuseport group and
-// puts it into slot 0. The caller closes its dup of the fd afterwards and the
-// sockarray holds the socket via the listeners own fd.
-func (act *Activator) registerLn(lnFd *os.File, bpfMap *ebpf.Map, prog *ebpf.Program) error {
-	if err := unix.SetsockoptInt(int(lnFd.Fd()), unix.SOL_SOCKET,
+// attachListener attaches select_or_migrate to the listeners reuseport group
+// and puts it into the key slot.
+func (act *Activator) attachListener(key uint32, lnFd uintptr, bpfMap *ebpf.Map,
+	prog *ebpf.Program) error {
+	if err := unix.SetsockoptInt(int(lnFd), unix.SOL_SOCKET,
 		unix.SO_ATTACH_REUSEPORT_EBPF, prog.FD()); err != nil {
 		return fmt.Errorf("attach reuseport prog: %w", err)
 	}
-	key := uint32(appKey)
-	if err := bpfMap.Update(&key, uint64(lnFd.Fd()), ebpf.UpdateAny); err != nil {
+	if err := bpfMap.Update(&key, uint64(lnFd), ebpf.UpdateAny); err != nil {
 		return fmt.Errorf("sockarray app: %w", err)
+	}
+	return nil
+}
+
+// attachNetListener gets the fd of the [net.Listener] and then attaches it to
+// the reuseport group into the key slot.
+func (act *Activator) attachNetListener(ln net.Listener, key uint32, bpfMap *ebpf.Map, prog *ebpf.Program, fdfunc func(fd uintptr)) error {
+	sc, err := ln.(syscall.Conn).SyscallConn()
+	if err != nil {
+		ln.Close()
+		return err
+	}
+	var registerErr error
+	if err := sc.Control(func(fd uintptr) {
+		registerErr = act.attachListener(key, fd, bpfMap, prog)
+		if registerErr == nil {
+			if fdfunc != nil {
+				fdfunc(fd)
+			}
+		}
+	}); err != nil {
+		ln.Close()
+		return err
+	}
+	if registerErr != nil {
+		ln.Close()
+		return registerErr
 	}
 	return nil
 }

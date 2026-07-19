@@ -68,6 +68,7 @@ type reuseportMapSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type reuseportVariableSpecs struct {
+	ProbeAddr *ebpf.VariableSpec `ebpf:"probe_addr"`
 }
 
 // reuseportObjects contains all objects after they have been loaded into the kernel.
@@ -103,6 +104,7 @@ func (m *reuseportMaps) Close() error {
 //
 // It can be passed to loadReuseportObjects or ebpf.CollectionSpec.LoadAndAssign.
 type reuseportVariables struct {
+	ProbeAddr *ebpf.Variable `ebpf:"probe_addr"`
 }
 
 // reuseportPrograms contains all programs after they have been loaded into the kernel.
