@@ -509,7 +509,7 @@ func (s *Server) LastActivity(port uint16) (time.Time, error) {
 		return time.Time{}, NoActivityRecordedErr{}
 	}
 
-	return convertBPFTime(val)
+	return ConvertBPFTime(val)
 }
 
 func (s *Server) initActivityTracker() error {
@@ -526,9 +526,9 @@ func netNSPath(pid int) string {
 	return fmt.Sprintf("/proc/%d/ns/net", pid)
 }
 
-// convertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
+// ConvertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
 // time.Time.
-func convertBPFTime(t uint64) (time.Time, error) {
+func ConvertBPFTime(t uint64) (time.Time, error) {
 	b, err := getBootTimeNS()
 	if err != nil {
 		return time.Time{}, err

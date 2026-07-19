@@ -417,7 +417,7 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 
 	log.G(ctx).Infof("starting activator with ports: %v", c.cfg.Ports)
 	if err := c.startActivator(ctx, c.cfg.Ports...); err != nil {
-		if errors.Is(err, activator.ErrMapNotFound) || errors.Is(err, reuse.ErrListenersNotFound) {
+		if errors.Is(err, activator.ErrMapNotFound) || errors.Is(err, reuse.ErrNoListeningSockets) {
 			c.retryInitIn(c.initRetry(), enableRedirects)
 			return nil
 		}
