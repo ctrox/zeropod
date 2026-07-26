@@ -40,6 +40,7 @@ type Activator struct {
 	wakeListeners  map[listenerKey]*wakeListener
 	probeListeners map[listenerKey]*probeListener
 	appListeners   map[listenerKey]*appListener
+	forwarder      map[listenerKey]*forwarder
 	wakeInodes     []uint64
 	log            *log.Entry
 	ns             ns.NetNS
@@ -71,6 +72,7 @@ func New(ctx context.Context, ns ns.NetNS, cgroupsPath string, opts ...Option) (
 		wakeListeners:  make(map[listenerKey]*wakeListener),
 		appListeners:   make(map[listenerKey]*appListener),
 		probeListeners: make(map[listenerKey]*probeListener),
+		forwarder:      make(map[listenerKey]*forwarder),
 		Config:         cfg,
 	}
 	if err := act.LoadBPF(); err != nil {
@@ -165,15 +167,41 @@ func ProbeAddr(addr *netip.Addr) Option {
 	}
 }
 
-func (act *Activator) Start(ctx context.Context, pid int, ports []uint16) error {
+func (act *Activator) Start(ctx context.Context, pid int, ports []uint16, skipStart bool) error {
 	act.ports = ports
 
-	before := time.Now()
-	if err := act.registerListeners(pid); err != nil {
-		act.log.WithError(err).Error("registering listeners")
-		return err
+	if skipStart {
+		// TODO: test if this works correctly with all combination of app
+		// sockets (tcp4, tcp6, tcp6only)
+		// also make this a bit nicer!
+		for _, port := range ports {
+			for _, net := range []network{networkTCP4, networkTCP6ONLY} {
+				key := listenerKey{port: port, network: net}
+				objs := &reuseportObjects{}
+				if err := loadReuseportObjects(objs, &ebpf.CollectionOptions{}); err != nil {
+					return fmt.Errorf("loading reuseport objects: %w", err)
+				}
+				if act.probeAddr != nil {
+					if err := objs.ProbeAddr.Set(act.probeAddrValue()); err != nil {
+						return err
+					}
+				}
+				act.mu.Lock()
+				act.wakeListeners[key] = &wakeListener{reuse: objs}
+				act.mu.Unlock()
+			}
+		}
+		if err := act.ScaleDown(); err != nil {
+			return err
+		}
+	} else {
+		before := time.Now()
+		if err := act.registerListeners(pid); err != nil {
+			act.log.WithError(err).Error("registering listeners")
+			return err
+		}
+		act.log.Debugf("registered listeners in %s", time.Since(before))
 	}
-	act.log.Debugf("registered listeners in %s", time.Since(before))
 
 	act.started.Store(true)
 	return act.initSocketTracker()
@@ -191,6 +219,9 @@ func (act *Activator) Stop() error {
 	}
 	for _, pl := range act.probeListeners {
 		pl.close()
+	}
+	for _, fwd := range act.forwarder {
+		fwd.close()
 	}
 	if act.sockoptObjects != nil {
 		act.sockoptObjects.Close()
@@ -329,18 +360,23 @@ func IgnoreAddr(addrMap *ebpf.Map, ip string) error {
 }
 
 func (act *Activator) wake(network network) error {
+	closeProbe := false
 	if act.restoreHook != nil {
 		pid, err := act.restoreHook()
 		if err != nil {
 			act.log.WithError(err).Error("restore hook")
 			return err
 		}
-		before := time.Now()
-		if err := act.registerListeners(pid); err != nil {
-			act.log.WithError(err).Error("registering listeners")
-			return err
+		// TODO: should retoreHook return NoCapacity?
+		if pid != 0 {
+			closeProbe = true
+			before := time.Now()
+			if err := act.registerListeners(pid); err != nil {
+				act.log.WithError(err).Error("registering listeners")
+				return err
+			}
+			act.log.Debugf("registered listeners in %s", time.Since(before))
 		}
-		act.log.Debugf("registered listeners in %s", time.Since(before))
 	}
 	act.mu.Lock()
 	defer act.mu.Unlock()
@@ -348,6 +384,9 @@ func (act *Activator) wake(network network) error {
 		wl.closeListener()
 	}
 	for _, pl := range act.probeListeners {
+		if !closeProbe {
+			continue
+		}
 		pl.closeListener()
 	}
 	// sk_reuseport/migrate only seems to migrate pending connections to the

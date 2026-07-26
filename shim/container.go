@@ -515,7 +515,7 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	// 	return err
 	// }
 
-	if err := c.activator.Start(c.context, c.Pid(), ports); err != nil {
+	if err := c.activator.Start(c.context, c.Pid(), ports, c.skipStart); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}

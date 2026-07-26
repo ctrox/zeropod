@@ -57,8 +57,7 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		log.G(ctx).WithError(err).Error("requesting restore capacity")
 	} else if !resp.Allowed {
 		if resp.RedirectAddr != "" {
-			// TODO: implement ForwardToTarget
-			// c.activator.ForwardToTarget(resp.RedirectAddr)
+			c.activator.ForwardToTarget(ctx, resp.RedirectAddr)
 		}
 		return nil, nil, ErrNoCapacity
 	}
