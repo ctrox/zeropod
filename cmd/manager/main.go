@@ -155,7 +155,7 @@ func main() {
 			EnableOpenMetrics: true,
 		}),
 	)
-	mux.Handle("/probe", http.HandlerFunc(probeHander(redirector)))
+	mux.Handle("/probe", http.HandlerFunc(probeHander(redirector, log)))
 	server := &http.Server{Addr: *metricsAddr, Handler: mux}
 
 	go func() {
@@ -255,14 +255,16 @@ func newControllerManager(nodeName string) (ctrlmanager.Manager, error) {
 
 // probeHandler responds to kublet probes and extracts the remoteAddr to
 // populate the kubeletAddr of the redirector which is used for probe detection.
-func probeHander(redirector *manager.Redirector) http.HandlerFunc {
+func probeHander(redirector *manager.Redirector, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err == nil {
 			addr, err := netip.ParseAddr(host)
 			if err == nil {
 				if redirector != nil {
-					redirector.InitKubeletAddr(addr)
+					if err := redirector.InitKubeletAddr(addr); err != nil {
+						log.Error("init kubelet addr failed", "error", err)
+					}
 				}
 			}
 		}

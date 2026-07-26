@@ -15,6 +15,7 @@ import (
 
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
+	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/fsnotify/fsnotify"
 )
 
@@ -59,12 +60,22 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...a
 }
 
 // InitKubeletAddr sets the kubelet addr on the [Redirector] if it's unset.
-func (r *Redirector) InitKubeletAddr(addr netip.Addr) {
+func (r *Redirector) InitKubeletAddr(addr netip.Addr) error {
 	if r.kubeletAddr != nil {
-		return
+		return nil
 	}
 	r.log.Info("redirector kubelet addr set", "addr", addr)
 	r.kubeletAddr = &addr
+	return r.storekubeletAddrInConfig()
+}
+
+func (r *Redirector) storekubeletAddrInConfig() error {
+	cfg, err := v1.Load(v1.DefaultOptDir)
+	if err != nil {
+		return fmt.Errorf("lading config: %w", err)
+	}
+	cfg.ProbeAddress = r.kubeletAddr.String()
+	return cfg.Write(v1.DefaultOptDir)
 }
 
 func (r *Redirector) reconcile() error {

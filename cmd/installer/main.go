@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -232,18 +231,14 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 		return fmt.Errorf("unable to write shim file: %w", err)
 	}
 
-	b, err := json.MarshalIndent(&v1.Config{
-		TrackerIgnoreLocalhost: *trackerIgnoreLocalhost,
-		CapacityRequest:        *capacityRequest,
-	}, "", "  ")
+	cfg, err := v1.Load(opt)
 	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
+		return fmt.Errorf("loading config: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(opt, v1.ConfigDir), os.ModePerm); err != nil {
-		return err
-	}
-	if err := os.WriteFile(filepath.Join(opt, v1.ConfigDir, v1.ConfigFileName), b, 0600); err != nil {
-		return fmt.Errorf("unable to write shim file: %w", err)
+	cfg.TrackerIgnoreLocalhost = *trackerIgnoreLocalhost
+	cfg.CapacityRequest = *capacityRequest
+	if err := cfg.Write(opt); err != nil {
+		return fmt.Errorf("writing config: %w", err)
 	}
 
 	if runtime == runtimeK3S {

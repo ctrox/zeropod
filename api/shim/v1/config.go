@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	DefaultOptDir                    = "/opt/zeropod"
 	ConfigDir                        = "etc"
 	ConfigFileName                   = "shim.json"
 	NodeLabel                        = "zeropod.ctrox.dev/node"
@@ -315,4 +316,30 @@ func (cfg Config) LastModified() time.Time {
 		return time.Time{}
 	}
 	return info.ModTime()
+}
+
+func Load(optDir string) (*Config, error) {
+	b, err := os.ReadFile(filepath.Join(optDir, ConfigDir, ConfigFileName))
+	if err != nil {
+		return nil, err
+	}
+	cfg := &Config{}
+	if err := json.Unmarshal(b, cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (cfg *Config) Write(optPath string) error {
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(optPath, ConfigDir), os.ModePerm); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(optPath, ConfigDir, ConfigFileName), b, 0600); err != nil {
+		return fmt.Errorf("unable to write shim file: %w", err)
+	}
+	return nil
 }
