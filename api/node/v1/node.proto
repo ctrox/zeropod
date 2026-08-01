@@ -35,12 +35,18 @@ message RestoreResponse {
   MigrationInfo migration_info = 1;
 }
 
+message Listener {
+    int32 port = 1;
+    string network = 2;
+}
+
 message PodInfo {
   string name = 1;
   string namespace = 2;
   string container_name = 3;
   repeated int32 ports = 4;
   string ip = 5;
+  repeated Listener listeners = 6;
 }
 
 message MigrationInfo {
@@ -51,6 +57,7 @@ message MigrationInfo {
   google.protobuf.Timestamp restore_start = 5;
   google.protobuf.Timestamp restore_end = 6;
   repeated int32 ports = 7;
+  repeated Listener listeners = 8;
 }
 
 message Image {

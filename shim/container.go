@@ -31,6 +31,11 @@ import (
 
 type HandleStartedFunc func(*runc.Container, process.Process)
 
+type startInfo struct {
+	skip      bool
+	listeners reuse.Listeners
+}
+
 type Container struct {
 	*runc.Container
 	// mutex to lock during checkpoint/restore operations to ensure we don't try
@@ -47,7 +52,7 @@ type Container struct {
 	cgroup           any
 	logPath          string
 	scaledDown       bool
-	skipStart        bool
+	startInfo        startInfo
 	netNS            ns.NetNS
 	scaleDownTimer   *time.Timer
 	initTimer        *time.Timer
@@ -275,12 +280,12 @@ func (c *Container) sendFailEvent(phase v1.ContainerPhase, l string) {
 	c.sendEvent(status)
 }
 
-func (c *Container) SetSkipStart(skip bool) {
-	c.skipStart = skip
+func (c *Container) SetSkipStart(startInfo startInfo) {
+	c.startInfo = startInfo
 }
 
 func (c *Container) SkipStart() bool {
-	return c.skipStart
+	return c.startInfo.skip
 }
 
 func (c *Container) Status() *v1.ContainerStatus {
@@ -515,7 +520,7 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	// 	return err
 	// }
 
-	if err := c.activator.Start(c.context, c.Pid(), ports, c.skipStart); err != nil {
+	if err := c.activator.Start(c.context, c.Pid(), c.startInfo.listeners, c.SkipStart()); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}

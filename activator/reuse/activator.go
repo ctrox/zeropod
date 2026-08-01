@@ -25,12 +25,12 @@ import (
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS sockopt sockopt.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS tracker tracker.c
 
-type network string
+type Network string
 
 const (
-	networkTCP4     network = "tcp4"
-	networkTCP6     network = "tcp6"
-	networkTCP6ONLY network = "tcp"
+	networkTCP4     Network = "tcp4"
+	networkTCPAny   Network = "tcp"
+	networkTCP6ONLY Network = "tcp6"
 )
 
 type Activator struct {
@@ -167,29 +167,24 @@ func ProbeAddr(addr *netip.Addr) Option {
 	}
 }
 
-func (act *Activator) Start(ctx context.Context, pid int, ports []uint16, skipStart bool) error {
-	act.ports = ports
+func (act *Activator) Start(ctx context.Context, pid int, listeners Listeners, skipStart bool) error {
+	act.ports = listeners.Ports()
 
 	if skipStart {
-		// TODO: test if this works correctly with all combination of app
-		// sockets (tcp4, tcp6, tcp6only)
-		// also make this a bit nicer!
-		for _, port := range ports {
-			for _, net := range []network{networkTCP4, networkTCP6ONLY} {
-				key := listenerKey{port: port, network: net}
-				objs := &reuseportObjects{}
-				if err := loadReuseportObjects(objs, &ebpf.CollectionOptions{}); err != nil {
-					return fmt.Errorf("loading reuseport objects: %w", err)
-				}
-				if act.probeAddr != nil {
-					if err := objs.ProbeAddr.Set(act.probeAddrValue()); err != nil {
-						return err
-					}
-				}
-				act.mu.Lock()
-				act.wakeListeners[key] = &wakeListener{reuse: objs}
-				act.mu.Unlock()
+		for _, ln := range listeners {
+			key := listenerKey{port: ln.Port, network: ln.Network}
+			objs := &reuseportObjects{}
+			if err := loadReuseportObjects(objs, &ebpf.CollectionOptions{}); err != nil {
+				return fmt.Errorf("loading reuseport objects: %w", err)
 			}
+			if act.probeAddr != nil {
+				if err := objs.ProbeAddr.Set(act.probeAddrValue()); err != nil {
+					return err
+				}
+			}
+			act.mu.Lock()
+			act.wakeListeners[key] = &wakeListener{reuse: objs}
+			act.mu.Unlock()
 		}
 		if err := act.ScaleDown(); err != nil {
 			return err
@@ -359,7 +354,7 @@ func IgnoreAddr(addrMap *ebpf.Map, ip string) error {
 	return addrMap.Put(&key, value)
 }
 
-func (act *Activator) wake(network network) error {
+func (act *Activator) wake(network Network) error {
 	closeProbe := false
 	if act.restoreHook != nil {
 		pid, err := act.restoreHook()
@@ -400,10 +395,10 @@ func (act *Activator) wake(network network) error {
 	return nil
 }
 
-func (act *Activator) poke(port uint16, network network) error {
+func (act *Activator) poke(port uint16, network Network) error {
 	return act.ns.Do(func(nn ns.NetNS) error {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		if network == networkTCP6 || network == networkTCP6ONLY {
+		if network == networkTCPAny || network == networkTCP6ONLY {
 			addr = fmt.Sprintf("[::1]:%d", port)
 		}
 		dialer := net.Dialer{Timeout: time.Second}
@@ -437,4 +432,27 @@ func (act *Activator) ScaleDown() error {
 	}
 	act.log.Debugf("listening for new connections on %d wake listeners: %v", len(act.wakeListeners), act.wakeListeners)
 	return nil
+}
+
+type Listener struct {
+	Port    uint16
+	Network Network
+}
+
+type Listeners []Listener
+
+func (act *Activator) GetListeners() []Listener {
+	listeners := []Listener{}
+	for k := range act.appListeners {
+		listeners = append(listeners, Listener{Port: k.port, Network: k.network})
+	}
+	return listeners
+}
+
+func (lns Listeners) Ports() []uint16 {
+	ports := []uint16{}
+	for _, ln := range lns {
+		ports = append(ports, ln.Port)
+	}
+	return ports
 }

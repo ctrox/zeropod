@@ -53,6 +53,11 @@ type MigrationSpec struct {
 	Containers []MigrationContainer `json:"containers"`
 }
 
+type PodListener struct {
+	Port    int32  `json:"port"`
+	Network string `json:"network"`
+}
+
 // +kubebuilder:object:generate:=true
 type MigrationContainer struct {
 	Name string `json:"name"`
@@ -65,6 +70,8 @@ type MigrationContainer struct {
 	PageServer *MigrationServer `json:"pageServer,omitempty"`
 
 	Ports []int32 `json:"ports,omitempty"`
+
+	Listeners []PodListener `json:"listeners,omitempty"`
 }
 
 // +kubebuilder:object:generate:=true

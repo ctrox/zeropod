@@ -203,12 +203,20 @@ func (c *Container) evacScaledDown(ctx context.Context) error {
 	for _, p := range c.cfg.Ports {
 		ports = append(ports, int32(p))
 	}
+	listeners := []*nodev1.Listener{}
+	for _, ln := range c.activator.GetListeners() {
+		listeners = append(listeners, &nodev1.Listener{
+			Port:    int32(ln.Port),
+			Network: string(ln.Network),
+		})
+	}
 	evacReq := &nodev1.EvacRequest{
 		PodInfo: &nodev1.PodInfo{
 			Name:          c.cfg.PodName,
 			Namespace:     c.cfg.PodNamespace,
 			ContainerName: c.cfg.ContainerName,
 			Ports:         ports,
+			Listeners:     listeners,
 		},
 		MigrationInfo: &nodev1.MigrationInfo{
 			LiveMigration: false,

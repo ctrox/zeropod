@@ -13,7 +13,7 @@ type probeListener struct {
 	ln net.Listener
 }
 
-func (act *Activator) listenProbe(port uint16, network network, wl *wakeListener, pl *probeListener) error {
+func (act *Activator) listenProbe(port uint16, network Network, wl *wakeListener, pl *probeListener) error {
 	if err := act.ns.Do(func(nn ns.NetNS) error {
 		ln, err := listenReuseport(port, network)
 		if err != nil {
