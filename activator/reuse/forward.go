@@ -33,10 +33,11 @@ func (act *Activator) ForwardToTarget(ctx context.Context, addr string) error {
 	for k, wl := range act.wakeListeners {
 		fwd := &forwarder{
 			targetAddr: addr,
-			log:        act.log,
+			log:        act.log.WithField("component", "forwarder"),
 			ns:         act.ns,
 			// TODO: parameter
 			connectTimeout: time.Minute,
+			quit:           make(chan struct{}, 1),
 		}
 		if err := act.ns.Do(func(nn ns.NetNS) error {
 			ln, err := listenReuseport(k.port, k.network)
@@ -74,19 +75,20 @@ func (fwd *forwarder) serveForward(ctx context.Context, listener net.Listener, p
 			// TODO: we need this again? Or can we just use ctx?
 			case <-fwd.quit:
 				wg.Wait()
+				fwd.log.Debug("quit")
 				return
 			case <-ctx.Done():
 				wg.Wait()
+				fwd.log.Debug("context closed")
 				return
 			default:
 				if !errors.Is(err, net.ErrClosed) {
 					fwd.log.Errorf("error accepting: %s", err)
 				}
-				return
 			}
 		} else {
 			wg.Go(func() {
-				fwd.log.Debug("forwarder: accepting connection")
+				fwd.log.Debugf("accepting connection from %s", conn.RemoteAddr())
 				fwd.handleForwardConn(ctx, conn, port)
 			})
 		}
@@ -121,7 +123,7 @@ func (fwd *forwarder) connect(ctx context.Context, port uint16, addr string) (ne
 	// if we dial a remote target we want a smaller timeout as we might run
 	// into an io timeout instead of connection refused
 	dialer.Timeout = time.Millisecond * 10
-	fwd.log.Debugf("forwarder: connecting to target address %s", targetAddr.String())
+	fwd.log.Debugf("connecting to target address %s", targetAddr.String())
 	ticker := time.NewTicker(time.Millisecond)
 
 	defer ticker.Stop()

@@ -123,7 +123,7 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 	c.process = p
 	c.initialProcess = p
 
-	if err := c.initActivator(ctx, c.SkipStart()); err != nil {
+	if err := c.initActivator(ctx); err != nil {
 		log.G(ctx).Warnf("activator init failed, disabling scale down: %s", err)
 		c.cfg.ScaleDownDuration = 0
 	}
@@ -432,7 +432,7 @@ func (c *Container) activatorOpts(ctx context.Context) []reuse.Option {
 	return opts
 }
 
-func (c *Container) initActivator(ctx context.Context, enableRedirects bool) error {
+func (c *Container) initActivator(ctx context.Context) error {
 	c.cancelInit()
 
 	if c.activator == nil {
@@ -458,7 +458,7 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 			// ports might fail in various ways. We schedule a retry.
 			retryIn := c.initRetry()
 			log.G(ctx).Infof("no ports detected, retrying init in %s", retryIn)
-			c.retryInitIn(retryIn, enableRedirects)
+			c.retryInitIn(retryIn)
 			return nil
 		}
 
@@ -468,14 +468,15 @@ func (c *Container) initActivator(ctx context.Context, enableRedirects bool) err
 	log.G(ctx).Infof("starting activator with ports: %v", c.cfg.Ports)
 	if err := c.startActivator(ctx, c.cfg.Ports...); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) || errors.Is(err, reuse.ErrNoListeningSockets) {
-			c.retryInitIn(c.initRetry(), enableRedirects)
+			c.retryInitIn(c.initRetry())
 			return nil
 		}
 		return err
 	}
 
-	if enableRedirects {
-		return c.activator.ScaleDown()
+	if c.startInfo.skip {
+		// this is no longer needed with the new activator
+		// return c.activator.ScaleDown()
 	}
 	return nil
 }
@@ -493,10 +494,10 @@ func (c *Container) initRetry() time.Duration {
 	return c.initBackoff
 }
 
-func (c *Container) retryInitIn(in time.Duration, enableRedirects bool) {
+func (c *Container) retryInitIn(in time.Duration) {
 	log.G(c.context).Infof("scheduling init in %s", in)
 	timer := time.AfterFunc(in, func() {
-		if err := c.initActivator(c.context, enableRedirects); err != nil {
+		if err := c.initActivator(c.context); err != nil {
 			log.G(c.context).Warnf("error initializing activator: %s", err)
 		}
 	})
@@ -519,6 +520,17 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	// 	log.G(ctx).WithError(err).Error("failed to attach activator")
 	// 	return err
 	// }
+	if len(c.startInfo.listeners) == 0 {
+		for _, port := range ports {
+			c.startInfo.listeners = append(
+				c.startInfo.listeners,
+				// if startInfo was empty, we fall back to tcp4/tcp6 combo
+				// TODO: we could also try and read it from the checkpoint image
+				reuse.Listener{Port: port, Network: reuse.NetworkTCP4},
+				reuse.Listener{Port: port, Network: reuse.NetworkTCP6ONLY},
+			)
+		}
+	}
 
 	if err := c.activator.Start(c.context, c.Pid(), c.startInfo.listeners, c.SkipStart()); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {

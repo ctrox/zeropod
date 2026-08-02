@@ -92,6 +92,12 @@ func (act *Activator) listenWake(port uint16, network Network, wl *wakeListener)
 	}
 	wl.epollFd = epfd
 
+	var stat syscall.Stat_t
+	if err := syscall.Fstat(int(wl.lnFd.Fd()), &stat); err != nil {
+		return err
+	}
+	act.wakeInodes = append(act.wakeInodes, stat.Ino)
+
 	go act.watchWake(epfd, wl.lnFd.Fd(), network)
 	return nil
 }
@@ -245,6 +251,24 @@ func (act *Activator) listenerFds(pid int) ([]listener, error) {
 			if err != nil {
 				continue
 			}
+
+			// TODO: dry this
+			sockaddr, err := unix.Getsockname(fd)
+			if err != nil {
+				_ = unix.Close(fd)
+				continue
+			}
+			var port int
+			switch sa := sockaddr.(type) {
+			case *unix.SockaddrInet4:
+				port = sa.Port
+			case *unix.SockaddrInet6:
+				port = sa.Port
+			}
+			if listener.port != uint16(port) {
+				_ = unix.Close(fd)
+				continue
+			}
 			network, err := getNetworkFromSock(fd)
 			if err != nil {
 				_ = unix.Close(fd)
@@ -267,17 +291,16 @@ func getNetworkFromSock(fd int) (Network, error) {
 	}
 	if domain == unix.AF_INET6 {
 		if v, err := unix.GetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY); err == nil && v == 1 {
-			return networkTCP6ONLY, nil
+			return NetworkTCP6ONLY, nil
 		}
-		return networkTCPAny, nil
+		return NetworkTCPAny, nil
 	}
-	return networkTCP4, nil
+	return NetworkTCP4, nil
 }
 
 // attachListener attaches select_or_migrate to the listeners reuseport group
 // and puts it into the key slot.
-func (act *Activator) attachListener(key uint32, lnFd uintptr, bpfMap *ebpf.Map,
-	prog *ebpf.Program) error {
+func (act *Activator) attachListener(key uint32, lnFd uintptr, bpfMap *ebpf.Map, prog *ebpf.Program) error {
 	if err := unix.SetsockoptInt(int(lnFd), unix.SOL_SOCKET,
 		unix.SO_ATTACH_REUSEPORT_EBPF, prog.FD()); err != nil {
 		return fmt.Errorf("attach reuseport prog: %w", err)

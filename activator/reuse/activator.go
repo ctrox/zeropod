@@ -28,9 +28,9 @@ import (
 type Network string
 
 const (
-	networkTCP4     Network = "tcp4"
-	networkTCPAny   Network = "tcp"
-	networkTCP6ONLY Network = "tcp6"
+	NetworkTCP4     Network = "tcp4"
+	NetworkTCPAny   Network = "tcp"
+	NetworkTCP6ONLY Network = "tcp6"
 )
 
 type Activator struct {
@@ -398,7 +398,7 @@ func (act *Activator) wake(network Network) error {
 func (act *Activator) poke(port uint16, network Network) error {
 	return act.ns.Do(func(nn ns.NetNS) error {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		if network == networkTCPAny || network == networkTCP6ONLY {
+		if network == NetworkTCPAny || network == NetworkTCP6ONLY {
 			addr = fmt.Sprintf("[::1]:%d", port)
 		}
 		dialer := net.Dialer{Timeout: time.Second}

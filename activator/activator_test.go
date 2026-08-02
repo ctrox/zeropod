@@ -243,12 +243,12 @@ func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *
 	err := s.Start(
 		ctx,
 		tc.connHook,
-		func() error {
+		func() (int, error) {
 			if tc.loopConnection {
 				loopIterations += 1
 				if loopIterations > 10 {
 					t.Error("loop detection failed")
-					return fmt.Errorf("loop detection failed")
+					return 0, fmt.Errorf("loop detection failed")
 				}
 				// return nil
 			}
@@ -279,7 +279,7 @@ func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *
 					ts.Close()
 				})
 			})
-			return nil
+			return 0, nil
 		},
 		port,
 	)
