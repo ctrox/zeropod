@@ -46,6 +46,7 @@ message ContainerStatus {
 	google.protobuf.Timestamp event_time = 6;
 	google.protobuf.Duration event_duration = 7;
 	string event_log = 8;
+	bool dry_run = 9;
 }
 
 message ContainerMetrics {

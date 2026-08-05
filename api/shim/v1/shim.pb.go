@@ -265,6 +265,7 @@ type ContainerStatus struct {
 	EventTime     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
 	EventDuration *durationpb.Duration   `protobuf:"bytes,7,opt,name=event_duration,json=eventDuration,proto3" json:"event_duration,omitempty"`
 	EventLog      string                 `protobuf:"bytes,8,opt,name=event_log,json=eventLog,proto3" json:"event_log,omitempty"`
+	DryRun        bool                   `protobuf:"varint,9,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -353,6 +354,13 @@ func (x *ContainerStatus) GetEventLog() string {
 		return x.EventLog
 	}
 	return ""
+}
+
+func (x *ContainerStatus) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
 }
 
 type ContainerMetrics struct {
@@ -484,7 +492,7 @@ const file_shim_proto_rawDesc = "" +
 	"\x0fMetricsResponse\x12;\n" +
 	"\ametrics\x18\x01 \x03(\v2!.zeropod.shim.v1.ContainerMetricsR\ametrics\"\"\n" +
 	"\x10ContainerRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\xc6\x02\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\xdf\x02\n" +
 	"\x0fContainerStatus\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x19\n" +
@@ -494,7 +502,8 @@ const file_shim_proto_rawDesc = "" +
 	"\n" +
 	"event_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\teventTime\x12@\n" +
 	"\x0eevent_duration\x18\a \x01(\v2\x19.google.protobuf.DurationR\reventDuration\x12\x1b\n" +
-	"\tevent_log\x18\b \x01(\tR\beventLog\"\xf6\x03\n" +
+	"\tevent_log\x18\b \x01(\tR\beventLog\x12\x17\n" +
+	"\adry_run\x18\t \x01(\bR\x06dryRun\"\xf6\x03\n" +
 	"\x10ContainerMetrics\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\bpod_name\x18\x02 \x01(\tR\apodName\x12#\n" +

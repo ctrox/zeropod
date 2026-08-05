@@ -25,6 +25,8 @@ func TestEventCreator(t *testing.T) {
 	for name, tc := range map[string]struct {
 		statusPhase        v1.ContainerPhase
 		statusDuration     time.Duration
+		statusDryRun       bool
+		statusEventLog     string
 		containerName      string
 		expectedReason     string
 		expectedMessage    string
@@ -58,6 +60,25 @@ func TestEventCreator(t *testing.T) {
 			expectedReason:     reasonScaledDown,
 			expectedMessage:    "Scaled down container c in 1s",
 		},
+		"dry run scaled down": {
+			containerName: "c",
+			// dry-run never changes the real phase, unlike a real scale down.
+			statusPhase:        v1.ContainerPhase_RUNNING,
+			statusDryRun:       true,
+			statusEventLog:     "would have scaled down after 10s of inactivity",
+			expectEventCreated: true,
+			expectedReason:     reasonDryRun,
+			expectedMessage:    "Dry-run: container c would have scaled down after 10s of inactivity",
+		},
+		"dry run restored": {
+			containerName:      "c",
+			statusPhase:        v1.ContainerPhase_RUNNING,
+			statusDryRun:       true,
+			statusEventLog:     "would have restored (got exec)",
+			expectEventCreated: true,
+			expectedReason:     reasonDryRun,
+			expectedMessage:    "Dry-run: container c would have restored (got exec)",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			client := fake.NewClientBuilder().WithScheme(scheme).Build()
@@ -71,6 +92,8 @@ func TestEventCreator(t *testing.T) {
 				PodName:      pod.Name,
 				PodNamespace: pod.Namespace,
 				Phase:        tc.statusPhase,
+				DryRun:       tc.statusDryRun,
+				EventLog:     tc.statusEventLog,
 			}
 			if tc.statusDuration != 0 {
 				status.EventDuration = durationpb.New(tc.statusDuration)

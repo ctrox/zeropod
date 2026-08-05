@@ -160,3 +160,20 @@ been established. Defaults to `5s` if unset.
 Features that are marked as experimental might change form in the future or
 could be removed entirely in future releases depending on the stability and
 need.
+
+### Dry Run
+
+```yaml
+zeropod.ctrox.dev/dry-run: "true"
+```
+
+Runs the scale-down timer exactly as normal (same activity tracking, same
+scale-down duration logic) but never actually checkpoints or kills the
+process and never enables traffic redirection - the container keeps running
+and serving traffic uninterrupted. Instead, zeropod logs when it *would have*
+scaled down and when it *would have* restored. Use this to evaluate zeropod's
+behaviour on a workload risk-free before enabling it for real. Cannot be
+combined with `migrate`/`live-migrate`. Note that in-place resource scaling
+(`cpu-requests`/`memory-requests`) is also not previewed - since the
+container is never actually marked as scaled down, its resource requests are
+never touched while dry-run is active.

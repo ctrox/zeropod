@@ -12,7 +12,8 @@ spec:
       labels:
         app: nginx
       annotations:
-        zeropod.ctrox.dev/scaledown-duration: 10s
+        zeropod.ctrox.dev/scaledown-duration: 15s
+        zeropod.ctrox.dev/dry-run: "true"
     spec:
       runtimeClassName: zeropod
       containers:

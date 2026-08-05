@@ -25,6 +25,7 @@ const (
 	ContainerNamesAnnotationKey      = "zeropod.ctrox.dev/container-names"
 	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledown-duration"
 	DisableCheckpoiningAnnotationKey = "zeropod.ctrox.dev/disable-checkpointing"
+	DryRunAnnotationKey              = "zeropod.ctrox.dev/dry-run"
 	PreDumpAnnotationKey             = "zeropod.ctrox.dev/pre-dump"
 	MigrateAnnotationKey             = "zeropod.ctrox.dev/migrate"
 	LiveMigrateAnnotationKey         = "zeropod.ctrox.dev/live-migrate"
@@ -60,6 +61,7 @@ var ContainerdAnnotations = []string{
 	ContainerNamesAnnotationKey,
 	ScaleDownDurationAnnotationKey,
 	DisableCheckpoiningAnnotationKey,
+	DryRunAnnotationKey,
 	PreDumpAnnotationKey,
 	MigrateAnnotationKey,
 	LiveMigrateAnnotationKey,
@@ -76,6 +78,7 @@ type AnnotationConfig struct {
 	Ports                 []uint16
 	ScaleDownDuration     time.Duration
 	DisableCheckpointing  bool
+	DryRun                bool
 	PreDump               bool
 	Migrate               []string
 	LiveMigrate           string
@@ -175,6 +178,20 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		migrate = strings.Split(migrateValue, containersDelim)
 	}
 
+	dryRunValue := spec.Annotations[DryRunAnnotationKey]
+	dryRun := false
+	if dryRunValue != "" {
+		dryRun, err = strconv.ParseBool(dryRunValue)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	liveMigrateValue := spec.Annotations[LiveMigrateAnnotationKey]
+	if dryRun && (slices.Contains(migrate, containerName) || (liveMigrateValue != "" && liveMigrateValue == containerName)) {
+		return nil, fmt.Errorf("dry-run (%s) cannot be combined with migrate/live-migrate for container %q", DryRunAnnotationKey, containerName)
+	}
+
 	ns, ok := namespaces.Namespace(ctx)
 	if !ok {
 		ns = defaultContainerdNS
@@ -243,6 +260,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		Ports:                 containerPorts,
 		ScaleDownDuration:     dur,
 		DisableCheckpointing:  disableCheckpointing,
+		DryRun:                dryRun,
 		PreDump:               preDump,
 		Migrate:               migrate,
 		LiveMigrate:           spec.Annotations[LiveMigrateAnnotationKey],

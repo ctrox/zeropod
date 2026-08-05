@@ -387,6 +387,12 @@ func disableCheckpointing(disable bool) podOption {
 	})
 }
 
+func dryRun(dryRun bool) podOption {
+	return annotations(map[string]string{
+		shimv1.DryRunAnnotationKey: strconv.FormatBool(dryRun),
+	})
+}
+
 func scaleDownAfter(dur time.Duration) podOption {
 	return annotations(map[string]string{
 		shimv1.ScaleDownDurationAnnotationKey: dur.String(),

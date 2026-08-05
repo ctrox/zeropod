@@ -104,6 +104,13 @@ func TestE2E(t *testing.T) {
 			maxReqDuration: time.Second,
 			expectRunning:  true,
 		},
+		"pod with dry-run": {
+			pod:            testPod(dryRun(true), defaultScaleDownAfter),
+			parallelReqs:   1,
+			sequentialReqs: 1,
+			maxReqDuration: time.Second,
+			expectRunning:  true,
+		},
 		"pod with multiple containers": {
 			pod:            testPod(agnContainer("c1", 8080), agnContainer("c2", 8081), defaultScaleDownAfter),
 			svc:            testService(8081),
