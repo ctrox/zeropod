@@ -37,10 +37,7 @@ type Activator struct {
 	*Config
 	ports          []uint16
 	mu             sync.Mutex
-	wakeListeners  map[listenerKey]*wakeListener
-	probeListeners map[listenerKey]*probeListener
-	appListeners   map[listenerKey]*appListener
-	forwarder      map[listenerKey]*forwarder
+	listeners      map[listenerKey]*listenerGroup
 	wakeInodes     []uint64
 	log            *log.Entry
 	ns             ns.NetNS
@@ -65,15 +62,12 @@ func New(ctx context.Context, ns ns.NetNS, cgroupsPath string, opts ...Option) (
 		opt(cfg)
 	}
 	act := &Activator{
-		ns:             ns,
-		cgroupsPath:    cgroupsPath,
-		log:            log.GetLogger(ctx),
-		sandboxPid:     parsePidFromNetNS(ns),
-		wakeListeners:  make(map[listenerKey]*wakeListener),
-		appListeners:   make(map[listenerKey]*appListener),
-		probeListeners: make(map[listenerKey]*probeListener),
-		forwarder:      make(map[listenerKey]*forwarder),
-		Config:         cfg,
+		ns:          ns,
+		cgroupsPath: cgroupsPath,
+		log:         log.GetLogger(ctx),
+		sandboxPid:  parsePidFromNetNS(ns),
+		listeners:   make(map[listenerKey]*listenerGroup),
+		Config:      cfg,
 	}
 	if err := act.LoadBPF(); err != nil {
 		return nil, fmt.Errorf("loading ebpf: %w", err)
@@ -183,7 +177,7 @@ func (act *Activator) Start(ctx context.Context, pid int, listeners Listeners, s
 				}
 			}
 			act.mu.Lock()
-			act.wakeListeners[key] = &wakeListener{reuse: objs}
+			act.listeners[key] = &listenerGroup{wake: wakeListener{reuse: objs}}
 			act.mu.Unlock()
 		}
 		if err := act.ScaleDown(); err != nil {
@@ -209,14 +203,10 @@ func (act *Activator) Started() bool {
 func (act *Activator) Stop() error {
 	act.mu.Lock()
 	defer act.mu.Unlock()
-	for _, wl := range act.wakeListeners {
-		wl.close()
-	}
-	for _, pl := range act.probeListeners {
-		pl.close()
-	}
-	for _, fwd := range act.forwarder {
-		fwd.close()
+	for _, ln := range act.listeners {
+		ln.wake.close()
+		ln.probe.close()
+		ln.forwarder.close()
 	}
 	if act.sockoptObjects != nil {
 		act.sockoptObjects.Close()
@@ -293,8 +283,8 @@ func (act *Activator) Reload(opts ...Option) error {
 	}
 	act.mu.Lock()
 	defer act.mu.Unlock()
-	for _, wl := range act.wakeListeners {
-		if err := wl.reuse.ProbeAddr.Set(act.probeAddrValue()); err != nil {
+	for _, ln := range act.listeners {
+		if err := ln.wake.reuse.ProbeAddr.Set(act.probeAddrValue()); err != nil {
 			return err
 		}
 	}
@@ -375,14 +365,12 @@ func (act *Activator) wake(network Network) error {
 	}
 	act.mu.Lock()
 	defer act.mu.Unlock()
-	for _, wl := range act.wakeListeners {
-		wl.closeListener()
-	}
-	for _, pl := range act.probeListeners {
+	for _, ln := range act.listeners {
+		ln.wake.closeListener()
 		if !closeProbe {
 			continue
 		}
-		pl.closeListener()
+		ln.probe.closeListener()
 	}
 	// sk_reuseport/migrate only seems to migrate pending connections to the
 	// wake listener only when a new conn comes in. We call poke which just
@@ -413,24 +401,22 @@ func (act *Activator) poke(port uint16, network Network) error {
 func (act *Activator) ScaleDown() error {
 	act.mu.Lock()
 	defer act.mu.Unlock()
-	for _, wl := range act.wakeListeners {
-		wl.closeListener()
-	}
-	for _, pl := range act.probeListeners {
-		pl.closeListener()
+	for _, ln := range act.listeners {
+		ln.wake.closeListener()
+		ln.probe.closeListener()
 	}
 	act.wakeInodes = []uint64{}
-	for k := range act.wakeListeners {
-		if err := act.listenWake(k.port, k.network, act.wakeListeners[k]); err != nil {
+	for k := range act.listeners {
+		if err := act.listenWake(k.port, k.network, &act.listeners[k].wake); err != nil {
 			return err
 		}
 		pl := &probeListener{}
-		if err := act.listenProbe(k.port, k.network, act.wakeListeners[k], pl); err != nil {
+		if err := act.listenProbe(k.port, k.network, &act.listeners[k].wake, pl); err != nil {
 			return err
 		}
-		act.probeListeners[k] = pl
+		act.listeners[k].probe = *pl
 	}
-	act.log.Debugf("listening for new connections on %d wake listeners: %v", len(act.wakeListeners), act.wakeListeners)
+	act.log.Debugf("listening for new connections on %d listeners: %v", len(act.listeners), act.listeners)
 	return nil
 }
 
@@ -443,7 +429,7 @@ type Listeners []Listener
 
 func (act *Activator) GetListeners() []Listener {
 	listeners := []Listener{}
-	for k := range act.appListeners {
+	for k := range act.listeners {
 		listeners = append(listeners, Listener{Port: k.port, Network: k.network})
 	}
 	return listeners

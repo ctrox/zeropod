@@ -19,6 +19,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+type listenerGroup struct {
+	wake      wakeListener
+	probe     probeListener
+	app       appListener
+	forwarder forwarder
+}
+
 type wakeListener struct {
 	ln      *net.TCPListener
 	lnFd    *os.File
@@ -165,7 +172,7 @@ func (act *Activator) registerListeners(pid int) error {
 		defer l.fd.Close()
 
 		key := listenerKey{port: l.port, network: l.network}
-		if _, ok := act.wakeListeners[key]; !ok {
+		if _, ok := act.listeners[key]; !ok {
 			objs := &reuseportObjects{}
 			if err := loadReuseportObjects(objs, &ebpf.CollectionOptions{}); err != nil {
 				return fmt.Errorf("loading reuseport objects: %w", err)
@@ -175,15 +182,15 @@ func (act *Activator) registerListeners(pid int) error {
 					return err
 				}
 			}
-			act.wakeListeners[key] = &wakeListener{reuse: objs}
+			act.listeners[key].wake = wakeListener{reuse: objs}
 		}
-		wl := act.wakeListeners[key]
+		wl := act.listeners[key].wake
 		act.log.Debugf("registering ln %d port %d net %s ino %d", l.fd.Fd(), l.port, l.network, l.inode)
 		if err := act.attachListener(appKey, l.fd.Fd(), wl.reuse.Listeners, wl.reuse.SelectOrMigrate); err != nil {
 			return fmt.Errorf("registering listener: %w", err)
 		}
 		act.log.Debugf("caching port %d fd %d", l.port, l.origFd)
-		act.appListeners[key] = &appListener{fd: l.origFd}
+		act.listeners[key].app = appListener{fd: l.origFd}
 	}
 	if len(listeners) == 0 {
 		return ErrNoListeningSockets
@@ -208,7 +215,7 @@ func (act *Activator) probeAddrValue() [16]byte {
 
 func (act *Activator) listenerFds(pid int) ([]listener, error) {
 	l, err := act.listenerFdsFromCache(pid)
-	if err == nil && len(l) > 0 && len(l) == len(act.appListeners) {
+	if err == nil && len(l) > 0 && len(l) == len(act.listeners) {
 		return l, nil
 	}
 	// close fds in case the cache returned partial listeners
@@ -363,7 +370,7 @@ func listenReuseport(port uint16, network Network) (*net.TCPListener, error) {
 }
 
 func (act *Activator) listenerFdsFromCache(pid int) ([]listener, error) {
-	cache := act.appListeners
+	cache := act.listeners
 	if len(cache) == 0 {
 		return nil, nil
 	}
@@ -390,7 +397,7 @@ func (act *Activator) listenerFdsFromCache(pid int) ([]listener, error) {
 			if _, ok := resolved[k]; ok {
 				continue
 			}
-			fd, err := unix.PidfdGetfd(pidfd, v.fd, 0)
+			fd, err := unix.PidfdGetfd(pidfd, v.app.fd, 0)
 			if err != nil {
 				continue
 			}
@@ -431,7 +438,7 @@ func (act *Activator) listenerFdsFromCache(pid int) ([]listener, error) {
 				port:    k.port,
 				network: network,
 				fd:      os.NewFile(uintptr(fd), ""),
-				origFd:  v.fd,
+				origFd:  v.app.fd,
 				inode:   uint32(stat.Ino),
 			})
 		}

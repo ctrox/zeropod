@@ -30,7 +30,7 @@ func (act *Activator) ForwardToTarget(ctx context.Context, addr string) error {
 	act.log.Infof("starting forward to target %s", addr)
 	act.mu.Lock()
 	defer act.mu.Unlock()
-	for k, wl := range act.wakeListeners {
+	for k, ln := range act.listeners {
 		fwd := &forwarder{
 			targetAddr: addr,
 			log:        act.log.WithField("component", "forwarder"),
@@ -49,17 +49,19 @@ func (act *Activator) ForwardToTarget(ctx context.Context, addr string) error {
 		}); err != nil {
 			return err
 		}
-		if err := act.attachNetListener(fwd.ln, appKey, wl.reuse.Listeners, wl.reuse.SelectOrMigrate, nil); err != nil {
+		if err := act.attachNetListener(fwd.ln, appKey, ln.wake.reuse.Listeners, ln.wake.reuse.SelectOrMigrate, nil); err != nil {
 			return fmt.Errorf("registering listener: %w", err)
 		}
-		act.forwarder[k] = fwd
+		act.listeners[k].forwarder = *fwd
 		go fwd.serveForward(ctx, fwd.ln, k.port)
 	}
 	return nil
 }
 
 func (fwd *forwarder) close() {
-	fwd.quit <- struct{}{}
+	if fwd.quit != nil {
+		fwd.quit <- struct{}{}
+	}
 	if fwd.ln != nil {
 		_ = fwd.ln.Close()
 	}
