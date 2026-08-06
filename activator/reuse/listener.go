@@ -31,6 +31,7 @@ type wakeListener struct {
 	lnFd    *os.File
 	reuse   *reuseportObjects
 	epollFd int
+	stopFd  int
 }
 
 type appListener struct {
@@ -53,12 +54,16 @@ type listener struct {
 var ErrNoListeningSockets = errors.New("no listening sockets found")
 
 func (wl *wakeListener) closeListener() {
+	var buf [8]byte
+	buf[0] = 1
+	_, _ = unix.Write(wl.stopFd, buf[:])
 	if wl.ln != nil {
 		_ = wl.ln.Close()
 	}
 	if wl.lnFd != nil {
 		_ = wl.lnFd.Close()
 	}
+	unix.Close(wl.stopFd)
 }
 
 func (wl *wakeListener) close() {
@@ -105,15 +110,21 @@ func (act *Activator) listenWake(port uint16, network Network, wl *wakeListener)
 	}
 	act.wakeInodes = append(act.wakeInodes, stat.Ino)
 
-	go act.watchWake(epfd, wl.lnFd.Fd(), network)
+	stopFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
+	if err != nil {
+		return err
+	}
+	go act.watchWake(epfd, wl.lnFd.Fd(), stopFd, network)
+	wl.stopFd = stopFd
+
 	return nil
 }
 
 // watchWake polls the wake listener without ever accepting and calls wake as
 // soon as the poll returns something.
-func (act *Activator) watchWake(epfd int, fd uintptr, network Network) {
+func (act *Activator) watchWake(epfd int, fd uintptr, stopFd int, network Network) {
 	defer func() {
-		_ = unix.EpollCtl(epfd, unix.EPOLL_CTL_DEL, int(fd), nil)
+		_ = unix.Close(int(fd))
 		_ = unix.Close(epfd)
 	}()
 	event := unix.EpollEvent{
@@ -124,6 +135,14 @@ func (act *Activator) watchWake(epfd int, fd uintptr, network Network) {
 		act.log.WithError(err).Error("failed to register socket with epoll")
 		return
 	}
+	stopEvent := unix.EpollEvent{
+		Events: unix.EPOLLIN,
+		Fd:     int32(stopFd),
+	}
+	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, stopFd, &stopEvent); err != nil {
+		act.log.WithError(err).Error("failed to register stopfd with epoll")
+		return
+	}
 	events := make([]unix.EpollEvent, 10)
 	for {
 		n, err := unix.EpollWait(epfd, events, -1)
@@ -131,20 +150,23 @@ func (act *Activator) watchWake(epfd int, fd uintptr, network Network) {
 			if err == unix.EINTR {
 				continue
 			}
-			// TODO: figure out how to close this EpollWait
 			act.log.WithError(err).Error("epoll wait failed")
 			break
 		}
 
 		for i := range n {
-			if int(events[i].Fd) != int(fd) {
+			evFd := int(events[i].Fd)
+			if evFd == stopFd {
+				act.log.Debug("shutdown signal received, exiting epoll")
+				return
+			}
+			if evFd != int(fd) {
 				continue
 			}
 			act.log.Info("socket activity detected, waking up")
 			if err := act.wake(network); err != nil {
 				act.log.WithError(err).Error("wake")
 			}
-
 			return
 		}
 	}
