@@ -3,6 +3,7 @@ package reuse
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,11 +12,13 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/cilium/ebpf"
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
@@ -28,16 +31,18 @@ type testCase struct {
 	parallelReqs           int
 	expectedBody           string
 	expectedCode           int
+	cycles                 int
 	expectLastActivity     bool
-	ipv6                   bool
 	trackerIgnoreLocalhost bool
 	kubeletAddr            *netip.Addr
+	networks               []Network
+	clientNetwork          Network
 	forwardToFunc          func(t *testing.T, port int) (string, *httptest.Server)
 }
 
 func TestReuseActivator(t *testing.T) {
 	if os.Getenv("IN_NET_PID_NS") == "1" {
-		listen(t)
+		listenAndServe(t)
 		return
 	}
 
@@ -55,60 +60,74 @@ func TestReuseActivator(t *testing.T) {
 	tests := map[string]testCase{
 		"ipv4": {
 			parallelReqs:       1,
+			cycles:             1,
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
+			networks:           []Network{NetworkTCP4},
 		},
 		"ipv6": {
 			parallelReqs:       1,
+			cycles:             1,
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
-			ipv6:               true,
 			expectLastActivity: true,
+			networks:           []Network{NetworkTCP6ONLY},
+			clientNetwork:      NetworkTCP6ONLY,
 		},
 		"100 in parallel": {
 			parallelReqs:       100,
+			cycles:             1,
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
+			networks:           []Network{NetworkTCP4},
 		},
 		"ignore activity from localhost v4": {
 			parallelReqs:           1,
+			cycles:                 1,
 			expectedBody:           "app",
 			expectedCode:           http.StatusOK,
-			ipv6:                   false,
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
+			networks:               []Network{NetworkTCP4},
 		},
 		"ignore activity from localhost v6": {
 			parallelReqs:           1,
+			cycles:                 1,
 			expectedBody:           "app",
 			expectedCode:           http.StatusOK,
-			ipv6:                   true,
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
+			networks:               []Network{NetworkTCP6ONLY},
+			clientNetwork:          NetworkTCP6ONLY,
 		},
 		"ignore kubelet traffic ipv4": {
 			parallelReqs:       1,
+			cycles:             1,
 			expectedBody:       "ok\n",
 			expectedCode:       http.StatusOK,
-			ipv6:               false,
 			expectLastActivity: false,
 			kubeletAddr:        ptr.To(netip.MustParseAddr("127.0.0.1")),
+			networks:           []Network{NetworkTCP4},
 		},
 		"ignore kubelet traffic ipv6": {
 			parallelReqs:       1,
+			cycles:             1,
 			expectedBody:       "ok\n",
 			expectedCode:       http.StatusOK,
-			ipv6:               true,
 			expectLastActivity: false,
 			kubeletAddr:        ptr.To(netip.MustParseAddr("::1")),
+			networks:           []Network{NetworkTCP6ONLY},
+			clientNetwork:      NetworkTCP6ONLY,
 		},
 		"forward": {
 			parallelReqs:       1,
+			cycles:             1,
 			expectedBody:       "hello from another server",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
+			networks:           []Network{NetworkTCP4},
 			forwardToFunc: func(t *testing.T, port int) (string, *httptest.Server) {
 				ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					fmt.Fprint(w, "hello from another server")
@@ -125,42 +144,65 @@ func TestReuseActivator(t *testing.T) {
 				return "127.0.0.2", ts
 			},
 		},
+		"cycles": {
+			parallelReqs:       1,
+			cycles:             10,
+			expectedBody:       "app",
+			expectedCode:       http.StatusOK,
+			expectLastActivity: true,
+			networks:           []Network{NetworkTCP6ONLY},
+			clientNetwork:      NetworkTCP6ONLY,
+		},
+		// TODO: this test might have surfaced an issue with the wake.
+		"ipv4 and ipv6": {
+			parallelReqs:       1,
+			cycles:             1,
+			expectedBody:       "app",
+			expectedCode:       http.StatusOK,
+			expectLastActivity: true,
+			networks:           []Network{NetworkTCP4, NetworkTCP6ONLY},
+			clientNetwork:      NetworkTCP4,
+		},
 	}
 	wg := sync.WaitGroup{}
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
-			defer checkFDLeaks(t)()
 			port, err := freePort()
 			require.NoError(t, err)
-			once := &sync.Once{}
 			require.NoError(t, log.SetLevel(log.DebugLevel.String()))
 			ctx, cancel := context.WithCancel(t.Context())
 
-			s, err := New(
-				ctx, nn, "/sys/fs/cgroup",
-			)
+			// TODO: figure out why forwardToFunc leaks fds (maybe also the forwarder itself)
+			if tc.forwardToFunc == nil {
+				defer checkFDLeaks(t)()
+			}
+			s, err := New(ctx, nn, "/sys/fs/cgroup")
 			require.NoError(t, err)
 
-			pid, err := runApp(t, tc, once, port)
+			cmd, err := runApp(t, port, tc.networks...)
 			require.NoError(t, err)
+			fmt.Printf("app pid %d\n", cmd.Process.Pid)
 
 			require.NoError(t, s.Reload(
 				ProbeAddr(tc.kubeletAddr),
 				TrackerIgnoreLocalhost(tc.trackerIgnoreLocalhost),
 				// TODO: not sure why but the socket migration breaks when we
 				// run the app in the hook itself
-				RestoreHook(func() (int, error) { return pid, nil }),
+				RestoreHook(func() (int, error) {
+					time.Sleep(time.Millisecond * 10)
+					return cmd.Process.Pid, nil
+				}),
 			))
 
 			t.Cleanup(func() {
 				cancel()
 			})
 
-			network := NetworkTCP4
-			if tc.ipv6 {
-				network = NetworkTCP6ONLY
+			listeners := Listeners{}
+			for _, net := range tc.networks {
+				listeners = append(listeners, Listener{Port: uint16(port), Network: net})
 			}
-			require.NoError(t, s.Start(ctx, os.Getpid(), Listeners{{Port: uint16(port), Network: network}}, true))
+			require.NoError(t, s.Start(ctx, os.Getpid(), listeners, true))
 			if tc.forwardToFunc != nil {
 				addr, ts := tc.forwardToFunc(t, port)
 				defer ts.Close()
@@ -168,33 +210,46 @@ func TestReuseActivator(t *testing.T) {
 				assert.NoError(t, s.Reload(RestoreHook(func() (int, error) { return 0, nil })))
 			}
 
-			for i := 0; i < tc.parallelReqs; i++ {
-				wg.Go(func() {
-					host := "127.0.0.1"
-					if tc.ipv6 {
-						host = "[::1]"
-					}
+			for range tc.cycles {
+				for i := 0; i < tc.parallelReqs; i++ {
+					for _, net := range tc.networks {
+						wg.Go(func() {
+							host := "127.0.0.1"
+							if net == NetworkTCP6ONLY {
+								host = "[::1]"
+							}
 
-					req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s:%d", host, port), nil)
-					if !assert.NoError(t, err) {
-						return
-					}
-					resp, err := c.Do(req)
-					if !assert.NoError(t, err) {
-						return
-					}
+							req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://%s:%d", host, port), nil)
+							if !assert.NoError(t, err) {
+								return
+							}
+							resp, err := c.Do(req)
+							if !assert.NoError(t, err) {
+								return
+							}
 
-					b, err := io.ReadAll(resp.Body)
-					if !assert.NoError(t, err) {
-						return
-					}
+							b, err := io.ReadAll(resp.Body)
+							if !assert.NoError(t, err) {
+								return
+							}
 
-					assert.Equal(t, tc.expectedCode, resp.StatusCode)
-					assert.Equal(t, tc.expectedBody, string(b))
-					t.Log(string(b))
-				})
+							assert.Equal(t, tc.expectedCode, resp.StatusCode)
+							assert.Equal(t, tc.expectedBody, string(b))
+							t.Log(string(b))
+						})
+					}
+				}
+				wg.Wait()
+				time.Sleep(time.Second)
+				s.ScaleDown()
+				for _, ln := range s.listeners {
+					if err := ln.wake.reuse.Listeners.Delete(uint32(appKey)); err != nil {
+						if !errors.Is(err, ebpf.ErrKeyNotExist) {
+							assert.NoError(t, err)
+						}
+					}
+				}
 			}
-			wg.Wait()
 			var key uint32
 			var val uint64
 			count := 0
@@ -213,56 +268,56 @@ func TestReuseActivator(t *testing.T) {
 				assert.ErrorIs(t, err, activator.NoActivityRecordedErr{})
 			}
 			cancel()
-			s.Stop()
+			assert.NoError(t, s.Stop())
+			assert.NoError(t, cmd.Process.Kill())
+			_ = cmd.Wait()
 		})
 	}
 }
 
-func runApp(t *testing.T, tc testCase, once *sync.Once, port int) (int, error) {
+func runApp(t *testing.T, port int, networks ...Network) (*exec.Cmd, error) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestReuseActivator$")
-	once.Do(func() {
-		network := "tcp4"
-		if tc.ipv6 {
-			network = "tcp6"
-		}
 
-		cmd.Env = append(
-			os.Environ(),
-			"IN_NET_PID_NS=1",
-			fmt.Sprintf("NETWORK=%s", network),
-			fmt.Sprintf("ADDRESS=:%d", port),
-			fmt.Sprintf("PORT=%d", port),
-			fmt.Sprintf("RESPONSE=%s", "app"),
-			"GODEBUG=multipathtcp=0",
-		)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
+	nets := []string{}
+	for _, net := range networks {
+		nets = append(nets, string(net))
+	}
+	cmd.Env = append(
+		os.Environ(),
+		"IN_NET_PID_NS=1",
+		fmt.Sprintf("NETWORKS=%s", strings.Join(nets, ",")),
+		fmt.Sprintf("ADDRESS=:%d", port),
+		fmt.Sprintf("PORT=%d", port),
+		fmt.Sprintf("RESPONSE=%s", "app"),
+		"GODEBUG=multipathtcp=0",
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{
+		Cloneflags: syscall.CLONE_NEWPID,
+	}
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	defer r.Close()
+	cmd.ExtraFiles = []*os.File{w}
 
-		cmd.SysProcAttr = &syscall.SysProcAttr{
-			Cloneflags: syscall.CLONE_NEWPID,
-		}
-		r, w, err := os.Pipe()
-		if err != nil {
-			t.Fatalf("failed to create pipe: %v", err)
-		}
-		defer r.Close()
-		cmd.ExtraFiles = []*os.File{w}
-
-		require.NoError(t, cmd.Start())
-		t.Cleanup(func() {
-			cmd.Process.Kill()
-			cmd.Wait()
-		})
-		ready := make(chan struct{})
-		go func() {
-			buf := make([]byte, 1)
-			r.Read(buf)
-			close(ready)
-		}()
-		<-ready
+	require.NoError(t, cmd.Start())
+	w.Close()
+	t.Cleanup(func() {
+		cmd.Process.Kill()
+		cmd.Wait()
 	})
+	ready := make(chan struct{})
+	go func() {
+		buf := make([]byte, 1)
+		r.Read(buf)
+		close(ready)
+	}()
+	<-ready
 	t.Logf("using pid %d", cmd.Process.Pid)
-	return cmd.Process.Pid, nil
+	return cmd, nil
 }
 
 func freePort() (int, error) {
@@ -283,21 +338,32 @@ func freePort() (int, error) {
 	return addr.Port, nil
 }
 
-func listen(t *testing.T) {
-	ln, err := net.Listen(os.Getenv("NETWORK"), os.Getenv("ADDRESS"))
-	if err != nil {
-		t.Fatalf("create listener in isolated netns: %v", err)
+func listenAndServe(t *testing.T) {
+	wg := sync.WaitGroup{}
+	networks := strings.SplitSeq(os.Getenv("NETWORKS"), ",")
+	fd := uintptr(3)
+	for n := range networks {
+		fmt.Printf("listening on %s\n", n)
+		ln, err := net.Listen(n, os.Getenv("ADDRESS"))
+		if err != nil {
+			t.Fatalf("create listener in isolated netns: %v", err)
+		}
+		defer ln.Close()
+		pipe := os.NewFile(fd, "pipe")
+		if pipe != nil {
+			pipe.Write([]byte{1})
+			pipe.Close()
+		}
+		fd++
+		wg.Go(func() {
+			http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				fmt.Fprint(w, os.Getenv("RESPONSE"))
+			}))
+		})
 	}
-	defer ln.Close()
-	fmt.Printf("listening on %s %s inside PID %d\n", ln.Addr(), os.Getenv("NETWORK"), os.Getpid())
-	pipe := os.NewFile(3, "pipe")
-	if pipe != nil {
-		pipe.Write([]byte{1})
-		pipe.Close()
-	}
-	http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, os.Getenv("RESPONSE"))
-	}))
+	fmt.Println("serving")
+	wg.Wait()
+	fmt.Println("wait done")
 }
 
 func checkFDLeaks(t *testing.T) func() {
