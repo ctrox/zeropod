@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
-	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/prometheus/procfs"
 	"golang.org/x/sys/unix"
 )
@@ -24,12 +23,12 @@ type listenerGroup struct {
 	probe     probeListener
 	app       appListener
 	forwarder forwarder
+	reuse     *reuseportObjects
 }
 
 type wakeListener struct {
 	ln      *net.TCPListener
 	lnFd    *os.File
-	reuse   *reuseportObjects
 	epollFd int
 	stopFd  int
 }
@@ -68,27 +67,22 @@ func (wl *wakeListener) closeListener() {
 
 func (wl *wakeListener) close() {
 	wl.closeListener()
-	if wl.reuse != nil {
-		_ = wl.reuse.Close()
-	}
 }
 
-func (act *Activator) listenWake(port uint16, network Network, wl *wakeListener) error {
-	if err := act.ns.Do(func(nn ns.NetNS) error {
-		act.log.Infof("listening wake: %d %s", port, network)
-		ln, err := listenReuseport(port, network)
-		if err != nil {
-			return fmt.Errorf("wake listener: %w", err)
-		}
-		wl.ln = ln
-		return nil
-	}); err != nil {
-		return err
+func (act *Activator) listenWake(port uint16, network Network, lg *listenerGroup) error {
+	act.log.Infof("listening wake: %d %s", port, network)
+	ln, err := listenReuseport(port, network)
+	if err != nil {
+		return fmt.Errorf("wake listener: %w", err)
 	}
+	lg.wake.ln = ln
+	return nil
+}
 
+func (act *Activator) attachWake(network Network, lg *listenerGroup) error {
 	var dupFd int
 	var dupErr error
-	if err := act.attachNetListener(wl.ln, wakeKey, wl.reuse.Listeners, wl.reuse.SelectOrMigrate, func(fd uintptr) {
+	if err := act.attachNetListener(lg.wake.ln, wakeKey, lg.reuse.Listeners, lg.reuse.SelectOrMigrate, func(fd uintptr) {
 		dupFd, dupErr = syscall.Dup(int(fd))
 	}); err != nil {
 		return err
@@ -96,16 +90,16 @@ func (act *Activator) listenWake(port uint16, network Network, wl *wakeListener)
 	if dupErr != nil {
 		return dupErr
 	}
-	wl.lnFd = os.NewFile(uintptr(dupFd), "")
+	lg.wake.lnFd = os.NewFile(uintptr(dupFd), "")
 	epfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
 		act.log.WithError(err).Error("epoll create")
 		return err
 	}
-	wl.epollFd = epfd
+	lg.wake.epollFd = epfd
 
 	var stat syscall.Stat_t
-	if err := syscall.Fstat(int(wl.lnFd.Fd()), &stat); err != nil {
+	if err := syscall.Fstat(int(lg.wake.lnFd.Fd()), &stat); err != nil {
 		return err
 	}
 	act.wakeInodes = append(act.wakeInodes, stat.Ino)
@@ -114,8 +108,8 @@ func (act *Activator) listenWake(port uint16, network Network, wl *wakeListener)
 	if err != nil {
 		return err
 	}
-	go act.watchWake(epfd, wl.lnFd.Fd(), stopFd, network)
-	wl.stopFd = stopFd
+	go act.watchWake(epfd, lg.wake.lnFd.Fd(), stopFd, network)
+	lg.wake.stopFd = stopFd
 
 	return nil
 }
@@ -128,7 +122,7 @@ func (act *Activator) watchWake(epfd int, fd uintptr, stopFd int, network Networ
 		_ = unix.Close(epfd)
 	}()
 	event := unix.EpollEvent{
-		Events: unix.EPOLLIN,
+		Events: unix.EPOLLIN | unix.EPOLLONESHOT,
 		Fd:     int32(fd),
 	}
 	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, int(fd), &event); err != nil {
@@ -170,7 +164,6 @@ func (act *Activator) watchWake(epfd int, fd uintptr, stopFd int, network Networ
 			return
 		}
 	}
-	act.log.Info("wake listener exited")
 }
 
 func (act *Activator) registerListeners(pid int) error {
@@ -204,11 +197,12 @@ func (act *Activator) registerListeners(pid int) error {
 					return err
 				}
 			}
-			act.listeners[key].wake = wakeListener{reuse: objs}
+			act.listeners[key].wake = wakeListener{}
+			act.listeners[key].reuse = objs
 		}
-		wl := act.listeners[key].wake
+		ln := act.listeners[key]
 		act.log.Debugf("registering ln %d port %d net %s ino %d", l.fd.Fd(), l.port, l.network, l.inode)
-		if err := act.attachListener(appKey, l.fd.Fd(), wl.reuse.Listeners, wl.reuse.SelectOrMigrate); err != nil {
+		if err := act.attachListener(appKey, l.fd.Fd(), ln.reuse.Listeners, ln.reuse.SelectOrMigrate); err != nil {
 			return fmt.Errorf("registering listener: %w", err)
 		}
 		act.log.Debugf("caching port %d fd %d", l.port, l.origFd)

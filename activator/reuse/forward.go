@@ -49,7 +49,7 @@ func (act *Activator) ForwardToTarget(ctx context.Context, addr string) error {
 		}); err != nil {
 			return err
 		}
-		if err := act.attachNetListener(fwd.ln, appKey, ln.wake.reuse.Listeners, ln.wake.reuse.SelectOrMigrate, nil); err != nil {
+		if err := act.attachNetListener(fwd.ln, appKey, ln.reuse.Listeners, ln.reuse.SelectOrMigrate, nil); err != nil {
 			return fmt.Errorf("registering listener: %w", err)
 		}
 		act.listeners[k].forwarder = *fwd

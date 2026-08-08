@@ -48,6 +48,8 @@ type Activator struct {
 	trackerObjs    *trackerObjects
 	cgroupsPath    string
 	sandboxPid     int
+	register       sync.Mutex
+	registeredWake atomic.Bool
 }
 
 const (
@@ -177,7 +179,7 @@ func (act *Activator) Start(ctx context.Context, pid int, listeners Listeners, s
 				}
 			}
 			act.mu.Lock()
-			act.listeners[key] = &listenerGroup{wake: wakeListener{reuse: objs}}
+			act.listeners[key] = &listenerGroup{reuse: objs}
 			act.mu.Unlock()
 		}
 		if err := act.ScaleDown(); err != nil {
@@ -207,6 +209,9 @@ func (act *Activator) Stop() error {
 		ln.wake.close()
 		ln.probe.close()
 		ln.forwarder.close()
+		if ln.reuse != nil {
+			ln.reuse.Close()
+		}
 	}
 	if act.sockoptObjects != nil {
 		act.sockoptObjects.Close()
@@ -284,7 +289,7 @@ func (act *Activator) Reload(opts ...Option) error {
 	act.mu.Lock()
 	defer act.mu.Unlock()
 	for _, ln := range act.listeners {
-		if err := ln.wake.reuse.ProbeAddr.Set(act.probeAddrValue()); err != nil {
+		if err := ln.reuse.ProbeAddr.Set(act.probeAddrValue()); err != nil {
 			return err
 		}
 	}
@@ -356,9 +361,15 @@ func (act *Activator) wake(network Network) error {
 		if pid != 0 {
 			closeProbe = true
 			before := time.Now()
-			if err := act.registerListeners(pid); err != nil {
-				act.log.WithError(err).Error("registering listeners")
-				return err
+			act.register.Lock()
+			if !act.registeredWake.Load() {
+				if err := act.registerListeners(pid); err != nil {
+					act.log.WithError(err).Error("registering listeners")
+					act.register.Unlock()
+					return err
+				}
+				act.registeredWake.Store(true)
+				act.register.Unlock()
 			}
 			act.log.Debugf("registered listeners in %s", time.Since(before))
 		}
@@ -401,20 +412,30 @@ func (act *Activator) poke(port uint16, network Network) error {
 func (act *Activator) ScaleDown() error {
 	act.mu.Lock()
 	defer act.mu.Unlock()
+	act.registeredWake.Store(false)
 	for _, ln := range act.listeners {
 		ln.wake.closeListener()
 		ln.probe.closeListener()
 	}
 	act.wakeInodes = []uint64{}
 	for k := range act.listeners {
-		if err := act.listenWake(k.port, k.network, &act.listeners[k].wake); err != nil {
+		if err := act.ns.Do(func(nn ns.NetNS) error {
+			if err := act.listenWake(k.port, k.network, act.listeners[k]); err != nil {
+				return err
+			}
+			if err := act.listenProbe(k.port, k.network, act.listeners[k]); err != nil {
+				return err
+			}
+			return nil
+		}); err != nil {
 			return err
 		}
-		pl := &probeListener{}
-		if err := act.listenProbe(k.port, k.network, &act.listeners[k].wake, pl); err != nil {
+		if err := act.attachWake(k.network, act.listeners[k]); err != nil {
 			return err
 		}
-		act.listeners[k].probe = *pl
+		if err := act.attachProbe(act.listeners[k]); err != nil {
+			return err
+		}
 	}
 	act.log.Debugf("listening for new connections on %d listeners: %v", len(act.listeners), act.listeners)
 	return nil

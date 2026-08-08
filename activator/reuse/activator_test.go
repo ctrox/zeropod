@@ -36,7 +36,6 @@ type testCase struct {
 	trackerIgnoreLocalhost bool
 	kubeletAddr            *netip.Addr
 	networks               []Network
-	clientNetwork          Network
 	forwardToFunc          func(t *testing.T, port int) (string, *httptest.Server)
 }
 
@@ -73,7 +72,6 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
 			networks:           []Network{NetworkTCP6ONLY},
-			clientNetwork:      NetworkTCP6ONLY,
 		},
 		"100 in parallel": {
 			parallelReqs:       100,
@@ -100,7 +98,6 @@ func TestReuseActivator(t *testing.T) {
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
 			networks:               []Network{NetworkTCP6ONLY},
-			clientNetwork:          NetworkTCP6ONLY,
 		},
 		"ignore kubelet traffic ipv4": {
 			parallelReqs:       1,
@@ -119,7 +116,6 @@ func TestReuseActivator(t *testing.T) {
 			expectLastActivity: false,
 			kubeletAddr:        ptr.To(netip.MustParseAddr("::1")),
 			networks:           []Network{NetworkTCP6ONLY},
-			clientNetwork:      NetworkTCP6ONLY,
 		},
 		"forward": {
 			parallelReqs:       1,
@@ -151,9 +147,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
 			networks:           []Network{NetworkTCP6ONLY},
-			clientNetwork:      NetworkTCP6ONLY,
 		},
-		// TODO: this test might have surfaced an issue with the wake.
 		"ipv4 and ipv6": {
 			parallelReqs:       1,
 			cycles:             1,
@@ -161,7 +155,6 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
 			networks:           []Network{NetworkTCP4, NetworkTCP6ONLY},
-			clientNetwork:      NetworkTCP4,
 		},
 	}
 	wg := sync.WaitGroup{}
@@ -240,10 +233,9 @@ func TestReuseActivator(t *testing.T) {
 					}
 				}
 				wg.Wait()
-				time.Sleep(time.Second)
-				s.ScaleDown()
+				assert.NoError(t, s.ScaleDown())
 				for _, ln := range s.listeners {
-					if err := ln.wake.reuse.Listeners.Delete(uint32(appKey)); err != nil {
+					if err := ln.reuse.Listeners.Delete(uint32(appKey)); err != nil {
 						if !errors.Is(err, ebpf.ErrKeyNotExist) {
 							assert.NoError(t, err)
 						}
@@ -372,8 +364,16 @@ func checkFDLeaks(t *testing.T) func() {
 
 	return func() {
 		t.Helper()
-		after := getFDs(t)
 
+		after := map[string]string{}
+		// some fds can take a bit of time to release so we retry a bunch
+		for range 10 {
+			after = getFDs(t)
+			if len(after) <= len(before) {
+				break
+			}
+			time.Sleep(time.Millisecond * 100)
+		}
 		if len(after) > len(before) {
 			b, err := json.MarshalIndent(diff(before, after), "", "  ")
 			assert.NoError(t, err)

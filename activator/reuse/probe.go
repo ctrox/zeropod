@@ -5,28 +5,25 @@ import (
 	"fmt"
 	"net"
 	"time"
-
-	"github.com/containernetworking/plugins/pkg/ns"
 )
 
 type probeListener struct {
 	ln net.Listener
 }
 
-func (act *Activator) listenProbe(port uint16, network Network, wl *wakeListener, pl *probeListener) error {
-	if err := act.ns.Do(func(nn ns.NetNS) error {
-		ln, err := listenReuseport(port, network)
-		if err != nil {
-			return fmt.Errorf("wake listener: %w", err)
-		}
-		pl.ln = ln
-		return nil
-	}); err != nil {
-		return err
+func (act *Activator) listenProbe(port uint16, network Network, lg *listenerGroup) error {
+	ln, err := listenReuseport(port, network)
+	if err != nil {
+		return fmt.Errorf("wake listener: %w", err)
 	}
+	lg.probe.ln = ln
+	return nil
+}
+
+func (act *Activator) attachProbe(lg *listenerGroup) error {
 	go func() {
 		for {
-			conn, err := pl.ln.Accept()
+			conn, err := lg.probe.ln.Accept()
 			if err != nil {
 				if errors.Is(err, net.ErrClosed) {
 					break
@@ -46,7 +43,7 @@ func (act *Activator) listenProbe(port uint16, network Network, wl *wakeListener
 			}
 		}
 	}()
-	return act.attachNetListener(pl.ln, probeKey, wl.reuse.Listeners, wl.reuse.SelectOrMigrate, nil)
+	return act.attachNetListener(lg.probe.ln, probeKey, lg.reuse.Listeners, lg.reuse.SelectOrMigrate, nil)
 }
 
 // handleProbe writes an HTTP response to conn that satisfies the kubelet and
