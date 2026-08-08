@@ -65,7 +65,7 @@ func TestReuseActivator(t *testing.T) {
 			expectLastActivity: true,
 			networks:           []Network{NetworkTCP4},
 		},
-		"ipv6": {
+		"ipv6 only": {
 			parallelReqs:       1,
 			cycles:             1,
 			expectedBody:       "app",
@@ -79,7 +79,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCP4},
+			networks:           []Network{NetworkTCPAny},
 		},
 		"ignore activity from localhost v4": {
 			parallelReqs:           1,
@@ -97,7 +97,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:           http.StatusOK,
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
-			networks:               []Network{NetworkTCP6ONLY},
+			networks:               []Network{NetworkTCPAny},
 		},
 		"ignore kubelet traffic ipv4": {
 			parallelReqs:       1,
@@ -115,7 +115,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:       http.StatusOK,
 			expectLastActivity: false,
 			kubeletAddr:        ptr.To(netip.MustParseAddr("::1")),
-			networks:           []Network{NetworkTCP6ONLY},
+			networks:           []Network{NetworkTCPAny},
 		},
 		"forward": {
 			parallelReqs:       1,
@@ -146,7 +146,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCP6ONLY},
+			networks:           []Network{NetworkTCPAny},
 		},
 		"ipv4 and ipv6": {
 			parallelReqs:       1,
@@ -154,7 +154,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCP4, NetworkTCP6ONLY},
+			networks:           []Network{NetworkTCPAny},
 		},
 	}
 	wg := sync.WaitGroup{}
@@ -208,7 +208,7 @@ func TestReuseActivator(t *testing.T) {
 					for _, net := range tc.networks {
 						wg.Go(func() {
 							host := "127.0.0.1"
-							if net == NetworkTCP6ONLY {
+							if net == NetworkTCP6ONLY || net == NetworkTCPAny {
 								host = "[::1]"
 							}
 

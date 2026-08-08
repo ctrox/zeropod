@@ -34,7 +34,8 @@ type wakeListener struct {
 }
 
 type appListener struct {
-	fd int
+	fd  int
+	uid int
 }
 
 type listenerKey struct {
@@ -48,6 +49,7 @@ type listener struct {
 	inode   uint32
 	origFd  int
 	fd      *os.File
+	uid     int
 }
 
 var ErrNoListeningSockets = errors.New("no listening sockets found")
@@ -69,8 +71,10 @@ func (wl *wakeListener) close() {
 	wl.closeListener()
 }
 
+// listenWake will call listenReuseport and store the newly created listener in
+// wake. Needs to be called inside the target network namespace.
 func (act *Activator) listenWake(port uint16, network Network, lg *listenerGroup) error {
-	act.log.Infof("listening wake: %d %s", port, network)
+	act.log.Debugf("listening wake: %d %s", port, network)
 	ln, err := listenReuseport(port, network)
 	if err != nil {
 		return fmt.Errorf("wake listener: %w", err)
@@ -197,16 +201,17 @@ func (act *Activator) registerListeners(pid int) error {
 					return err
 				}
 			}
-			act.listeners[key].wake = wakeListener{}
-			act.listeners[key].reuse = objs
+			act.listeners[key] = &listenerGroup{
+				reuse: objs,
+			}
 		}
 		ln := act.listeners[key]
 		act.log.Debugf("registering ln %d port %d net %s ino %d", l.fd.Fd(), l.port, l.network, l.inode)
 		if err := act.attachListener(appKey, l.fd.Fd(), ln.reuse.Listeners, ln.reuse.SelectOrMigrate); err != nil {
 			return fmt.Errorf("registering listener: %w", err)
 		}
-		act.log.Debugf("caching port %d fd %d", l.port, l.origFd)
-		act.listeners[key].app = appListener{fd: l.origFd}
+		act.log.Debugf("caching port %d fd %d uid %d", l.port, l.origFd, l.uid)
+		act.listeners[key].app = appListener{fd: l.origFd, uid: l.uid}
 	}
 	if len(listeners) == 0 {
 		return ErrNoListeningSockets
@@ -455,6 +460,7 @@ func (act *Activator) listenerFdsFromCache(pid int) ([]listener, error) {
 				network: network,
 				fd:      os.NewFile(uintptr(fd), ""),
 				origFd:  v.app.fd,
+				uid:     v.app.uid,
 				inode:   uint32(stat.Ino),
 			})
 		}
@@ -532,6 +538,7 @@ func (act *Activator) getListeningInodes(pid int) ([]listener, error) {
 			listeners = append(listeners, listener{
 				port:  uint16(sock.LocalPort),
 				inode: uint32(sock.Inode),
+				uid:   int(sock.UID),
 			})
 		}
 	}
@@ -543,6 +550,7 @@ func (act *Activator) getListeningInodes(pid int) ([]listener, error) {
 			listeners = append(listeners, listener{
 				port:  uint16(sock.LocalPort),
 				inode: uint32(sock.Inode),
+				uid:   int(sock.UID),
 			})
 		}
 	}

@@ -55,6 +55,7 @@ type sockoptSpecs struct {
 // It can be passed ebpf.CollectionSpec.Assign.
 type sockoptProgramSpecs struct {
 	Setsockopt *ebpf.ProgramSpec `ebpf:"setsockopt"`
+	Sockcreate *ebpf.ProgramSpec `ebpf:"sockcreate"`
 }
 
 // sockoptMapSpecs contains maps before they are loaded into the kernel.
@@ -106,11 +107,13 @@ type sockoptVariables struct {
 // It can be passed to loadSockoptObjects or ebpf.CollectionSpec.LoadAndAssign.
 type sockoptPrograms struct {
 	Setsockopt *ebpf.Program `ebpf:"setsockopt"`
+	Sockcreate *ebpf.Program `ebpf:"sockcreate"`
 }
 
 func (p *sockoptPrograms) Close() error {
 	return _SockoptClose(
 		p.Setsockopt,
+		p.Sockcreate,
 	)
 }
 

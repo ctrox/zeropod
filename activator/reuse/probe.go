@@ -11,6 +11,8 @@ type probeListener struct {
 	ln net.Listener
 }
 
+// listenProbe will call listenReuseport and store the newly created listener in
+// probe. Needs to be called inside the target network namespace.
 func (act *Activator) listenProbe(port uint16, network Network, lg *listenerGroup) error {
 	ln, err := listenReuseport(port, network)
 	if err != nil {

@@ -109,6 +109,13 @@ func New(ctx context.Context, cfg *v1.Config, r *taskAPI.CreateTaskRequest, pt s
 		metrics:           newMetrics(cfg, true),
 		runcVersion:       vers.Runc,
 	}
+
+	act, err := reuse.New(ctx, c.netNS, c.cfg.Spec.Linux.CgroupsPath, c.activatorOpts(ctx)...)
+	if err != nil {
+		return nil, err
+	}
+	c.activator = act
+
 	return c, nil
 }
 
@@ -511,6 +518,24 @@ func (c *Container) cancelInit() {
 	c.initTimer.Stop()
 }
 
+func (c *Container) getListeners(ports ...uint16) reuse.Listeners {
+	if c.startInfo.skip && len(c.startInfo.listeners) > 0 {
+		return c.startInfo.listeners
+	}
+	listeners := reuse.Listeners{}
+	for _, port := range ports {
+		// fallback to just a dual-stack listener for each port. If
+		// !startInfo.skip, the listeners will anyways be detected from the app
+		// so this is only relevant if we startInfo.skip and the listeners from
+		// the startInfo are empty.
+		listeners = append(
+			listeners,
+			reuse.Listener{Port: port, Network: reuse.NetworkTCPAny},
+		)
+	}
+	return listeners
+}
+
 // startActivator starts the activator
 func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	if c.activator.Started() {
@@ -520,19 +545,8 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	// 	log.G(ctx).WithError(err).Error("failed to attach activator")
 	// 	return err
 	// }
-	if len(c.startInfo.listeners) == 0 {
-		for _, port := range ports {
-			c.startInfo.listeners = append(
-				c.startInfo.listeners,
-				// if startInfo was empty, we fall back to tcp4/tcp6 combo
-				// TODO: we could also try and read it from the checkpoint image
-				reuse.Listener{Port: port, Network: reuse.NetworkTCP4},
-				reuse.Listener{Port: port, Network: reuse.NetworkTCP6ONLY},
-			)
-		}
-	}
 
-	if err := c.activator.Start(c.context, c.Pid(), c.startInfo.listeners, c.SkipStart()); err != nil {
+	if err := c.activator.Start(c.context, c.Pid(), c.getListeners(ports...), c.startInfo.skip); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}

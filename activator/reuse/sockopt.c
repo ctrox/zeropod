@@ -7,14 +7,14 @@
 
 char __license[] SEC("license") = "Dual MIT/GPL";
 
-#define SOL_SOCKET 1
-#define SO_REUSEPORT 15
+#define SOL_SOCKET     1
+#define SO_REUSEPORT   15
+#define SOL_IPV6       41
+#define IPV6_V6ONLY    26
 
-SEC("cgroup/setsockopt")
-int setsockopt(struct bpf_sockopt *ctx)
+SEC("cgroup/sock_create")
+int sockcreate(struct bpf_sock *sk)
 {
-    struct bpf_sock *sk = ctx->sk;
-
     if (!sk)
         return 1;
 
@@ -22,10 +22,31 @@ int setsockopt(struct bpf_sockopt *ctx)
         return 1;
 
     int reuseport_value = 1;
-    // TODO:
-    // * check what happens when SO_REUSEPORT is already set
-    // * do we care about the return code?
     bpf_setsockopt(sk, SOL_SOCKET, SO_REUSEPORT, &reuseport_value, sizeof(reuseport_value));
+
+    return 1;
+}
+
+SEC("cgroup/setsockopt")
+int setsockopt(struct bpf_sockopt *ctx)
+{
+    int *optval = ctx->optval;
+
+    if (!optval || (void *)(optval + 1) > ctx->optval_end) {
+        return 1;
+    }
+
+    if (ctx->level == SOL_IPV6 && ctx->optname == IPV6_V6ONLY) {
+        // bpf_printk("disabling ipv6only");
+        *optval = 0;
+    }
+
+    if (ctx->level == SOL_SOCKET && ctx->optname == SO_REUSEPORT) {
+        if (*optval == 0) {
+            // bpf_printk("enabling SO_REUSEPORT");
+            *optval = 1;
+        }
+    }
 
     return 1;
 }

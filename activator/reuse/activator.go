@@ -3,13 +3,17 @@ package reuse
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
@@ -42,6 +46,7 @@ type Activator struct {
 	log            *log.Entry
 	ns             ns.NetNS
 	started        atomic.Bool
+	sockCreateLink link.Link
 	sockOptLink    link.Link
 	sockoptObjects *sockoptObjects
 	trackerLink    link.Link
@@ -74,6 +79,7 @@ func New(ctx context.Context, ns ns.NetNS, cgroupsPath string, opts ...Option) (
 	if err := act.LoadBPF(); err != nil {
 		return nil, fmt.Errorf("loading ebpf: %w", err)
 	}
+	act.log.Debug("activator created")
 	return act, nil
 }
 
@@ -95,6 +101,16 @@ func (act *Activator) LoadBPF() error {
 		return fmt.Errorf("loading sockopt objects: %w", err)
 	}
 	act.sockoptObjects = sockoptObjs
+
+	sockCreateLink, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    hostCgroupPath,
+		Attach:  ebpf.AttachCGroupInetSockCreate,
+		Program: sockoptObjs.Sockcreate,
+	})
+	if err != nil {
+		return err
+	}
+	act.sockCreateLink = sockCreateLink
 	sockOptLink, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    hostCgroupPath,
 		Attach:  ebpf.AttachCGroupSetsockopt,
@@ -215,6 +231,9 @@ func (act *Activator) Stop() error {
 	}
 	if act.sockoptObjects != nil {
 		act.sockoptObjects.Close()
+	}
+	if act.sockCreateLink != nil {
+		act.sockCreateLink.Close()
 	}
 	if act.sockOptLink != nil {
 		act.sockOptLink.Close()
@@ -418,12 +437,22 @@ func (act *Activator) ScaleDown() error {
 		ln.probe.closeListener()
 	}
 	act.wakeInodes = []uint64{}
-	for k := range act.listeners {
+	for k, ln := range act.listeners {
 		if err := act.ns.Do(func(nn ns.NetNS) error {
+			// ensure our new sockets will have the same uid as the app socket.
+			// Because we syscall.Setfsuid inside ns.Do, this should be safe as
+			// it takes care to lock the os thread.
+			eUIDBefore := os.Geteuid()
+			if err := syscall.Setfsuid(ln.app.uid); err != nil {
+				return err
+			}
 			if err := act.listenWake(k.port, k.network, act.listeners[k]); err != nil {
 				return err
 			}
 			if err := act.listenProbe(k.port, k.network, act.listeners[k]); err != nil {
+				return err
+			}
+			if err := syscall.Setfsuid(eUIDBefore); err != nil {
 				return err
 			}
 			return nil
@@ -457,9 +486,9 @@ func (act *Activator) GetListeners() []Listener {
 }
 
 func (lns Listeners) Ports() []uint16 {
-	ports := []uint16{}
+	ports := map[uint16]struct{}{}
 	for _, ln := range lns {
-		ports = append(ports, ln.Port)
+		ports[ln.Port] = struct{}{}
 	}
-	return ports
+	return slices.Collect(maps.Keys(ports))
 }
