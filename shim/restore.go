@@ -23,7 +23,6 @@ import (
 	"github.com/containerd/ttrpc"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"github.com/ctrox/zeropod/activator"
-	"github.com/ctrox/zeropod/activator/reuse"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	crio "github.com/ctrox/zeropod/shim/io"
@@ -144,10 +143,9 @@ func (c *Container) restore(ctx context.Context) (*runc.Container, process.Proce
 	}
 
 	// process is running again, we don't need to redirect traffic anymore
-	// TODO: probably no longer needed with the reuse activator?
-	// if err := c.activator.DisableRedirects(); err != nil {
-	// 	return nil, nil, fmt.Errorf("could not disable redirects: %w", err)
-	// }
+	if err := c.activator.DisableRedirects(); err != nil {
+		return nil, nil, fmt.Errorf("could not disable redirects: %w", err)
+	}
 
 	return container, p, nil
 }
@@ -281,9 +279,9 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Co
 	}
 
 	if !resp.MigrationInfo.LiveMigration {
-		listeners := reuse.Listeners{}
+		listeners := activator.Listeners{}
 		for _, ln := range resp.MigrationInfo.Listeners {
-			listeners = append(listeners, reuse.Listener{Port: uint16(ln.Port), Network: reuse.Network(ln.Network)})
+			listeners = append(listeners, activator.Listener{Port: uint16(ln.Port), Network: activator.Network(ln.Network)})
 		}
 		return startInfo{skip: true, listeners: listeners}, nil
 	}

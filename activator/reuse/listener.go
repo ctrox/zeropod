@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/ctrox/zeropod/activator"
 	"github.com/prometheus/procfs"
 	"golang.org/x/sys/unix"
 )
@@ -40,12 +41,12 @@ type appListener struct {
 
 type listenerKey struct {
 	port    uint16
-	network Network
+	network activator.Network
 }
 
 type listener struct {
 	port    uint16
-	network Network
+	network activator.Network
 	inode   uint32
 	origFd  int
 	fd      *os.File
@@ -73,7 +74,7 @@ func (wl *wakeListener) close() {
 
 // listenWake will call listenReuseport and store the newly created listener in
 // wake. Needs to be called inside the target network namespace.
-func (act *Activator) listenWake(port uint16, network Network, lg *listenerGroup) error {
+func (act *Activator) listenWake(port uint16, network activator.Network, lg *listenerGroup) error {
 	act.log.Debugf("listening wake: %d %s", port, network)
 	ln, err := listenReuseport(port, network)
 	if err != nil {
@@ -83,7 +84,7 @@ func (act *Activator) listenWake(port uint16, network Network, lg *listenerGroup
 	return nil
 }
 
-func (act *Activator) attachWake(network Network, lg *listenerGroup) error {
+func (act *Activator) attachWake(network activator.Network, lg *listenerGroup) error {
 	var dupFd int
 	var dupErr error
 	if err := act.attachNetListener(lg.wake.ln, wakeKey, lg.reuse.Listeners, lg.reuse.SelectOrMigrate, func(fd uintptr) {
@@ -120,7 +121,7 @@ func (act *Activator) attachWake(network Network, lg *listenerGroup) error {
 
 // watchWake polls the wake listener without ever accepting and calls wake as
 // soon as the poll returns something.
-func (act *Activator) watchWake(epfd int, fd uintptr, stopFd int, network Network) {
+func (act *Activator) watchWake(epfd int, fd uintptr, stopFd int, network activator.Network) {
 	defer func() {
 		_ = unix.Close(int(fd))
 		_ = unix.Close(epfd)
@@ -312,18 +313,18 @@ func (act *Activator) listenerFds(pid int) ([]listener, error) {
 	return listenersWithFd, nil
 }
 
-func getNetworkFromSock(fd int) (Network, error) {
+func getNetworkFromSock(fd int) (activator.Network, error) {
 	domain, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_DOMAIN)
 	if err != nil {
-		return Network(""), err
+		return activator.Network(""), err
 	}
 	if domain == unix.AF_INET6 {
 		if v, err := unix.GetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY); err == nil && v == 1 {
-			return NetworkTCP6ONLY, nil
+			return activator.NetworkTCP6ONLY, nil
 		}
-		return NetworkTCPAny, nil
+		return activator.NetworkTCPAny, nil
 	}
-	return NetworkTCP4, nil
+	return activator.NetworkTCP4, nil
 }
 
 // attachListener attaches select_or_migrate to the listeners reuseport group
@@ -367,7 +368,7 @@ func (act *Activator) attachNetListener(ln net.Listener, key uint32, bpfMap *ebp
 }
 
 // listenReuseport opens a TCP listener with SO_REUSEPORT
-func listenReuseport(port uint16, network Network) (*net.TCPListener, error) {
+func listenReuseport(port uint16, network activator.Network) (*net.TCPListener, error) {
 	lc := net.ListenConfig{
 		Control: func(_, _ string, c syscall.RawConn) error {
 			var serr error

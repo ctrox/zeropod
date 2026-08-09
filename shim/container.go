@@ -33,7 +33,7 @@ type HandleStartedFunc func(*runc.Container, process.Process)
 
 type startInfo struct {
 	skip      bool
-	listeners reuse.Listeners
+	listeners activator.Listeners
 }
 
 type Container struct {
@@ -45,7 +45,7 @@ type Container struct {
 	context          context.Context
 	id               string
 	createOpts       *anypb.Any
-	activator        *reuse.Activator
+	activator        activator.Activator
 	cfg              *v1.Config
 	initialProcess   process.Process
 	process          process.Process
@@ -110,11 +110,14 @@ func New(ctx context.Context, cfg *v1.Config, r *taskAPI.CreateTaskRequest, pt s
 		runcVersion:       vers.Runc,
 	}
 
-	act, err := reuse.New(ctx, c.netNS, c.cfg.Spec.Linux.CgroupsPath, c.activatorOpts(ctx)...)
-	if err != nil {
-		return nil, err
+	if c.cfg.ReuseportActivator {
+		log.G(ctx).Info("using reuseport activator")
+		act, err := reuse.New(ctx, c.netNS, c.cfg.Spec.Linux.CgroupsPath, c.activatorOpts(ctx)...)
+		if err != nil {
+			return nil, err
+		}
+		c.activator = act
 	}
-	c.activator = act
 
 	return c, nil
 }
@@ -169,8 +172,10 @@ func (c *Container) reloadConfig(ctx context.Context) error {
 	if len(c.cfg.Ports) == 0 {
 		c.cfg.Ports = ports
 	}
-	if err := c.activator.Reload(c.activatorOpts(ctx)...); err != nil {
-		return err
+	if act, ok := c.activator.(*reuse.Activator); ok {
+		if err := act.Reload(c.activatorOpts(ctx)...); err != nil {
+			return err
+		}
 	}
 	c.lastConfigReload = c.cfg.LastModified()
 	return nil
@@ -342,7 +347,7 @@ func (c *Container) InitialProcess() process.Process {
 
 func (c *Container) StopActivator(ctx context.Context) {
 	if c.activator != nil {
-		c.activator.Stop()
+		c.activator.Stop(ctx)
 	}
 }
 
@@ -442,18 +447,19 @@ func (c *Container) activatorOpts(ctx context.Context) []reuse.Option {
 func (c *Container) initActivator(ctx context.Context) error {
 	c.cancelInit()
 
-	if c.activator == nil {
-		act, err := reuse.New(ctx, c.netNS, c.cfg.Spec.Linux.CgroupsPath, c.activatorOpts(ctx)...)
+	if c.activator == nil && !c.cfg.ReuseportActivator {
+		log.G(ctx).Info("using legacy activator")
+		act, err := activator.NewServer(ctx, c.netNS, c.detectProbe(ctx), c.restoreHandler(c.context))
 		if err != nil {
 			return err
 		}
-		// if c.cfg.ProxyTimeout > 0 {
-		// 	act.SetProxyTimeout(c.cfg.ProxyTimeout)
-		// }
-		// if c.cfg.ConnectTimeout > 0 {
-		// 	act.SetConnectTimeout(c.cfg.ConnectTimeout)
-		// }
 		c.activator = act
+		if c.cfg.ProxyTimeout > 0 {
+			c.activator.SetProxyTimeout(c.cfg.ProxyTimeout)
+		}
+		if c.cfg.ConnectTimeout > 0 {
+			c.activator.SetConnectTimeout(c.cfg.ConnectTimeout)
+		}
 	}
 
 	if len(c.cfg.Ports) == 0 {
@@ -479,11 +485,6 @@ func (c *Container) initActivator(ctx context.Context) error {
 			return nil
 		}
 		return err
-	}
-
-	if c.startInfo.skip {
-		// this is no longer needed with the new activator
-		// return c.activator.ScaleDown()
 	}
 	return nil
 }
@@ -518,11 +519,11 @@ func (c *Container) cancelInit() {
 	c.initTimer.Stop()
 }
 
-func (c *Container) getListeners(ports ...uint16) reuse.Listeners {
+func (c *Container) getListeners(ports ...uint16) activator.Listeners {
 	if c.startInfo.skip && len(c.startInfo.listeners) > 0 {
 		return c.startInfo.listeners
 	}
-	listeners := reuse.Listeners{}
+	listeners := activator.Listeners{}
 	for _, port := range ports {
 		// fallback to just a dual-stack listener for each port. If
 		// !startInfo.skip, the listeners will anyways be detected from the app
@@ -530,7 +531,7 @@ func (c *Container) getListeners(ports ...uint16) reuse.Listeners {
 		// the startInfo are empty.
 		listeners = append(
 			listeners,
-			reuse.Listener{Port: port, Network: reuse.NetworkTCPAny},
+			activator.Listener{Port: port, Network: activator.NetworkTCPAny},
 		)
 	}
 	return listeners
@@ -541,10 +542,10 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 	if c.activator.Started() {
 		return nil
 	}
-	// if err := c.activator.AttachExec(); err != nil {
-	// 	log.G(ctx).WithError(err).Error("failed to attach activator")
-	// 	return err
-	// }
+	if err := c.activator.AttachExec(); err != nil {
+		log.G(ctx).WithError(err).Error("failed to attach activator")
+		return err
+	}
 
 	if err := c.activator.Start(c.context, c.Pid(), c.getListeners(ports...), c.startInfo.skip); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {

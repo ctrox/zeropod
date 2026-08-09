@@ -24,7 +24,7 @@ func (c *Container) scaleDown(ctx context.Context) error {
 		return nil
 	}
 
-	if err := c.activator.ScaleDown(); err != nil {
+	if err := c.activator.Reset(); err != nil {
 		return err
 	}
 
@@ -94,8 +94,7 @@ func (c *Container) checkpoint(ctx context.Context) error {
 
 	resetOnErr := func() {
 		c.DeleteCheckpointedPID(c.Pid())
-		// TODO: implement?
-		// _ = c.activator.DisableRedirects()
+		_ = c.activator.DisableRedirects()
 		lines := printCriuLogs(ctx, filepath.Join(workDir, "dump.log"))
 		c.sendFailEvent(v1.ContainerPhase_CHECKPOINT_FAILED, lines)
 	}

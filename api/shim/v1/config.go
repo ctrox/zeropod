@@ -55,6 +55,7 @@ const (
 	DefaultProbeBinaryName        = "kubelet"
 	DefaultTrackerIgnoreLocalhost = true
 	DefaultCapacityRequest        = false
+	DefaultReuseportActivator     = false
 )
 
 var ContainerdAnnotations = []string{
@@ -99,6 +100,7 @@ type Config struct {
 	TrackerIgnoreLocalhost bool   `json:"trackerIgnoreLocalhost"`
 	CapacityRequest        bool   `json:"capacityRequest"`
 	ProbeAddress           string `json:"probeAddress"`
+	ReuseportActivator     bool   `json:"reuseportActivator"`
 	AnnotationConfig       `json:"-"`
 }
 
@@ -230,6 +232,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 	cfg := &Config{
 		TrackerIgnoreLocalhost: DefaultTrackerIgnoreLocalhost,
 		CapacityRequest:        DefaultCapacityRequest,
+		ReuseportActivator:     DefaultReuseportActivator,
 	}
 	path, err := relativeConfigFile()
 	if err != nil {

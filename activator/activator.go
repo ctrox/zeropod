@@ -59,13 +59,15 @@ func SetTargetAddr(addr string) Option {
 	}
 }
 
-func NewServer(ctx context.Context, nn ns.NetNS, opts ...Option) (*Server, error) {
+func NewServer(ctx context.Context, nn ns.NetNS, connHook ConnHook, restoreHook RestoreHook, opts ...Option) (*Server, error) {
 	s := &Server{
 		quit:           make(chan any),
 		connectTimeout: time.Second * 5,
 		proxyTimeout:   time.Second * 5,
 		ns:             nn,
 		sandboxPid:     parsePidFromNetNS(nn),
+		connHook:       connHook,
+		restoreHook:    restoreHook,
 	}
 	return s, nil
 }
@@ -94,10 +96,8 @@ var (
 	DefaultIfaces  = []string{IfaceLoopback, IfaceETH0}
 )
 
-func (s *Server) Start(ctx context.Context, connHook ConnHook, restoreHook RestoreHook, ports ...uint16) error {
-	s.connHook = connHook
-	s.restoreHook = restoreHook
-	s.ports = ports
+func (s *Server) Start(ctx context.Context, _ int, listeners Listeners, skipStart bool) error {
+	s.ports = listeners.Ports()
 
 	if err := s.loadPinnedMaps(); err != nil {
 		return err
@@ -121,8 +121,22 @@ func (s *Server) Start(ctx context.Context, connHook ConnHook, restoreHook Resto
 		}
 	}
 
+	if skipStart {
+		if err := s.Reset(); err != nil {
+			return err
+		}
+	}
+
 	s.started = true
 	return nil
+}
+
+func (act *Server) GetListeners() []Listener {
+	listeners := []Listener{}
+	for _, port := range act.ports {
+		listeners = append(listeners, Listener{Port: port})
+	}
+	return listeners
 }
 
 const AttachActivatorFlag = "-zeropod-attach-activator"
@@ -175,12 +189,13 @@ func (s *Server) SetPeekBufferSize(size int) {
 
 // ForwardToTarget instructs the activator to forward any incoming traffic to
 // the specified address. The connHook and restoreHook will both be disabled.
-func (s *Server) ForwardToTarget(addr string) {
+func (s *Server) ForwardToTarget(_ context.Context, addr string) error {
 	// disable hooks
 	s.connHook = func(c net.Conn) (net.Conn, bool, error) { return c, true, nil }
 	s.restoreHook = func() (int, error) { return 0, nil }
 	s.targetAddr = addr
 	s.forwardToTarget = true
+	return nil
 }
 
 func (s *Server) listen(ctx context.Context, port uint16) (int, error) {

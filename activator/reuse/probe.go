@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net"
 	"time"
+
+	"github.com/ctrox/zeropod/activator"
 )
 
 type probeListener struct {
@@ -13,7 +15,7 @@ type probeListener struct {
 
 // listenProbe will call listenReuseport and store the newly created listener in
 // probe. Needs to be called inside the target network namespace.
-func (act *Activator) listenProbe(port uint16, network Network, lg *listenerGroup) error {
+func (act *Activator) listenProbe(port uint16, network activator.Network, lg *listenerGroup) error {
 	ln, err := listenReuseport(port, network)
 	if err != nil {
 		return fmt.Errorf("wake listener: %w", err)

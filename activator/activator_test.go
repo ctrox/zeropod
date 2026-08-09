@@ -145,7 +145,12 @@ func TestActivator(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
-			s, err := NewServer(ctx, nn)
+			if tc.connHook == nil {
+				tc.connHook = func(c net.Conn) (net.Conn, bool, error) {
+					return c, true, nil
+				}
+			}
+			s, err := NewServer(ctx, nn, tc.connHook, func() (int, error) { return 0, nil })
 			require.NoError(t, err)
 
 			port, err := freePort()
@@ -232,56 +237,52 @@ func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		fmt.Fprint(w, response)
 	}))
-	if tc.connHook == nil {
-		tc.connHook = func(c net.Conn) (net.Conn, bool, error) {
-			return c, true, nil
-		}
-	}
 
 	once := sync.Once{}
 	loopIterations := 0
+	s.restoreHook = func() (int, error) {
+		if tc.loopConnection {
+			loopIterations += 1
+			if loopIterations > 10 {
+				t.Error("loop detection failed")
+				return 0, fmt.Errorf("loop detection failed")
+			}
+			// return nil
+		}
+		once.Do(func() {
+			// simulate a delay until our server is started
+			time.Sleep(time.Millisecond * 200)
+			network := "tcp4"
+			if tc.ipv6 {
+				network = "tcp6"
+			}
+			l, err := net.Listen(network, fmt.Sprintf(":%d", port))
+			require.NoError(t, err)
+
+			if !tc.loopConnection {
+				if err := s.DisableRedirects(); err != nil {
+					t.Errorf("could not disable redirects: %s", err)
+				}
+			}
+
+			// replace listener of server
+			ts.Listener.Close()
+			ts.Listener = l
+			ts.Start()
+			t.Logf("listening on %s", l.Addr().String())
+
+			t.Cleanup(func() {
+				l.Close()
+				ts.Close()
+			})
+		})
+		return 0, nil
+	}
 	err := s.Start(
 		ctx,
-		tc.connHook,
-		func() (int, error) {
-			if tc.loopConnection {
-				loopIterations += 1
-				if loopIterations > 10 {
-					t.Error("loop detection failed")
-					return 0, fmt.Errorf("loop detection failed")
-				}
-				// return nil
-			}
-			once.Do(func() {
-				// simulate a delay until our server is started
-				time.Sleep(time.Millisecond * 200)
-				network := "tcp4"
-				if tc.ipv6 {
-					network = "tcp6"
-				}
-				l, err := net.Listen(network, fmt.Sprintf(":%d", port))
-				require.NoError(t, err)
-
-				if !tc.loopConnection {
-					if err := s.DisableRedirects(); err != nil {
-						t.Errorf("could not disable redirects: %s", err)
-					}
-				}
-
-				// replace listener of server
-				ts.Listener.Close()
-				ts.Listener = l
-				ts.Start()
-				t.Logf("listening on %s", l.Addr().String())
-
-				t.Cleanup(func() {
-					l.Close()
-					ts.Close()
-				})
-			})
-			return 0, nil
-		},
-		port,
+		0,
+		Listeners{{Port: port}},
+		false,
 	)
 	require.NoError(t, err)
 	s.enableRedirect(port)

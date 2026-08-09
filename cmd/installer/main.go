@@ -40,6 +40,7 @@ var (
 	versionFlag            = flag.Bool("version", false, "output version and exit")
 	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", v1.DefaultTrackerIgnoreLocalhost, "set to ignore traffic from localhost in socket tracker")
 	capacityRequest        = flag.Bool("capacity-request", v1.DefaultCapacityRequest, "enable shim to make a capacity request before restoring")
+	reuseportActivator     = flag.Bool("reuseport-activator", v1.DefaultReuseportActivator, "enable the new reuseport activator")
 	//lint:ignore U1000 kept for compatibility
 	probeBinaryName = flag.String("probe-binary-name", v1.DefaultProbeBinaryName, "Deprecated: this is no longer used, flag will be removed in future release")
 
@@ -233,10 +234,15 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 
 	cfg, err := v1.Load(opt)
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("loading config: %w", err)
+		}
+		log.Printf("existing config not found, creating from scratch")
+		cfg = &v1.Config{}
 	}
 	cfg.TrackerIgnoreLocalhost = *trackerIgnoreLocalhost
 	cfg.CapacityRequest = *capacityRequest
+	cfg.ReuseportActivator = *reuseportActivator
 	if err := cfg.Write(opt); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}

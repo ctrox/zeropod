@@ -89,8 +89,8 @@ func TestDetectProbe(t *testing.T) {
 				act.SetKubeletAddr(new(netip.MustParseAddr("127.0.0.1")))
 			}
 			c := &Container{
-				cfg: &v1.Config{AnnotationConfig: v1.AnnotationConfig{ProbeBufferSize: v1.DefaultProbeBufferSize}},
-				// activator: act,
+				cfg:       &v1.Config{AnnotationConfig: v1.AnnotationConfig{ProbeBufferSize: v1.DefaultProbeBufferSize}},
+				activator: act,
 			}
 			newConn, cont, err := c.detectProbe(ctx)(conn)
 			require.NoError(t, err)

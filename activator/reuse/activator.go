@@ -3,12 +3,10 @@ package reuse
 import (
 	"context"
 	"fmt"
-	"maps"
 	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
-	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,14 +26,6 @@ import (
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS reuseport reuseport.c -- -I/headers
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS sockopt sockopt.c
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go -cc $BPF_CLANG -cflags $BPF_CFLAGS tracker tracker.c
-
-type Network string
-
-const (
-	NetworkTCP4     Network = "tcp4"
-	NetworkTCPAny   Network = "tcp"
-	NetworkTCP6ONLY Network = "tcp6"
-)
 
 type Activator struct {
 	*Config
@@ -179,12 +169,16 @@ func ProbeAddr(addr *netip.Addr) Option {
 	}
 }
 
-func (act *Activator) Start(ctx context.Context, pid int, listeners Listeners, skipStart bool) error {
+func (act *Activator) Start(ctx context.Context, pid int, listeners activator.Listeners, skipStart bool) error {
 	act.ports = listeners.Ports()
 
 	if skipStart {
 		for _, ln := range listeners {
-			key := listenerKey{port: ln.Port, network: ln.Network}
+			net := ln.Network
+			if net == "" {
+				net = activator.NetworkTCPAny
+			}
+			key := listenerKey{port: ln.Port, network: net}
 			objs := &reuseportObjects{}
 			if err := loadReuseportObjects(objs, &ebpf.CollectionOptions{}); err != nil {
 				return fmt.Errorf("loading reuseport objects: %w", err)
@@ -198,7 +192,7 @@ func (act *Activator) Start(ctx context.Context, pid int, listeners Listeners, s
 			act.listeners[key] = &listenerGroup{reuse: objs}
 			act.mu.Unlock()
 		}
-		if err := act.ScaleDown(); err != nil {
+		if err := act.Reset(); err != nil {
 			return err
 		}
 	} else {
@@ -218,7 +212,7 @@ func (act *Activator) Started() bool {
 	return act.started.Load()
 }
 
-func (act *Activator) Stop() error {
+func (act *Activator) Stop(_ context.Context) {
 	act.mu.Lock()
 	defer act.mu.Unlock()
 	for _, ln := range act.listeners {
@@ -244,7 +238,6 @@ func (act *Activator) Stop() error {
 	if act.trackerLink != nil {
 		act.trackerLink.Close()
 	}
-	return nil
 }
 
 func (act *Activator) LastActivity(port uint16) (time.Time, error) {
@@ -368,7 +361,7 @@ func IgnoreAddr(addrMap *ebpf.Map, ip string) error {
 	return addrMap.Put(&key, value)
 }
 
-func (act *Activator) wake(network Network) error {
+func (act *Activator) wake(network activator.Network) error {
 	closeProbe := false
 	if act.restoreHook != nil {
 		pid, err := act.restoreHook()
@@ -413,10 +406,10 @@ func (act *Activator) wake(network Network) error {
 	return nil
 }
 
-func (act *Activator) poke(port uint16, network Network) error {
+func (act *Activator) poke(port uint16, network activator.Network) error {
 	return act.ns.Do(func(nn ns.NetNS) error {
 		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		if network == NetworkTCPAny || network == NetworkTCP6ONLY {
+		if network == activator.NetworkTCPAny || network == activator.NetworkTCP6ONLY {
 			addr = fmt.Sprintf("[::1]:%d", port)
 		}
 		dialer := net.Dialer{Timeout: time.Second}
@@ -428,7 +421,7 @@ func (act *Activator) poke(port uint16, network Network) error {
 	})
 }
 
-func (act *Activator) ScaleDown() error {
+func (act *Activator) Reset() error {
 	act.mu.Lock()
 	defer act.mu.Unlock()
 	act.registeredWake.Store(false)
@@ -470,25 +463,10 @@ func (act *Activator) ScaleDown() error {
 	return nil
 }
 
-type Listener struct {
-	Port    uint16
-	Network Network
-}
-
-type Listeners []Listener
-
-func (act *Activator) GetListeners() []Listener {
-	listeners := []Listener{}
+func (act *Activator) GetListeners() []activator.Listener {
+	listeners := []activator.Listener{}
 	for k := range act.listeners {
-		listeners = append(listeners, Listener{Port: k.port, Network: k.network})
+		listeners = append(listeners, activator.Listener{Port: k.port, Network: k.network})
 	}
 	return listeners
-}
-
-func (lns Listeners) Ports() []uint16 {
-	ports := map[uint16]struct{}{}
-	for _, ln := range lns {
-		ports[ln.Port] = struct{}{}
-	}
-	return slices.Collect(maps.Keys(ports))
 }

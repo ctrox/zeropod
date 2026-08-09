@@ -35,7 +35,7 @@ type testCase struct {
 	expectLastActivity     bool
 	trackerIgnoreLocalhost bool
 	kubeletAddr            *netip.Addr
-	networks               []Network
+	networks               []activator.Network
 	forwardToFunc          func(t *testing.T, port int) (string, *httptest.Server)
 }
 
@@ -63,7 +63,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCP4},
+			networks:           []activator.Network{activator.NetworkTCP4},
 		},
 		"ipv6 only": {
 			parallelReqs:       1,
@@ -71,7 +71,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCP6ONLY},
+			networks:           []activator.Network{activator.NetworkTCP6ONLY},
 		},
 		"100 in parallel": {
 			parallelReqs:       100,
@@ -79,7 +79,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCPAny},
+			networks:           []activator.Network{activator.NetworkTCPAny},
 		},
 		"ignore activity from localhost v4": {
 			parallelReqs:           1,
@@ -88,7 +88,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:           http.StatusOK,
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
-			networks:               []Network{NetworkTCP4},
+			networks:               []activator.Network{activator.NetworkTCP4},
 		},
 		"ignore activity from localhost v6": {
 			parallelReqs:           1,
@@ -97,7 +97,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:           http.StatusOK,
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
-			networks:               []Network{NetworkTCPAny},
+			networks:               []activator.Network{activator.NetworkTCPAny},
 		},
 		"ignore kubelet traffic ipv4": {
 			parallelReqs:       1,
@@ -106,7 +106,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:       http.StatusOK,
 			expectLastActivity: false,
 			kubeletAddr:        ptr.To(netip.MustParseAddr("127.0.0.1")),
-			networks:           []Network{NetworkTCP4},
+			networks:           []activator.Network{activator.NetworkTCP4},
 		},
 		"ignore kubelet traffic ipv6": {
 			parallelReqs:       1,
@@ -115,7 +115,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedCode:       http.StatusOK,
 			expectLastActivity: false,
 			kubeletAddr:        ptr.To(netip.MustParseAddr("::1")),
-			networks:           []Network{NetworkTCPAny},
+			networks:           []activator.Network{activator.NetworkTCPAny},
 		},
 		"forward": {
 			parallelReqs:       1,
@@ -123,7 +123,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "hello from another server",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCP4},
+			networks:           []activator.Network{activator.NetworkTCP4},
 			forwardToFunc: func(t *testing.T, port int) (string, *httptest.Server) {
 				ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					fmt.Fprint(w, "hello from another server")
@@ -146,7 +146,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCPAny},
+			networks:           []activator.Network{activator.NetworkTCPAny},
 		},
 		"ipv4 and ipv6": {
 			parallelReqs:       1,
@@ -154,7 +154,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "app",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: true,
-			networks:           []Network{NetworkTCPAny},
+			networks:           []activator.Network{activator.NetworkTCPAny},
 		},
 	}
 	wg := sync.WaitGroup{}
@@ -191,9 +191,9 @@ func TestReuseActivator(t *testing.T) {
 				cancel()
 			})
 
-			listeners := Listeners{}
+			listeners := activator.Listeners{}
 			for _, net := range tc.networks {
-				listeners = append(listeners, Listener{Port: uint16(port), Network: net})
+				listeners = append(listeners, activator.Listener{Port: uint16(port), Network: net})
 			}
 			require.NoError(t, s.Start(ctx, os.Getpid(), listeners, true))
 			if tc.forwardToFunc != nil {
@@ -208,7 +208,7 @@ func TestReuseActivator(t *testing.T) {
 					for _, net := range tc.networks {
 						wg.Go(func() {
 							host := "127.0.0.1"
-							if net == NetworkTCP6ONLY || net == NetworkTCPAny {
+							if net == activator.NetworkTCP6ONLY || net == activator.NetworkTCPAny {
 								host = "[::1]"
 							}
 
@@ -233,7 +233,7 @@ func TestReuseActivator(t *testing.T) {
 					}
 				}
 				wg.Wait()
-				assert.NoError(t, s.ScaleDown())
+				assert.NoError(t, s.Reset())
 				for _, ln := range s.listeners {
 					if err := ln.reuse.Listeners.Delete(uint32(appKey)); err != nil {
 						if !errors.Is(err, ebpf.ErrKeyNotExist) {
@@ -260,14 +260,14 @@ func TestReuseActivator(t *testing.T) {
 				assert.ErrorIs(t, err, activator.NoActivityRecordedErr{})
 			}
 			cancel()
-			assert.NoError(t, s.Stop())
+			s.Stop(ctx)
 			assert.NoError(t, cmd.Process.Kill())
 			_ = cmd.Wait()
 		})
 	}
 }
 
-func runApp(t *testing.T, port int, networks ...Network) (*exec.Cmd, error) {
+func runApp(t *testing.T, port int, networks ...activator.Network) (*exec.Cmd, error) {
 	cmd := exec.Command(os.Args[0], "-test.run=^TestReuseActivator$")
 
 	nets := []string{}
