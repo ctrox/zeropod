@@ -12,9 +12,16 @@ char __license[] SEC("license") = "Dual MIT/GPL";
 #define SOL_IPV6       41
 #define IPV6_V6ONLY    26
 
-SEC("cgroup/sock_create")
-int sockcreate(struct bpf_sock *sk)
+SEC("cgroup/setsockopt")
+int setsockopt(struct bpf_sockopt *ctx)
 {
+    int *optval = ctx->optval;
+    struct bpf_sock *sk = ctx->sk;
+
+    if (!optval || (void *)(optval + 1) > ctx->optval_end) {
+        return 1;
+    }
+
     if (!sk)
         return 1;
 
@@ -23,18 +30,6 @@ int sockcreate(struct bpf_sock *sk)
 
     int reuseport_value = 1;
     bpf_setsockopt(sk, SOL_SOCKET, SO_REUSEPORT, &reuseport_value, sizeof(reuseport_value));
-
-    return 1;
-}
-
-SEC("cgroup/setsockopt")
-int setsockopt(struct bpf_sockopt *ctx)
-{
-    int *optval = ctx->optval;
-
-    if (!optval || (void *)(optval + 1) > ctx->optval_end) {
-        return 1;
-    }
 
     if (ctx->level == SOL_IPV6 && ctx->optname == IPV6_V6ONLY) {
         // bpf_printk("disabling ipv6only");

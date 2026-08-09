@@ -36,7 +36,6 @@ type Activator struct {
 	log            *log.Entry
 	ns             ns.NetNS
 	started        atomic.Bool
-	sockCreateLink link.Link
 	sockOptLink    link.Link
 	sockoptObjects *sockoptObjects
 	trackerLink    link.Link
@@ -91,16 +90,6 @@ func (act *Activator) LoadBPF() error {
 		return fmt.Errorf("loading sockopt objects: %w", err)
 	}
 	act.sockoptObjects = sockoptObjs
-
-	sockCreateLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    hostCgroupPath,
-		Attach:  ebpf.AttachCGroupInetSockCreate,
-		Program: sockoptObjs.Sockcreate,
-	})
-	if err != nil {
-		return err
-	}
-	act.sockCreateLink = sockCreateLink
 	sockOptLink, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    hostCgroupPath,
 		Attach:  ebpf.AttachCGroupSetsockopt,
@@ -225,9 +214,6 @@ func (act *Activator) Stop(_ context.Context) {
 	}
 	if act.sockoptObjects != nil {
 		act.sockoptObjects.Close()
-	}
-	if act.sockCreateLink != nil {
-		act.sockCreateLink.Close()
 	}
 	if act.sockOptLink != nil {
 		act.sockOptLink.Close()
