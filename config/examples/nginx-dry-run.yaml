@@ -1,18 +1,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: nginx
+  name: nginx-dry-run
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: nginx
+      app: nginx-dry-run
   template:
     metadata:
       labels:
-        app: nginx
+        app: nginx-dry-run
       annotations:
-        zeropod.ctrox.dev/scaledown-duration: 10s
+        zeropod.ctrox.dev/scaledown-duration: 15s
+        zeropod.ctrox.dev/dry-run: "true"
     spec:
       runtimeClassName: zeropod
       containers:
