@@ -40,7 +40,7 @@ func (act *Activator) ForwardToTarget(ctx context.Context, addr string) error {
 			quit:           make(chan struct{}, 1),
 		}
 		if err := act.ns.Do(func(nn ns.NetNS) error {
-			ln, err := listenReuseport(k.port, k.network)
+			ln, err := listenReuseport(k.port, k.network, int(ln.app.uid))
 			if err != nil {
 				return err
 			}

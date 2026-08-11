@@ -215,58 +215,6 @@ func (x *RestoreResponse) GetMigrationInfo() *MigrationInfo {
 	return nil
 }
 
-type Listener struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Port          int32                  `protobuf:"varint,1,opt,name=port,proto3" json:"port,omitempty"`
-	Network       string                 `protobuf:"bytes,2,opt,name=network,proto3" json:"network,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *Listener) Reset() {
-	*x = Listener{}
-	mi := &file_node_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *Listener) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*Listener) ProtoMessage() {}
-
-func (x *Listener) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use Listener.ProtoReflect.Descriptor instead.
-func (*Listener) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *Listener) GetPort() int32 {
-	if x != nil {
-		return x.Port
-	}
-	return 0
-}
-
-func (x *Listener) GetNetwork() string {
-	if x != nil {
-		return x.Network
-	}
-	return ""
-}
-
 type PodInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -274,14 +222,13 @@ type PodInfo struct {
 	ContainerName string                 `protobuf:"bytes,3,opt,name=container_name,json=containerName,proto3" json:"container_name,omitempty"`
 	Ports         []int32                `protobuf:"varint,4,rep,packed,name=ports,proto3" json:"ports,omitempty"`
 	Ip            string                 `protobuf:"bytes,5,opt,name=ip,proto3" json:"ip,omitempty"`
-	Listeners     []*Listener            `protobuf:"bytes,6,rep,name=listeners,proto3" json:"listeners,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PodInfo) Reset() {
 	*x = PodInfo{}
-	mi := &file_node_proto_msgTypes[5]
+	mi := &file_node_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -293,7 +240,7 @@ func (x *PodInfo) String() string {
 func (*PodInfo) ProtoMessage() {}
 
 func (x *PodInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[5]
+	mi := &file_node_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -306,7 +253,7 @@ func (x *PodInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PodInfo.ProtoReflect.Descriptor instead.
 func (*PodInfo) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{5}
+	return file_node_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PodInfo) GetName() string {
@@ -344,13 +291,6 @@ func (x *PodInfo) GetIp() string {
 	return ""
 }
 
-func (x *PodInfo) GetListeners() []*Listener {
-	if x != nil {
-		return x.Listeners
-	}
-	return nil
-}
-
 type MigrationInfo struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ImageId       string                 `protobuf:"bytes,1,opt,name=image_id,json=imageId,proto3" json:"image_id,omitempty"`
@@ -360,14 +300,13 @@ type MigrationInfo struct {
 	RestoreStart  *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=restore_start,json=restoreStart,proto3" json:"restore_start,omitempty"`
 	RestoreEnd    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=restore_end,json=restoreEnd,proto3" json:"restore_end,omitempty"`
 	Ports         []int32                `protobuf:"varint,7,rep,packed,name=ports,proto3" json:"ports,omitempty"`
-	Listeners     []*Listener            `protobuf:"bytes,8,rep,name=listeners,proto3" json:"listeners,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MigrationInfo) Reset() {
 	*x = MigrationInfo{}
-	mi := &file_node_proto_msgTypes[6]
+	mi := &file_node_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -379,7 +318,7 @@ func (x *MigrationInfo) String() string {
 func (*MigrationInfo) ProtoMessage() {}
 
 func (x *MigrationInfo) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[6]
+	mi := &file_node_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -392,7 +331,7 @@ func (x *MigrationInfo) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MigrationInfo.ProtoReflect.Descriptor instead.
 func (*MigrationInfo) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{6}
+	return file_node_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *MigrationInfo) GetImageId() string {
@@ -444,13 +383,6 @@ func (x *MigrationInfo) GetPorts() []int32 {
 	return nil
 }
 
-func (x *MigrationInfo) GetListeners() []*Listener {
-	if x != nil {
-		return x.Listeners
-	}
-	return nil
-}
-
 type Image struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ImageData     []byte                 `protobuf:"bytes,1,opt,name=imageData,proto3" json:"imageData,omitempty"`
@@ -460,7 +392,7 @@ type Image struct {
 
 func (x *Image) Reset() {
 	*x = Image{}
-	mi := &file_node_proto_msgTypes[7]
+	mi := &file_node_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -472,7 +404,7 @@ func (x *Image) String() string {
 func (*Image) ProtoMessage() {}
 
 func (x *Image) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[7]
+	mi := &file_node_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -485,7 +417,7 @@ func (x *Image) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Image.ProtoReflect.Descriptor instead.
 func (*Image) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{7}
+	return file_node_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *Image) GetImageData() []byte {
@@ -507,7 +439,7 @@ type CriuLazyPagesRequest struct {
 
 func (x *CriuLazyPagesRequest) Reset() {
 	*x = CriuLazyPagesRequest{}
-	mi := &file_node_proto_msgTypes[8]
+	mi := &file_node_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -519,7 +451,7 @@ func (x *CriuLazyPagesRequest) String() string {
 func (*CriuLazyPagesRequest) ProtoMessage() {}
 
 func (x *CriuLazyPagesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[8]
+	mi := &file_node_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -532,7 +464,7 @@ func (x *CriuLazyPagesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CriuLazyPagesRequest.ProtoReflect.Descriptor instead.
 func (*CriuLazyPagesRequest) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{8}
+	return file_node_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CriuLazyPagesRequest) GetCheckpointPath() string {
@@ -572,7 +504,7 @@ type PullImageRequest struct {
 
 func (x *PullImageRequest) Reset() {
 	*x = PullImageRequest{}
-	mi := &file_node_proto_msgTypes[9]
+	mi := &file_node_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -584,7 +516,7 @@ func (x *PullImageRequest) String() string {
 func (*PullImageRequest) ProtoMessage() {}
 
 func (x *PullImageRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[9]
+	mi := &file_node_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -597,7 +529,7 @@ func (x *PullImageRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PullImageRequest.ProtoReflect.Descriptor instead.
 func (*PullImageRequest) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{9}
+	return file_node_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *PullImageRequest) GetImageId() string {
@@ -616,7 +548,7 @@ type RestoreCapacityRequest struct {
 
 func (x *RestoreCapacityRequest) Reset() {
 	*x = RestoreCapacityRequest{}
-	mi := &file_node_proto_msgTypes[10]
+	mi := &file_node_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -628,7 +560,7 @@ func (x *RestoreCapacityRequest) String() string {
 func (*RestoreCapacityRequest) ProtoMessage() {}
 
 func (x *RestoreCapacityRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[10]
+	mi := &file_node_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -641,7 +573,7 @@ func (x *RestoreCapacityRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreCapacityRequest.ProtoReflect.Descriptor instead.
 func (*RestoreCapacityRequest) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{10}
+	return file_node_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *RestoreCapacityRequest) GetPodInfo() *PodInfo {
@@ -661,7 +593,7 @@ type RestoreCapacityResponse struct {
 
 func (x *RestoreCapacityResponse) Reset() {
 	*x = RestoreCapacityResponse{}
-	mi := &file_node_proto_msgTypes[11]
+	mi := &file_node_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -673,7 +605,7 @@ func (x *RestoreCapacityResponse) String() string {
 func (*RestoreCapacityResponse) ProtoMessage() {}
 
 func (x *RestoreCapacityResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_node_proto_msgTypes[11]
+	mi := &file_node_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -686,7 +618,7 @@ func (x *RestoreCapacityResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreCapacityResponse.ProtoReflect.Descriptor instead.
 func (*RestoreCapacityResponse) Descriptor() ([]byte, []int) {
-	return file_node_proto_rawDescGZIP(), []int{11}
+	return file_node_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RestoreCapacityResponse) GetAllowed() bool {
@@ -718,17 +650,13 @@ const file_node_proto_rawDesc = "" +
 	"\bpod_info\x18\x01 \x01(\v2\x18.zeropod.node.v1.PodInfoR\apodInfo\x12E\n" +
 	"\x0emigration_info\x18\x02 \x01(\v2\x1e.zeropod.node.v1.MigrationInfoR\rmigrationInfo\"X\n" +
 	"\x0fRestoreResponse\x12E\n" +
-	"\x0emigration_info\x18\x01 \x01(\v2\x1e.zeropod.node.v1.MigrationInfoR\rmigrationInfo\"8\n" +
-	"\bListener\x12\x12\n" +
-	"\x04port\x18\x01 \x01(\x05R\x04port\x12\x18\n" +
-	"\anetwork\x18\x02 \x01(\tR\anetwork\"\xc1\x01\n" +
+	"\x0emigration_info\x18\x01 \x01(\v2\x1e.zeropod.node.v1.MigrationInfoR\rmigrationInfo\"\x88\x01\n" +
 	"\aPodInfo\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1c\n" +
 	"\tnamespace\x18\x02 \x01(\tR\tnamespace\x12%\n" +
 	"\x0econtainer_name\x18\x03 \x01(\tR\rcontainerName\x12\x14\n" +
 	"\x05ports\x18\x04 \x03(\x05R\x05ports\x12\x0e\n" +
-	"\x02ip\x18\x05 \x01(\tR\x02ip\x127\n" +
-	"\tlisteners\x18\x06 \x03(\v2\x19.zeropod.node.v1.ListenerR\tlisteners\"\xf6\x02\n" +
+	"\x02ip\x18\x05 \x01(\tR\x02ip\"\xbd\x02\n" +
 	"\rMigrationInfo\x12\x19\n" +
 	"\bimage_id\x18\x01 \x01(\tR\aimageId\x12\x1d\n" +
 	"\n" +
@@ -738,8 +666,7 @@ const file_node_proto_rawDesc = "" +
 	"\rrestore_start\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\frestoreStart\x12;\n" +
 	"\vrestore_end\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"restoreEnd\x12\x14\n" +
-	"\x05ports\x18\a \x03(\x05R\x05ports\x127\n" +
-	"\tlisteners\x18\b \x03(\v2\x19.zeropod.node.v1.ListenerR\tlisteners\"%\n" +
+	"\x05ports\x18\a \x03(\x05R\x05ports\"%\n" +
 	"\x05Image\x12\x1c\n" +
 	"\timageData\x18\x01 \x01(\fR\timageData\"\x7f\n" +
 	"\x14CriuLazyPagesRequest\x12'\n" +
@@ -775,55 +702,52 @@ func file_node_proto_rawDescGZIP() []byte {
 	return file_node_proto_rawDescData
 }
 
-var file_node_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
+var file_node_proto_msgTypes = make([]protoimpl.MessageInfo, 11)
 var file_node_proto_goTypes = []any{
 	(*EvacRequest)(nil),             // 0: zeropod.node.v1.EvacRequest
 	(*EvacResponse)(nil),            // 1: zeropod.node.v1.EvacResponse
 	(*RestoreRequest)(nil),          // 2: zeropod.node.v1.RestoreRequest
 	(*RestoreResponse)(nil),         // 3: zeropod.node.v1.RestoreResponse
-	(*Listener)(nil),                // 4: zeropod.node.v1.Listener
-	(*PodInfo)(nil),                 // 5: zeropod.node.v1.PodInfo
-	(*MigrationInfo)(nil),           // 6: zeropod.node.v1.MigrationInfo
-	(*Image)(nil),                   // 7: zeropod.node.v1.Image
-	(*CriuLazyPagesRequest)(nil),    // 8: zeropod.node.v1.CriuLazyPagesRequest
-	(*PullImageRequest)(nil),        // 9: zeropod.node.v1.PullImageRequest
-	(*RestoreCapacityRequest)(nil),  // 10: zeropod.node.v1.RestoreCapacityRequest
-	(*RestoreCapacityResponse)(nil), // 11: zeropod.node.v1.RestoreCapacityResponse
-	(*emptypb.Empty)(nil),           // 12: google.protobuf.Empty
-	(*timestamppb.Timestamp)(nil),   // 13: google.protobuf.Timestamp
+	(*PodInfo)(nil),                 // 4: zeropod.node.v1.PodInfo
+	(*MigrationInfo)(nil),           // 5: zeropod.node.v1.MigrationInfo
+	(*Image)(nil),                   // 6: zeropod.node.v1.Image
+	(*CriuLazyPagesRequest)(nil),    // 7: zeropod.node.v1.CriuLazyPagesRequest
+	(*PullImageRequest)(nil),        // 8: zeropod.node.v1.PullImageRequest
+	(*RestoreCapacityRequest)(nil),  // 9: zeropod.node.v1.RestoreCapacityRequest
+	(*RestoreCapacityResponse)(nil), // 10: zeropod.node.v1.RestoreCapacityResponse
+	(*emptypb.Empty)(nil),           // 11: google.protobuf.Empty
+	(*timestamppb.Timestamp)(nil),   // 12: google.protobuf.Timestamp
 }
 var file_node_proto_depIdxs = []int32{
-	5,  // 0: zeropod.node.v1.EvacRequest.pod_info:type_name -> zeropod.node.v1.PodInfo
-	6,  // 1: zeropod.node.v1.EvacRequest.migration_info:type_name -> zeropod.node.v1.MigrationInfo
-	12, // 2: zeropod.node.v1.EvacResponse.empty:type_name -> google.protobuf.Empty
-	5,  // 3: zeropod.node.v1.RestoreRequest.pod_info:type_name -> zeropod.node.v1.PodInfo
-	6,  // 4: zeropod.node.v1.RestoreRequest.migration_info:type_name -> zeropod.node.v1.MigrationInfo
-	6,  // 5: zeropod.node.v1.RestoreResponse.migration_info:type_name -> zeropod.node.v1.MigrationInfo
-	4,  // 6: zeropod.node.v1.PodInfo.listeners:type_name -> zeropod.node.v1.Listener
-	13, // 7: zeropod.node.v1.MigrationInfo.paused_at:type_name -> google.protobuf.Timestamp
-	13, // 8: zeropod.node.v1.MigrationInfo.restore_start:type_name -> google.protobuf.Timestamp
-	13, // 9: zeropod.node.v1.MigrationInfo.restore_end:type_name -> google.protobuf.Timestamp
-	4,  // 10: zeropod.node.v1.MigrationInfo.listeners:type_name -> zeropod.node.v1.Listener
-	5,  // 11: zeropod.node.v1.RestoreCapacityRequest.pod_info:type_name -> zeropod.node.v1.PodInfo
-	0,  // 12: zeropod.node.v1.Node.Evac:input_type -> zeropod.node.v1.EvacRequest
-	0,  // 13: zeropod.node.v1.Node.PrepareEvac:input_type -> zeropod.node.v1.EvacRequest
-	2,  // 14: zeropod.node.v1.Node.Restore:input_type -> zeropod.node.v1.RestoreRequest
-	2,  // 15: zeropod.node.v1.Node.FinishRestore:input_type -> zeropod.node.v1.RestoreRequest
-	8,  // 16: zeropod.node.v1.Node.NewCriuLazyPages:input_type -> zeropod.node.v1.CriuLazyPagesRequest
-	9,  // 17: zeropod.node.v1.Node.PullImage:input_type -> zeropod.node.v1.PullImageRequest
-	10, // 18: zeropod.node.v1.Node.RestoreCapacity:input_type -> zeropod.node.v1.RestoreCapacityRequest
-	1,  // 19: zeropod.node.v1.Node.Evac:output_type -> zeropod.node.v1.EvacResponse
-	1,  // 20: zeropod.node.v1.Node.PrepareEvac:output_type -> zeropod.node.v1.EvacResponse
-	3,  // 21: zeropod.node.v1.Node.Restore:output_type -> zeropod.node.v1.RestoreResponse
-	3,  // 22: zeropod.node.v1.Node.FinishRestore:output_type -> zeropod.node.v1.RestoreResponse
-	12, // 23: zeropod.node.v1.Node.NewCriuLazyPages:output_type -> google.protobuf.Empty
-	7,  // 24: zeropod.node.v1.Node.PullImage:output_type -> zeropod.node.v1.Image
-	11, // 25: zeropod.node.v1.Node.RestoreCapacity:output_type -> zeropod.node.v1.RestoreCapacityResponse
-	19, // [19:26] is the sub-list for method output_type
-	12, // [12:19] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	4,  // 0: zeropod.node.v1.EvacRequest.pod_info:type_name -> zeropod.node.v1.PodInfo
+	5,  // 1: zeropod.node.v1.EvacRequest.migration_info:type_name -> zeropod.node.v1.MigrationInfo
+	11, // 2: zeropod.node.v1.EvacResponse.empty:type_name -> google.protobuf.Empty
+	4,  // 3: zeropod.node.v1.RestoreRequest.pod_info:type_name -> zeropod.node.v1.PodInfo
+	5,  // 4: zeropod.node.v1.RestoreRequest.migration_info:type_name -> zeropod.node.v1.MigrationInfo
+	5,  // 5: zeropod.node.v1.RestoreResponse.migration_info:type_name -> zeropod.node.v1.MigrationInfo
+	12, // 6: zeropod.node.v1.MigrationInfo.paused_at:type_name -> google.protobuf.Timestamp
+	12, // 7: zeropod.node.v1.MigrationInfo.restore_start:type_name -> google.protobuf.Timestamp
+	12, // 8: zeropod.node.v1.MigrationInfo.restore_end:type_name -> google.protobuf.Timestamp
+	4,  // 9: zeropod.node.v1.RestoreCapacityRequest.pod_info:type_name -> zeropod.node.v1.PodInfo
+	0,  // 10: zeropod.node.v1.Node.Evac:input_type -> zeropod.node.v1.EvacRequest
+	0,  // 11: zeropod.node.v1.Node.PrepareEvac:input_type -> zeropod.node.v1.EvacRequest
+	2,  // 12: zeropod.node.v1.Node.Restore:input_type -> zeropod.node.v1.RestoreRequest
+	2,  // 13: zeropod.node.v1.Node.FinishRestore:input_type -> zeropod.node.v1.RestoreRequest
+	7,  // 14: zeropod.node.v1.Node.NewCriuLazyPages:input_type -> zeropod.node.v1.CriuLazyPagesRequest
+	8,  // 15: zeropod.node.v1.Node.PullImage:input_type -> zeropod.node.v1.PullImageRequest
+	9,  // 16: zeropod.node.v1.Node.RestoreCapacity:input_type -> zeropod.node.v1.RestoreCapacityRequest
+	1,  // 17: zeropod.node.v1.Node.Evac:output_type -> zeropod.node.v1.EvacResponse
+	1,  // 18: zeropod.node.v1.Node.PrepareEvac:output_type -> zeropod.node.v1.EvacResponse
+	3,  // 19: zeropod.node.v1.Node.Restore:output_type -> zeropod.node.v1.RestoreResponse
+	3,  // 20: zeropod.node.v1.Node.FinishRestore:output_type -> zeropod.node.v1.RestoreResponse
+	11, // 21: zeropod.node.v1.Node.NewCriuLazyPages:output_type -> google.protobuf.Empty
+	6,  // 22: zeropod.node.v1.Node.PullImage:output_type -> zeropod.node.v1.Image
+	10, // 23: zeropod.node.v1.Node.RestoreCapacity:output_type -> zeropod.node.v1.RestoreCapacityResponse
+	17, // [17:24] is the sub-list for method output_type
+	10, // [10:17] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_node_proto_init() }
@@ -837,7 +761,7 @@ func file_node_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_node_proto_rawDesc), len(file_node_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   12,
+			NumMessages:   11,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

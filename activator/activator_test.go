@@ -280,7 +280,7 @@ func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *
 	}
 	err := s.Start(
 		ctx,
-		0,
+		os.Getpid(),
 		Listeners{{Port: port}},
 		false,
 	)

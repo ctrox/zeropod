@@ -2,6 +2,7 @@ package shim
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
+	"github.com/ctrox/zeropod/activator"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/icza/backscanner"
@@ -129,6 +131,10 @@ func (c *Container) checkpoint(ctx context.Context) error {
 		return err
 	}
 
+	if err := c.storeListeners(); err != nil {
+		log.G(ctx).WithError(err).Error("storing listeners in snaphsot path")
+	}
+
 	c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, time.Since(beforeCheckpoint))
 	log.G(ctx).Infof("checkpointing done in %s", c.metrics.LastCheckpointDuration.AsDuration())
 
@@ -155,6 +161,29 @@ func (c *Container) checkpointExtraArgs() []string {
 		return []string{checkpointArgSkipTCPInFlight}
 	}
 	return def
+}
+
+func (c *Container) storeListeners() error {
+	f, err := os.Create(nodev1.ListenersFile(c.ID()))
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	listeners := c.activator.GetListeners()
+	return json.NewEncoder(f).Encode(listeners)
+}
+
+func (c *Container) loadListeners() (activator.Listeners, error) {
+	f, err := os.Open(nodev1.ListenersFile(c.ID()))
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	listeners := activator.Listeners{}
+	if err := json.NewDecoder(f).Decode(&listeners); err != nil {
+		return nil, err
+	}
+	return listeners, nil
 }
 
 func printCriuLogs(ctx context.Context, file string) string {

@@ -5,13 +5,11 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
@@ -36,7 +34,9 @@ type Activator struct {
 	log            *log.Entry
 	ns             ns.NetNS
 	started        atomic.Bool
-	sockOptLink    link.Link
+	sockoptLink    link.Link
+	bindV4Link     link.Link
+	bindV6Link     link.Link
 	sockoptObjects *sockoptObjects
 	trackerLink    link.Link
 	trackerObjs    *trackerObjects
@@ -90,7 +90,7 @@ func (act *Activator) LoadBPF() error {
 		return fmt.Errorf("loading sockopt objects: %w", err)
 	}
 	act.sockoptObjects = sockoptObjs
-	sockOptLink, err := link.AttachCgroup(link.CgroupOptions{
+	sockoptLink, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    hostCgroupPath,
 		Attach:  ebpf.AttachCGroupSetsockopt,
 		Program: sockoptObjs.Setsockopt,
@@ -98,7 +98,25 @@ func (act *Activator) LoadBPF() error {
 	if err != nil {
 		return err
 	}
-	act.sockOptLink = sockOptLink
+	act.sockoptLink = sockoptLink
+	bindV4Link, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    hostCgroupPath,
+		Attach:  ebpf.AttachCGroupInet4Bind,
+		Program: sockoptObjs.BindV4,
+	})
+	if err != nil {
+		return err
+	}
+	act.bindV4Link = bindV4Link
+	bindV6Link, err := link.AttachCgroup(link.CgroupOptions{
+		Path:    hostCgroupPath,
+		Attach:  ebpf.AttachCGroupInet6Bind,
+		Program: sockoptObjs.BindV6,
+	})
+	if err != nil {
+		return err
+	}
+	act.bindV6Link = bindV6Link
 
 	trackerObjs := &trackerObjects{}
 	if err := loadTrackerObjects(trackerObjs, nil); err != nil {
@@ -215,8 +233,14 @@ func (act *Activator) Stop(_ context.Context) {
 	if act.sockoptObjects != nil {
 		act.sockoptObjects.Close()
 	}
-	if act.sockOptLink != nil {
-		act.sockOptLink.Close()
+	if act.sockoptLink != nil {
+		act.sockoptLink.Close()
+	}
+	if act.bindV4Link != nil {
+		act.bindV4Link.Close()
+	}
+	if act.bindV6Link != nil {
+		act.bindV6Link.Close()
 	}
 	if act.trackerObjs != nil {
 		act.trackerObjs.Close()
@@ -416,22 +440,12 @@ func (act *Activator) Reset() error {
 		ln.probe.closeListener()
 	}
 	act.wakeInodes = []uint64{}
-	for k, ln := range act.listeners {
+	for k := range act.listeners {
 		if err := act.ns.Do(func(nn ns.NetNS) error {
-			// ensure our new sockets will have the same uid as the app socket.
-			// Because we syscall.Setfsuid inside ns.Do, this should be safe as
-			// it takes care to lock the os thread.
-			eUIDBefore := os.Geteuid()
-			if err := syscall.Setfsuid(ln.app.uid); err != nil {
-				return err
-			}
 			if err := act.listenWake(k.port, k.network, act.listeners[k]); err != nil {
 				return err
 			}
 			if err := act.listenProbe(k.port, k.network, act.listeners[k]); err != nil {
-				return err
-			}
-			if err := syscall.Setfsuid(eUIDBefore); err != nil {
 				return err
 			}
 			return nil
@@ -451,8 +465,12 @@ func (act *Activator) Reset() error {
 
 func (act *Activator) GetListeners() []activator.Listener {
 	listeners := []activator.Listener{}
-	for k := range act.listeners {
-		listeners = append(listeners, activator.Listener{Port: k.port, Network: k.network})
+	for k, l := range act.listeners {
+		listeners = append(listeners, activator.Listener{
+			Port:    k.port,
+			Network: k.network,
+			UID:     l.app.uid,
+		})
 	}
 	return listeners
 }

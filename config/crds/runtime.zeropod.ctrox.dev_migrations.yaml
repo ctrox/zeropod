@@ -68,19 +68,6 @@ spec:
                       - host
                       - port
                       type: object
-                    listeners:
-                      items:
-                        properties:
-                          network:
-                            type: string
-                          port:
-                            format: int32
-                            type: integer
-                        required:
-                        - network
-                        - port
-                        type: object
-                      type: array
                     name:
                       type: string
                     pageServer:

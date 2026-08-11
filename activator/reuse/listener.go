@@ -2,20 +2,14 @@ package reuse
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
-	"slices"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
 	"github.com/ctrox/zeropod/activator"
-	"github.com/prometheus/procfs"
 	"golang.org/x/sys/unix"
 )
 
@@ -36,24 +30,13 @@ type wakeListener struct {
 
 type appListener struct {
 	fd  int
-	uid int
+	uid uint64
 }
 
 type listenerKey struct {
 	port    uint16
 	network activator.Network
 }
-
-type listener struct {
-	port    uint16
-	network activator.Network
-	inode   uint32
-	origFd  int
-	fd      *os.File
-	uid     int
-}
-
-var ErrNoListeningSockets = errors.New("no listening sockets found")
 
 func (wl *wakeListener) closeListener() {
 	var buf [8]byte
@@ -76,7 +59,7 @@ func (wl *wakeListener) close() {
 // wake. Needs to be called inside the target network namespace.
 func (act *Activator) listenWake(port uint16, network activator.Network, lg *listenerGroup) error {
 	act.log.Debugf("listening wake: %d %s", port, network)
-	ln, err := listenReuseport(port, network)
+	ln, err := listenReuseport(port, network, int(lg.app.uid))
 	if err != nil {
 		return fmt.Errorf("wake listener: %w", err)
 	}
@@ -181,17 +164,17 @@ func (act *Activator) registerListeners(pid int) error {
 		return err
 	}
 	if len(listeners) < len(act.ports) {
-		return fmt.Errorf("%w: expected at least %d listeners, found %d", ErrNoListeningSockets, len(act.ports), len(listeners))
+		return fmt.Errorf("%w: expected at least %d listeners, found %d", activator.ErrNoListeningSockets, len(act.ports), len(listeners))
 	}
 	act.log.Debugf("getting listeners in %s", time.Since(before))
 
 	for _, l := range listeners {
-		if l.fd == nil {
+		if l.FD == nil {
 			continue
 		}
-		defer l.fd.Close()
+		defer l.FD.Close()
 
-		key := listenerKey{port: l.port, network: l.network}
+		key := listenerKey{port: l.Port, network: l.Network}
 		if _, ok := act.listeners[key]; !ok {
 			objs := &reuseportObjects{}
 			if err := loadReuseportObjects(objs, &ebpf.CollectionOptions{}); err != nil {
@@ -207,15 +190,15 @@ func (act *Activator) registerListeners(pid int) error {
 			}
 		}
 		ln := act.listeners[key]
-		act.log.Debugf("registering ln %d port %d net %s ino %d", l.fd.Fd(), l.port, l.network, l.inode)
-		if err := act.attachListener(appKey, l.fd.Fd(), ln.reuse.Listeners, ln.reuse.SelectOrMigrate); err != nil {
+		act.log.Debugf("registering ln %d port %d net %s ino %d", l.FD.Fd(), l.Port, l.Network, l.Inode)
+		if err := act.attachListener(appKey, l.FD.Fd(), ln.reuse.Listeners, ln.reuse.SelectOrMigrate); err != nil {
 			return fmt.Errorf("registering listener: %w", err)
 		}
-		act.log.Debugf("caching port %d fd %d uid %d", l.port, l.origFd, l.uid)
-		act.listeners[key].app = appListener{fd: l.origFd, uid: l.uid}
+		act.log.Debugf("caching port %d fd %d uid %d", l.Port, l.OrigFd, l.UID)
+		act.listeners[key].app = appListener{fd: l.OrigFd, uid: l.UID}
 	}
 	if len(listeners) == 0 {
-		return ErrNoListeningSockets
+		return activator.ErrNoListeningSockets
 	}
 	return nil
 }
@@ -235,96 +218,23 @@ func (act *Activator) probeAddrValue() [16]byte {
 	return ebpfProbeAddr
 }
 
-func (act *Activator) listenerFds(pid int) ([]listener, error) {
+func (act *Activator) listenerFds(pid int) (activator.Listeners, error) {
 	l, err := act.listenerFdsFromCache(pid)
 	if err == nil && len(l) > 0 && len(l) == len(act.listeners) {
 		return l, nil
 	}
 	// close fds in case the cache returned partial listeners
 	for _, ln := range l {
-		if ln.fd != nil {
-			_ = ln.fd.Close()
+		if ln.FD != nil {
+			_ = ln.FD.Close()
 		}
 	}
-	listeners, err := act.getListeningInodes(pid)
+	listeners, err := activator.GetListenersOfPIDWithFD(act.log.Context, pid, act.wakeInodes...)
 	if err != nil {
 		return nil, err
 	}
 
-	pids, err := containerPids(pid)
-	if err != nil {
-		return nil, err
-	}
-
-	listenersWithFd := []listener{}
-	inos := map[uint32]struct{}{}
-	for _, cpid := range pids {
-		for _, listener := range listeners {
-			if _, ok := inos[listener.inode]; ok {
-				continue
-			}
-			if slices.Contains(act.wakeInodes, uint64(listener.inode)) {
-				continue
-			}
-			target, err := socketFdNum(cpid, []uint32{listener.inode})
-			if err != nil {
-				continue
-			}
-			pidfd, err := unix.PidfdOpen(cpid, 0)
-			if err != nil {
-				continue
-			}
-			defer unix.Close(pidfd)
-
-			fd, err := unix.PidfdGetfd(pidfd, target, 0)
-			if err != nil {
-				continue
-			}
-
-			// TODO: dry this
-			sockaddr, err := unix.Getsockname(fd)
-			if err != nil {
-				_ = unix.Close(fd)
-				continue
-			}
-			var port int
-			switch sa := sockaddr.(type) {
-			case *unix.SockaddrInet4:
-				port = sa.Port
-			case *unix.SockaddrInet6:
-				port = sa.Port
-			}
-			if listener.port != uint16(port) {
-				_ = unix.Close(fd)
-				continue
-			}
-			network, err := getNetworkFromSock(fd)
-			if err != nil {
-				_ = unix.Close(fd)
-				continue
-			}
-			listener.network = network
-			listener.fd = os.NewFile(uintptr(fd), "")
-			listener.origFd = target
-			listenersWithFd = append(listenersWithFd, listener)
-			inos[listener.inode] = struct{}{}
-		}
-	}
-	return listenersWithFd, nil
-}
-
-func getNetworkFromSock(fd int) (activator.Network, error) {
-	domain, err := unix.GetsockoptInt(fd, unix.SOL_SOCKET, unix.SO_DOMAIN)
-	if err != nil {
-		return activator.Network(""), err
-	}
-	if domain == unix.AF_INET6 {
-		if v, err := unix.GetsockoptInt(fd, unix.IPPROTO_IPV6, unix.IPV6_V6ONLY); err == nil && v == 1 {
-			return activator.NetworkTCP6ONLY, nil
-		}
-		return activator.NetworkTCPAny, nil
-	}
-	return activator.NetworkTCP4, nil
+	return listeners, nil
 }
 
 // attachListener attaches select_or_migrate to the listeners reuseport group
@@ -368,13 +278,16 @@ func (act *Activator) attachNetListener(ln net.Listener, key uint32, bpfMap *ebp
 }
 
 // listenReuseport opens a TCP listener with SO_REUSEPORT
-func listenReuseport(port uint16, network activator.Network) (*net.TCPListener, error) {
+func listenReuseport(port uint16, network activator.Network, uid int) (*net.TCPListener, error) {
 	lc := net.ListenConfig{
 		Control: func(_, _ string, c syscall.RawConn) error {
 			var serr error
 			if err := c.Control(func(fd uintptr) {
 				serr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
 				if serr != nil {
+					return
+				}
+				if serr = unix.Fchown(int(fd), uid, -1); serr != nil {
 					return
 				}
 			}); err != nil {
@@ -391,14 +304,14 @@ func listenReuseport(port uint16, network activator.Network) (*net.TCPListener, 
 	return ln.(*net.TCPListener), nil
 }
 
-func (act *Activator) listenerFdsFromCache(pid int) ([]listener, error) {
+func (act *Activator) listenerFdsFromCache(pid int) (activator.Listeners, error) {
 	cache := act.listeners
 	if len(cache) == 0 {
 		return nil, nil
 	}
 
-	listeners := []listener{}
-	pids, err := containerPids(pid)
+	listeners := activator.Listeners{}
+	pids, err := activator.ContainerPids(pid)
 	if err != nil {
 		return nil, err
 	}
@@ -446,7 +359,7 @@ func (act *Activator) listenerFdsFromCache(pid int) ([]listener, error) {
 				_ = unix.Close(fd)
 				continue
 			}
-			network, err := getNetworkFromSock(fd)
+			network, err := activator.GetNetworkFromSock(fd)
 			if err != nil {
 				_ = unix.Close(fd)
 				continue
@@ -456,130 +369,15 @@ func (act *Activator) listenerFdsFromCache(pid int) ([]listener, error) {
 				continue
 			}
 			resolved[k] = struct{}{}
-			listeners = append(listeners, listener{
-				port:    k.port,
-				network: network,
-				fd:      os.NewFile(uintptr(fd), ""),
-				origFd:  v.app.fd,
-				uid:     v.app.uid,
-				inode:   uint32(stat.Ino),
+			listeners = append(listeners, activator.Listener{
+				Port:    k.port,
+				Network: network,
+				FD:      os.NewFile(uintptr(fd), ""),
+				OrigFd:  v.app.fd,
+				UID:     v.app.uid,
+				Inode:   uint32(stat.Ino),
 			})
 		}
 	}
 	return listeners, nil
-}
-
-func containerPids(pid int) ([]int, error) {
-	rootProc, err := procfs.NewProc(pid)
-	if err != nil {
-		return nil, err
-	}
-	rootNs, err := rootProc.Namespaces()
-	if err != nil {
-		return nil, err
-	}
-	pidNSInode := rootNs["pid"].Inode
-
-	pfs, err := procfs.NewDefaultFS()
-	if err != nil {
-		return nil, err
-	}
-	procs, err := pfs.AllProcs()
-	if err != nil {
-		return nil, err
-	}
-
-	containerProcs := []int{}
-	for _, proc := range procs {
-		target, err := os.Readlink(filepath.Join(procfs.DefaultMountPoint, strconv.Itoa(proc.PID), "ns", "pid"))
-		if err != nil {
-			continue
-		}
-
-		fields := strings.SplitN(target, ":", 2)
-		if len(fields) != 2 {
-			continue
-		}
-
-		inode, err := strconv.ParseUint(strings.Trim(fields[1], "[]"), 10, 32)
-		if err != nil {
-			continue
-		}
-
-		if uint32(inode) != pidNSInode {
-			continue
-		}
-		containerProcs = append(containerProcs, proc.PID)
-	}
-	return containerProcs, nil
-}
-
-func (act *Activator) getListeningInodes(pid int) ([]listener, error) {
-	fs, err := procfs.NewFS("/proc/" + strconv.Itoa(pid))
-	if err != nil {
-		return nil, err
-	}
-
-	netTCP4, err := fs.NetTCP()
-	if err != nil {
-		return nil, err
-	}
-	netTCP6, err := fs.NetTCP6()
-	if err != nil {
-		return nil, err
-	}
-
-	listeners := []listener{}
-	const tcpListen = 10
-	for _, sock := range netTCP4 {
-		if sock.St == tcpListen {
-			if slices.Contains(act.wakeInodes, uint64(sock.Inode)) {
-				continue
-			}
-			listeners = append(listeners, listener{
-				port:  uint16(sock.LocalPort),
-				inode: uint32(sock.Inode),
-				uid:   int(sock.UID),
-			})
-		}
-	}
-	for _, sock := range netTCP6 {
-		if sock.St == tcpListen {
-			if slices.Contains(act.wakeInodes, uint64(sock.Inode)) {
-				continue
-			}
-			listeners = append(listeners, listener{
-				port:  uint16(sock.LocalPort),
-				inode: uint32(sock.Inode),
-				uid:   int(sock.UID),
-			})
-		}
-	}
-
-	if len(listeners) == 0 {
-		return nil, ErrNoListeningSockets
-	}
-	return listeners, nil
-}
-
-// socketFdNum scans /proc/<pid>/fd for the fd number backing any of the
-// socket inodes.
-func socketFdNum(pid int, inodes []uint32) (int, error) {
-	dir := fmt.Sprintf("/proc/%d/fd", pid)
-	ents, err := os.ReadDir(dir)
-	if err != nil {
-		return 0, err
-	}
-	want := make(map[string]bool, len(inodes))
-	for _, ino := range inodes {
-		want[fmt.Sprintf("socket:[%d]", ino)] = true
-	}
-	for _, e := range ents {
-		link, err := os.Readlink(filepath.Join(dir, e.Name()))
-		if err != nil || !want[link] {
-			continue
-		}
-		return strconv.Atoi(e.Name())
-	}
-	return 0, fmt.Errorf("no fd for socket inodes %v", inodes)
 }

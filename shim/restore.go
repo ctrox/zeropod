@@ -227,10 +227,10 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 
 // MigrationRestore requests a restore from the node. If a matching migration is
 // found, it sets the Checkpoint path in the CreateTaskRequest.
-func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Config) (startInfo, error) {
+func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Config) (bool, error) {
 	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
-		return startInfo{}, fmt.Errorf("%w: dialing node service: %w", ErrRestoreDial, err)
+		return false, fmt.Errorf("%w: dialing node service: %w", ErrRestoreDial, err)
 	}
 	log.G(ctx).Infof("creating restore request for container: %s", cfg.ContainerName)
 
@@ -255,7 +255,7 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Co
 	defer conn.Close()
 	resp, err := nodeClient.Restore(ctx, restoreReq)
 	if err != nil {
-		return startInfo{}, fmt.Errorf("%w: %w", ErrRestoreRequestFailed, err)
+		return false, fmt.Errorf("%w: %w", ErrRestoreRequestFailed, err)
 	}
 	if len(cfg.Ports) == 0 {
 		for _, p := range resp.MigrationInfo.Ports {
@@ -266,7 +266,7 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Co
 	log.G(ctx).Infof("restore response: %v", resp.MigrationInfo)
 
 	if err := validateCheckpointData(nodev1.SnapshotPath(resp.MigrationInfo.ImageId)); err != nil {
-		return startInfo{}, fmt.Errorf("%w: %w", ErrInvalidCheckpoint, err)
+		return false, fmt.Errorf("%w: %w", ErrInvalidCheckpoint, err)
 	}
 	r.Checkpoint = nodev1.SnapshotPath(resp.MigrationInfo.ImageId)
 	log.G(ctx).Infof("setting checkpoint dir for restore: %s", r.Checkpoint)
@@ -275,15 +275,11 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Co
 	// socket needs to be there) and also so the restore stats are stored in the
 	// image directory.
 	if err := setCriuWorkPath(r, r.Checkpoint); err != nil {
-		return startInfo{}, err
+		return false, err
 	}
 
 	if !resp.MigrationInfo.LiveMigration {
-		listeners := activator.Listeners{}
-		for _, ln := range resp.MigrationInfo.Listeners {
-			listeners = append(listeners, activator.Listener{Port: uint16(ln.Port), Network: activator.Network(ln.Network)})
-		}
-		return startInfo{skip: true, listeners: listeners}, nil
+		return true, nil
 	}
 
 	// wait for the lazy pages socket file to exist to ensure the pages
@@ -291,10 +287,10 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Co
 	if err := waitForLazyPagesSocket(ctx, r.Checkpoint, time.Second); err != nil {
 		log.G(ctx).Errorf("aborting restore: %s", err)
 		r.Checkpoint = ""
-		return startInfo{}, nil
+		return false, nil
 	}
 
-	return startInfo{}, nil
+	return false, nil
 }
 
 // waitForLazyPagesSocket waits until the lazy-pages.socket file exists in the

@@ -440,16 +440,11 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 		}
 	}
 
-	listeners := []*nodev1.Listener{}
-	for _, ln := range container.Listeners {
-		listeners = append(listeners, &nodev1.Listener{Port: ln.Port, Network: ln.Network})
-	}
 	return &nodev1.RestoreResponse{
 		MigrationInfo: &nodev1.MigrationInfo{
 			ImageId:       req.MigrationInfo.ImageId,
 			LiveMigration: migration.Spec.LiveMigration,
 			Ports:         container.Ports,
-			Listeners:     listeners,
 		},
 	}, nil
 }
@@ -789,11 +784,6 @@ func (ns *nodeService) Evac(ctx context.Context, req *nodev1.EvacRequest) (*node
 			}
 			mc.PageServer = pageServer
 			mc.Ports = req.PodInfo.Ports
-			listeners := []v1.PodListener{}
-			for _, ln := range req.PodInfo.Listeners {
-				listeners = append(listeners, v1.PodListener{Port: ln.Port, Network: ln.Network})
-			}
-			mc.Listeners = listeners
 			log.Debug("found our container, setting migration servers")
 		}); !found {
 			return false, fmt.Errorf("migration does not have image for requested container %s", req.PodInfo.ContainerName)

@@ -28,14 +28,6 @@ int setsockopt(struct bpf_sockopt *ctx)
     if (sk->protocol != IPPROTO_TCP)
         return 1;
 
-    int reuseport_value = 1;
-    bpf_setsockopt(sk, SOL_SOCKET, SO_REUSEPORT, &reuseport_value, sizeof(reuseport_value));
-
-    if (ctx->level == SOL_IPV6 && ctx->optname == IPV6_V6ONLY) {
-        // bpf_printk("disabling ipv6only");
-        *optval = 0;
-    }
-
     if (ctx->level == SOL_SOCKET && ctx->optname == SO_REUSEPORT) {
         if (*optval == 0) {
             // bpf_printk("enabling SO_REUSEPORT");
@@ -44,4 +36,23 @@ int setsockopt(struct bpf_sockopt *ctx)
     }
 
     return 1;
+}
+
+static __always_inline int force_so_reuseport(struct bpf_sock_addr *ctx)
+{
+    int reuseport_value = 1;
+    bpf_setsockopt(ctx, SOL_SOCKET, SO_REUSEPORT, &reuseport_value, sizeof(reuseport_value));
+    return 1;
+}
+
+SEC("cgroup/bind4")
+int bind_v4(struct bpf_sock_addr *ctx)
+{
+    return force_so_reuseport(ctx);
+}
+
+SEC("cgroup/bind6")
+int bind_v6(struct bpf_sock_addr *ctx)
+{
+    return force_so_reuseport(ctx);
 }

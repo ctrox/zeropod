@@ -31,11 +31,6 @@ import (
 
 type HandleStartedFunc func(*runc.Container, process.Process)
 
-type startInfo struct {
-	skip      bool
-	listeners activator.Listeners
-}
-
 type Container struct {
 	*runc.Container
 	// mutex to lock during checkpoint/restore operations to ensure we don't try
@@ -52,7 +47,7 @@ type Container struct {
 	cgroup           any
 	logPath          string
 	scaledDown       bool
-	startInfo        startInfo
+	skipStart        bool
 	netNS            ns.NetNS
 	scaleDownTimer   *time.Timer
 	initTimer        *time.Timer
@@ -292,12 +287,12 @@ func (c *Container) sendFailEvent(phase v1.ContainerPhase, l string) {
 	c.sendEvent(status)
 }
 
-func (c *Container) SetSkipStart(startInfo startInfo) {
-	c.startInfo = startInfo
+func (c *Container) SetSkipStart(skip bool) {
+	c.skipStart = skip
 }
 
 func (c *Container) SkipStart() bool {
-	return c.startInfo.skip
+	return c.skipStart
 }
 
 func (c *Container) Status() *v1.ContainerStatus {
@@ -480,7 +475,7 @@ func (c *Container) initActivator(ctx context.Context) error {
 
 	log.G(ctx).Infof("starting activator with ports: %v", c.cfg.Ports)
 	if err := c.startActivator(ctx, c.cfg.Ports...); err != nil {
-		if errors.Is(err, activator.ErrMapNotFound) || errors.Is(err, reuse.ErrNoListeningSockets) {
+		if errors.Is(err, activator.ErrMapNotFound) || errors.Is(err, activator.ErrNoListeningSockets) {
 			c.retryInitIn(c.initRetry())
 			return nil
 		}
@@ -520,15 +515,17 @@ func (c *Container) cancelInit() {
 }
 
 func (c *Container) getListeners(ports ...uint16) activator.Listeners {
-	if c.startInfo.skip && len(c.startInfo.listeners) > 0 {
-		return c.startInfo.listeners
+	lns, err := c.loadListeners()
+	if err == nil {
+		return lns
 	}
+
 	listeners := activator.Listeners{}
 	for _, port := range ports {
-		// fallback to just a dual-stack listener for each port. If
-		// !startInfo.skip, the listeners will anyways be detected from the app
-		// so this is only relevant if we startInfo.skip and the listeners from
-		// the startInfo are empty.
+		// fallback to just a dual-stack listener for each port. If !skipStart,
+		// the listeners will anyways be detected from the app so this is only
+		// relevant if we skipStart and the listeners from the checkpoint are
+		// empty
 		listeners = append(
 			listeners,
 			activator.Listener{Port: port, Network: activator.NetworkTCPAny},
@@ -547,7 +544,7 @@ func (c *Container) startActivator(ctx context.Context, ports ...uint16) error {
 		return err
 	}
 
-	if err := c.activator.Start(c.context, c.Pid(), c.getListeners(ports...), c.startInfo.skip); err != nil {
+	if err := c.activator.Start(c.context, c.Pid(), c.getListeners(ports...), c.SkipStart()); err != nil {
 		if errors.Is(err, activator.ErrMapNotFound) {
 			return err
 		}

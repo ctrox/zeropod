@@ -46,6 +46,7 @@ type Server struct {
 	forwardToTarget bool
 	targetAddr      string
 	kubeletAddr     *netip.Addr
+	lns             Listeners
 }
 
 type ConnHook func(net.Conn) (conn net.Conn, cont bool, err error)
@@ -96,8 +97,19 @@ var (
 	DefaultIfaces  = []string{IfaceLoopback, IfaceETH0}
 )
 
-func (s *Server) Start(ctx context.Context, _ int, listeners Listeners, skipStart bool) error {
+func (s *Server) Start(ctx context.Context, pid int, listeners Listeners, skipStart bool) error {
 	s.ports = listeners.Ports()
+	s.lns = listeners
+	if !skipStart {
+		// populate listeners for storing them in the checkpoint. This is unused in
+		// this activator but is useful for forwards-compatibility when switching to
+		// the reuse activator.
+		lns, err := GetListenersOfPID(ctx, pid)
+		if err != nil {
+			return err
+		}
+		s.lns = lns
+	}
 
 	if err := s.loadPinnedMaps(); err != nil {
 		return err
@@ -131,12 +143,8 @@ func (s *Server) Start(ctx context.Context, _ int, listeners Listeners, skipStar
 	return nil
 }
 
-func (act *Server) GetListeners() []Listener {
-	listeners := []Listener{}
-	for _, port := range act.ports {
-		listeners = append(listeners, Listener{Port: port})
-	}
-	return listeners
+func (s *Server) GetListeners() []Listener {
+	return s.lns
 }
 
 const AttachActivatorFlag = "-zeropod-attach-activator"

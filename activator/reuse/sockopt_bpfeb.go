@@ -54,6 +54,8 @@ type sockoptSpecs struct {
 //
 // It can be passed ebpf.CollectionSpec.Assign.
 type sockoptProgramSpecs struct {
+	BindV4     *ebpf.ProgramSpec `ebpf:"bind_v4"`
+	BindV6     *ebpf.ProgramSpec `ebpf:"bind_v6"`
 	Setsockopt *ebpf.ProgramSpec `ebpf:"setsockopt"`
 }
 
@@ -105,11 +107,15 @@ type sockoptVariables struct {
 //
 // It can be passed to loadSockoptObjects or ebpf.CollectionSpec.LoadAndAssign.
 type sockoptPrograms struct {
+	BindV4     *ebpf.Program `ebpf:"bind_v4"`
+	BindV6     *ebpf.Program `ebpf:"bind_v6"`
 	Setsockopt *ebpf.Program `ebpf:"setsockopt"`
 }
 
 func (p *sockoptPrograms) Close() error {
 	return _SockoptClose(
+		p.BindV4,
+		p.BindV6,
 		p.Setsockopt,
 	)
 }
