@@ -24,6 +24,7 @@ func (c *Container) dryRunScaleDown(ctx context.Context) error {
 	}
 	c.dryRunScaledDown = true
 	c.dryRunSince = time.Now()
+	c.metrics.DryRunScaleDowns += 1
 	log.G(ctx).Infof("dry-run: would have scaled down container %s after %s of inactivity", c.ID(), c.cfg.ScaleDownDuration)
 	c.sendDryRunEvent(fmt.Sprintf("would have scaled down after %s of inactivity", c.cfg.ScaleDownDuration))
 	c.scheduleDryRunRestoreCheck()
@@ -73,6 +74,7 @@ func (c *Container) DryRunExec(ctx context.Context) {
 // cycle immediately; otherwise the caller is responsible for rescheduling
 // once appropriate.
 func (c *Container) dryRunRestore(ctx context.Context, reason string, reschedule bool) {
+	c.metrics.DryRunWouldRestores += 1
 	log.G(ctx).Infof("dry-run: would have restored container %s, %s", c.ID(), reason)
 	c.sendDryRunEvent(fmt.Sprintf("would have restored (%s)", reason))
 	c.dryRunScaledDown = false

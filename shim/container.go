@@ -531,4 +531,6 @@ func (c *Container) clearMetrics() {
 	c.metrics.LastRestoreDuration = nil
 	c.metrics.CheckpointErrors = 0
 	c.metrics.RestoreErrors = 0
+	c.metrics.DryRunScaleDowns = 0
+	c.metrics.DryRunWouldRestores = 0
 }

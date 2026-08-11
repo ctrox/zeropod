@@ -375,6 +375,8 @@ type ContainerMetrics struct {
 	Running                bool                   `protobuf:"varint,8,opt,name=running,proto3" json:"running,omitempty"`
 	CheckpointErrors       int64                  `protobuf:"varint,9,opt,name=checkpoint_errors,json=checkpointErrors,proto3" json:"checkpoint_errors,omitempty"`
 	RestoreErrors          int64                  `protobuf:"varint,10,opt,name=restore_errors,json=restoreErrors,proto3" json:"restore_errors,omitempty"`
+	DryRunScaleDowns       int64                  `protobuf:"varint,11,opt,name=dry_run_scale_downs,json=dryRunScaleDowns,proto3" json:"dry_run_scale_downs,omitempty"`
+	DryRunWouldRestores    int64                  `protobuf:"varint,12,opt,name=dry_run_would_restores,json=dryRunWouldRestores,proto3" json:"dry_run_would_restores,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -479,6 +481,20 @@ func (x *ContainerMetrics) GetRestoreErrors() int64 {
 	return 0
 }
 
+func (x *ContainerMetrics) GetDryRunScaleDowns() int64 {
+	if x != nil {
+		return x.DryRunScaleDowns
+	}
+	return 0
+}
+
+func (x *ContainerMetrics) GetDryRunWouldRestores() int64 {
+	if x != nil {
+		return x.DryRunWouldRestores
+	}
+	return 0
+}
+
 var File_shim_proto protoreflect.FileDescriptor
 
 const file_shim_proto_rawDesc = "" +
@@ -503,7 +519,7 @@ const file_shim_proto_rawDesc = "" +
 	"event_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\teventTime\x12@\n" +
 	"\x0eevent_duration\x18\a \x01(\v2\x19.google.protobuf.DurationR\reventDuration\x12\x1b\n" +
 	"\tevent_log\x18\b \x01(\tR\beventLog\x12\x17\n" +
-	"\adry_run\x18\t \x01(\bR\x06dryRun\"\xf6\x03\n" +
+	"\adry_run\x18\t \x01(\bR\x06dryRun\"\xda\x04\n" +
 	"\x10ContainerMetrics\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\bpod_name\x18\x02 \x01(\tR\apodName\x12#\n" +
@@ -515,7 +531,9 @@ const file_shim_proto_rawDesc = "" +
 	"\arunning\x18\b \x01(\bR\arunning\x12+\n" +
 	"\x11checkpoint_errors\x18\t \x01(\x03R\x10checkpointErrors\x12%\n" +
 	"\x0erestore_errors\x18\n" +
-	" \x01(\x03R\rrestoreErrors*g\n" +
+	" \x01(\x03R\rrestoreErrors\x12-\n" +
+	"\x13dry_run_scale_downs\x18\v \x01(\x03R\x10dryRunScaleDowns\x123\n" +
+	"\x16dry_run_would_restores\x18\f \x01(\x03R\x13dryRunWouldRestores*g\n" +
 	"\x0eContainerPhase\x12\x0f\n" +
 	"\vSCALED_DOWN\x10\x00\x12\v\n" +
 	"\aRUNNING\x10\x01\x12\f\n" +

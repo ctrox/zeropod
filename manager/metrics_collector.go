@@ -17,14 +17,16 @@ const (
 	LabelPodName       = "pod"
 	LabelPodNamespace  = "namespace"
 
-	MetricsNamespace            = "zeropod"
-	MetricCheckpointDuration    = "checkpoint_duration_seconds"
-	MetricRestoreDuration       = "restore_duration_seconds"
-	MetricLastCheckpointTime    = "last_checkpoint_time"
-	MetricLastRestoreTime       = "last_restore_time"
-	MetricRunning               = "running"
-	MetricCheckpointErrorsTotal = "checkpoint_errors_total"
-	MetricRestoreErrorsTotal    = "restore_errors_total"
+	MetricsNamespace               = "zeropod"
+	MetricCheckpointDuration       = "checkpoint_duration_seconds"
+	MetricRestoreDuration          = "restore_duration_seconds"
+	MetricLastCheckpointTime       = "last_checkpoint_time"
+	MetricLastRestoreTime          = "last_restore_time"
+	MetricRunning                  = "running"
+	MetricCheckpointErrorsTotal    = "checkpoint_errors_total"
+	MetricRestoreErrorsTotal       = "restore_errors_total"
+	MetricDryRunScaleDownsTotal    = "dry_run_scale_downs_total"
+	MetricDryRunWouldRestoresTotal = "dry_run_would_restores_total"
 )
 
 var (
@@ -37,14 +39,16 @@ var (
 )
 
 type Collector struct {
-	log                *slog.Logger
-	checkpointDuration *prometheus.HistogramVec
-	restoreDuration    *prometheus.HistogramVec
-	lastCheckpointTime *prometheus.GaugeVec
-	lastRestoreTime    *prometheus.GaugeVec
-	running            *prometheus.GaugeVec
-	checkpointErrors   *prometheus.CounterVec
-	restoreErrors      *prometheus.CounterVec
+	log                 *slog.Logger
+	checkpointDuration  *prometheus.HistogramVec
+	restoreDuration     *prometheus.HistogramVec
+	lastCheckpointTime  *prometheus.GaugeVec
+	lastRestoreTime     *prometheus.GaugeVec
+	running             *prometheus.GaugeVec
+	checkpointErrors    *prometheus.CounterVec
+	restoreErrors       *prometheus.CounterVec
+	dryRunScaleDowns    *prometheus.CounterVec
+	dryRunWouldRestores *prometheus.CounterVec
 }
 
 func NewCollector(log *slog.Logger) *Collector {
@@ -93,6 +97,18 @@ func NewCollector(log *slog.Logger) *Collector {
 			Name:      MetricRestoreErrorsTotal,
 			Help:      "Total number of restore errors.",
 		}, commonLabels),
+
+		dryRunScaleDowns: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricDryRunScaleDownsTotal,
+			Help:      "Total number of simulated dry-run scale downs.",
+		}, commonLabels),
+
+		dryRunWouldRestores: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricDryRunWouldRestoresTotal,
+			Help:      "Total number of simulated dry-run restores.",
+		}, commonLabels),
 	}
 }
 
@@ -136,6 +152,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			}
 			c.checkpointErrors.With(l).Add(float64(metrics.CheckpointErrors))
 			c.restoreErrors.With(l).Add(float64(metrics.RestoreErrors))
+			c.dryRunScaleDowns.With(l).Add(float64(metrics.DryRunScaleDowns))
+			c.dryRunWouldRestores.With(l).Add(float64(metrics.DryRunWouldRestores))
 		}
 	}
 	c.running.Collect(ch)
@@ -145,6 +163,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.lastRestoreTime.Collect(ch)
 	c.checkpointErrors.Collect(ch)
 	c.restoreErrors.Collect(ch)
+	c.dryRunScaleDowns.Collect(ch)
+	c.dryRunWouldRestores.Collect(ch)
 }
 
 func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
@@ -186,4 +206,6 @@ func (c *Collector) deleteMetrics(status *v1.ContainerStatus) {
 	c.lastRestoreTime.Delete(l)
 	c.checkpointErrors.Delete(l)
 	c.restoreErrors.Delete(l)
+	c.dryRunScaleDowns.Delete(l)
+	c.dryRunWouldRestores.Delete(l)
 }
