@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -97,19 +98,8 @@ var (
 	DefaultIfaces  = []string{IfaceLoopback, IfaceETH0}
 )
 
-func (s *Server) Start(ctx context.Context, pid int, listeners Listeners, skipStart bool) error {
+func (s *Server) Start(ctx context.Context, _ int, listeners Listeners, skipStart bool) error {
 	s.ports = listeners.Ports()
-	s.lns = listeners
-	if !skipStart {
-		// populate listeners for storing them in the checkpoint. This is unused in
-		// this activator but is useful for forwards-compatibility when switching to
-		// the reuse activator.
-		lns, err := GetListenersOfPID(ctx, pid)
-		if err != nil {
-			return err
-		}
-		s.lns = lns
-	}
 
 	if err := s.loadPinnedMaps(); err != nil {
 		return err
@@ -143,7 +133,22 @@ func (s *Server) Start(ctx context.Context, pid int, listeners Listeners, skipSt
 	return nil
 }
 
-func (s *Server) GetListeners() []Listener {
+func (s *Server) GetListeners(ctx context.Context, pid int) []Listener {
+	if s.lns != nil {
+		return s.lns
+	}
+	lns, err := GetListenersOfPID(ctx, pid)
+	if err != nil {
+		return s.lns
+	}
+	listeners := []Listener{}
+	for _, ln := range lns {
+		if !slices.Contains(s.ports, ln.Port) {
+			continue
+		}
+		listeners = append(listeners, ln)
+	}
+	s.lns = listeners
 	return s.lns
 }
 

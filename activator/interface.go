@@ -15,6 +15,6 @@ type Activator interface {
 	SetConnectTimeout(d time.Duration)
 	LastActivity(port uint16) (time.Time, error)
 	Stop(ctx context.Context)
-	GetListeners() []Listener
+	GetListeners(ctx context.Context, pid int) []Listener
 	ForwardToTarget(ctx context.Context, addr string) error
 }

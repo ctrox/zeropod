@@ -466,8 +466,8 @@ func (act *Activator) Reset() error {
 	return nil
 }
 
-func (act *Activator) GetListeners() []activator.Listener {
-	listeners := []activator.Listener{}
+func (act *Activator) GetListeners(_ context.Context, _ int) []activator.Listener {
+	listeners := make([]activator.Listener, 0, len(act.listeners))
 	for k, l := range act.listeners {
 		listeners = append(listeners, activator.Listener{
 			Port:    k.port,

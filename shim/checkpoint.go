@@ -67,16 +67,25 @@ func (c *Container) kill(ctx context.Context) error {
 	return nil
 }
 
+func (c *Container) prepareSnapshotDir() (string, string, error) {
+	snapshotDir := nodev1.SnapshotPath(c.ID())
+	if err := os.RemoveAll(snapshotDir); err != nil {
+		return "", "", fmt.Errorf("unable to prepare snapshot dir: %w", err)
+	}
+	if err := os.MkdirAll(snapshotDir, 0600); err != nil {
+		return "", "", err
+	}
+	return snapshotDir, nodev1.WorkDirPath(c.ID()), nil
+}
+
 func (c *Container) checkpoint(ctx context.Context) error {
 	c.CheckpointRestore.Lock()
 	defer c.CheckpointRestore.Unlock()
 
-	snapshotDir := nodev1.SnapshotPath(c.ID())
-	if err := os.RemoveAll(snapshotDir); err != nil {
-		return fmt.Errorf("unable to prepare snapshot dir: %w", err)
+	snapshotDir, workDir, err := c.prepareSnapshotDir()
+	if err != nil {
+		return err
 	}
-
-	workDir := nodev1.WorkDirPath(c.ID())
 	log.G(ctx).Infof("checkpointing process %d of container to %s", c.process.Pid(), snapshotDir)
 
 	initProcess, ok := c.process.(*process.Init)
@@ -101,6 +110,10 @@ func (c *Container) checkpoint(ctx context.Context) error {
 		c.sendFailEvent(v1.ContainerPhase_CHECKPOINT_FAILED, lines)
 	}
 
+	if err := c.storeListeners(ctx); err != nil {
+		log.G(ctx).WithError(err).Error("storing listeners in snaphsot path")
+	}
+
 	if c.cfg.PreDump {
 		// for the pre-dump we set the ImagePath to be a sub-path of our container image path
 		opts.ImagePath = nodev1.PreDumpDir(c.ID())
@@ -122,17 +135,13 @@ func (c *Container) checkpoint(ctx context.Context) error {
 
 	c.AddCheckpointedPID(c.Pid())
 	// ImagePath is always the same, regardless of pre-dump
-	opts.ImagePath = nodev1.SnapshotPath(c.ID())
+	opts.ImagePath = snapshotDir
 
 	beforeCheckpoint := time.Now()
 	if err := initProcess.Runtime().Checkpoint(ctx, c.ID(), opts); err != nil {
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
 		resetOnErr()
 		return err
-	}
-
-	if err := c.storeListeners(); err != nil {
-		log.G(ctx).WithError(err).Error("storing listeners in snaphsot path")
 	}
 
 	c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, time.Since(beforeCheckpoint))
@@ -163,14 +172,13 @@ func (c *Container) checkpointExtraArgs() []string {
 	return def
 }
 
-func (c *Container) storeListeners() error {
+func (c *Container) storeListeners(ctx context.Context) error {
 	f, err := os.Create(nodev1.ListenersFile(c.ID()))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	listeners := c.activator.GetListeners()
-	return json.NewEncoder(f).Encode(listeners)
+	return json.NewEncoder(f).Encode(c.activator.GetListeners(ctx, c.Pid()))
 }
 
 func (c *Container) loadListeners() (activator.Listeners, error) {

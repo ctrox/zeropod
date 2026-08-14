@@ -14,6 +14,7 @@ const (
 	PodIPEnvKey              = "POD_IP"
 	preDumpDirName           = "pre-dump"
 	listenersFile            = "zeropod_listeners.json"
+	NetinfoBinary            = "zeropod-netinfo"
 )
 
 var imageBasePath = "/var/lib/zeropod/"

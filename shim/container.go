@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"os/exec"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -514,18 +516,32 @@ func (c *Container) cancelInit() {
 	c.initTimer.Stop()
 }
 
+// getListeners prepares the activator listeners from a migrated snapshot. It
+// first tries to load them from an existing zeropod_listeners.json and if
+// that's not present it will call [nodev1.NetinfoBinary] to extract the from
+// the criu checkpoint.
 func (c *Container) getListeners(ports ...uint16) activator.Listeners {
 	lns, err := c.loadListeners()
 	if err == nil {
 		return lns
 	}
 
+	out, err := exec.Command(nodev1.NetinfoBinary, "-id", c.ID()).CombinedOutput()
+	if err != nil && !strings.Contains(err.Error(), "no child processes") {
+		log.G(c.context).WithError(err).Errorf("calling zeropod-migrate: %s", out)
+	} else {
+		lns, err := c.loadListeners()
+		if err == nil {
+			return lns
+		}
+	}
+
 	listeners := activator.Listeners{}
 	for _, port := range ports {
 		// fallback to just a dual-stack listener for each port. If !skipStart,
-		// the listeners will anyways be detected from the app so this is only
-		// relevant if we skipStart and the listeners from the checkpoint are
-		// empty
+		// the listeners will anyways be detected from the app so this is more
+		// of a last resort if we skipStart and the listeners from the
+		// checkpoint are empty or failed to extract.
 		listeners = append(
 			listeners,
 			activator.Listener{Port: port, Network: activator.NetworkTCPAny},

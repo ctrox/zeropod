@@ -21,6 +21,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/cmd/containerd/server/config"
 	"github.com/coreos/go-systemd/v22/dbus"
+	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager/node"
 	"github.com/pelletier/go-toml/v2"
@@ -59,8 +60,9 @@ const (
 	hostRoot                    = "/host"
 	binPath                     = "bin/"
 	criuConfigFile              = "/etc/criu/default.conf"
+	buildPath                   = "/build/"
 	shimBinaryName              = "containerd-shim-zeropod-v2"
-	runtimePath                 = "/build/" + shimBinaryName
+	runtimePath                 = buildPath + shimBinaryName
 	defaultContainerdConfigPath = "/etc/containerd/config.toml"
 	containerdSock              = "/run/containerd/containerd.sock"
 	configBackupSuffix          = ".original"
@@ -230,6 +232,20 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 
 	if err := os.WriteFile(shimDest, shim, 0755); err != nil {
 		return fmt.Errorf("unable to write shim file: %w", err)
+	}
+
+	netinfoDest := filepath.Join(opt, binPath, nodev1.NetinfoBinary)
+	if err := os.Remove(netinfoDest); err != nil {
+		log.Printf("unable to remove netinfo binary, continuing with install: %s", err)
+	}
+
+	netinfo, err := os.ReadFile(filepath.Join(buildPath, nodev1.NetinfoBinary))
+	if err != nil {
+		return fmt.Errorf("unable to read netinfo file: %w", err)
+	}
+
+	if err := os.WriteFile(netinfoDest, netinfo, 0755); err != nil {
+		return fmt.Errorf("unable to write netinfo file: %w", err)
 	}
 
 	cfg, err := v1.Load(opt)
