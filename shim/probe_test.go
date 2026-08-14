@@ -13,7 +13,6 @@ import (
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 )
 
 func TestDetectProbe(t *testing.T) {
@@ -67,7 +66,7 @@ func TestDetectProbe(t *testing.T) {
 		"probe request not from kubelet": {
 			clientFunc:    kubeTCPProbe,
 			probeDetected: false,
-			kubeletAddr:   ptr.To(netip.MustParseAddr("10.0.0.1")),
+			kubeletAddr:   new(netip.MustParseAddr("10.0.0.1")),
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -87,7 +86,7 @@ func TestDetectProbe(t *testing.T) {
 				act.SetKubeletAddr(tc.kubeletAddr)
 			} else {
 				// default to localhost
-				act.SetKubeletAddr(ptr.To(netip.MustParseAddr("127.0.0.1")))
+				act.SetKubeletAddr(new(netip.MustParseAddr("127.0.0.1")))
 			}
 			c := &Container{
 				cfg:       &v1.Config{AnnotationConfig: v1.AnnotationConfig{ProbeBufferSize: v1.DefaultProbeBufferSize}},

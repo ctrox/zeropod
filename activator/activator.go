@@ -25,7 +25,6 @@ import (
 	"github.com/containerd/log"
 	"github.com/containernetworking/plugins/pkg/ns"
 	"golang.org/x/sys/unix"
-	"k8s.io/utils/ptr"
 )
 
 type Server struct {
@@ -654,14 +653,14 @@ func (s *Server) GetKubeletAddr(isV6 bool) (*netip.Addr, error) {
 		if err := kubeletAddrMap.Lookup(key, &value); err != nil {
 			return nil, fmt.Errorf("looking up kubelet addr from map %s: %w", mapName, err)
 		}
-		return ptr.To(netip.AddrFrom16(value)), nil
+		return new(netip.AddrFrom16(value)), nil
 	}
 	value := [4]byte{}
 	if err := kubeletAddrMap.Lookup(key, &value); err != nil {
 		return nil, fmt.Errorf("looking up kubelet addr from map %s: %w", mapName, err)
 	}
-	s.kubeletAddr = ptr.To(netip.AddrFrom4(value))
-	return ptr.To(netip.AddrFrom4(value)), nil
+	s.kubeletAddr = new(netip.AddrFrom4(value))
+	return new(netip.AddrFrom4(value)), nil
 }
 
 func GetSandboxIPs(ifaceName string) ([]netip.Addr, error) {

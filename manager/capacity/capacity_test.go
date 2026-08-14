@@ -8,7 +8,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 func TestNodeTracker(t *testing.T) {
@@ -46,7 +45,7 @@ func TestTaint(t *testing.T) {
 						{
 							Key:       TaintKey,
 							Effect:    corev1.TaintEffectNoSchedule,
-							TimeAdded: ptr.To(metav1.Now()),
+							TimeAdded: new(metav1.Now()),
 						},
 					},
 				},
@@ -60,7 +59,7 @@ func TestTaint(t *testing.T) {
 						{
 							Key:       "foo.bar/nope",
 							Effect:    corev1.TaintEffectNoSchedule,
-							TimeAdded: ptr.To(metav1.Now()),
+							TimeAdded: new(metav1.Now()),
 						},
 					},
 				},

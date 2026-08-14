@@ -1,4 +1,4 @@
-FROM debian:12 as build
+FROM debian:12 AS build
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     git build-essential libprotobuf-dev libprotobuf-c-dev \
     protobuf-c-compiler protobuf-compiler python3-protobuf \

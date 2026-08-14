@@ -8,13 +8,14 @@ import (
 	"time"
 
 	"github.com/containerd/cgroups/v3"
+	"github.com/containerd/cgroups/v3/cgroup1"
+	cgroupsv2 "github.com/containerd/cgroups/v3/cgroup2"
 	cgroupv2stats "github.com/containerd/cgroups/v3/cgroup2/stats"
 	taskAPI "github.com/containerd/containerd/api/runtime/task/v3"
 	"github.com/containerd/containerd/api/types/task"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/runc"
 	"github.com/containerd/containerd/v2/pkg/oom"
 	oomv1 "github.com/containerd/containerd/v2/pkg/oom/v1"
-	oomv2 "github.com/containerd/containerd/v2/pkg/oom/v2"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/containerd/v2/pkg/shutdown"
 	"github.com/containerd/containerd/v2/pkg/sys/reaper"
@@ -22,6 +23,7 @@ import (
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
 	"github.com/containerd/ttrpc"
+	"github.com/moby/sys/userns"
 
 	"github.com/containerd/typeurl/v2"
 	"github.com/ctrox/zeropod/activator"
@@ -43,21 +45,19 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 		ep  oom.Watcher
 		err error
 	)
-	if cgroups.Mode() == cgroups.Unified {
-		ep, err = oomv2.New(publisher)
-	} else {
+	if cgroups.Mode() != cgroups.Unified {
 		ep, err = oomv1.New(publisher)
+		if err != nil {
+			return nil, err
+		}
+		go ep.Run(ctx)
 	}
-	if err != nil {
-		return nil, err
-	}
-
-	go ep.Run(ctx)
 	s := &service{
 		context:              ctx,
-		events:               make(chan any, 128),
+		events:               make(chan interface{}, 128),
 		ec:                   make(chan runcC.Exit, 32),
-		ep:                   ep,
+		cg1oom:               ep,
+		publisher:            publisher,
 		shutdown:             sd,
 		containers:           make(map[string]*runc.Container),
 		running:              make(map[int][]containerProcess),
@@ -478,6 +478,7 @@ func (w *wrapper) postRestore(container *runc.Container, handleStarted zshim.Han
 	p, _ := container.Process("")
 	w.containers[container.ID] = container
 	w.mu.Unlock()
+	w.oomWatch(w.context, container)
 
 	if handleStarted != nil {
 		handleStarted(container, p)
@@ -508,4 +509,31 @@ func (w *wrapper) cleanSandboxPin(ctx context.Context, r *taskAPI.DeleteRequest)
 		return err
 	}
 	return nil
+}
+
+// oomWatch watches the container cgroup for oom events
+func(w *wrapper) oomWatch(ctx context.Context, container *runc.Container){
+	switch cg := container.Cgroup().(type) {
+	case cgroup1.Cgroup:
+		if err := w.cg1oom.Add(container.ID, cg); err != nil {
+			log.G(ctx).WithError(err).Error("add cg to OOM monitor")
+		}
+	case *cgroupsv2.Manager:
+		allControllers, err := cg.RootControllers()
+		if err != nil {
+			log.G(ctx).WithError(err).Error("failed to get root controllers")
+		} else {
+			if err := cg.ToggleControllers(allControllers, cgroupsv2.Enable); err != nil {
+				if userns.RunningInUserNS() {
+					log.G(ctx).WithError(err).Debugf("failed to enable controllers (%v)", allControllers)
+				} else {
+					log.G(ctx).WithError(err).Errorf("failed to enable controllers (%v)", allControllers)
+				}
+			}
+		}
+
+		if err := container.OOMWatch(ctx, w.oomEvent); err != nil {
+			log.G(ctx).WithError(err).WithField("container_id", container.ID).Error("failed to watch oom events")
+		}
+	}
 }

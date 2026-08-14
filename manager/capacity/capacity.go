@@ -11,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/ptr"
 )
 
 const (
@@ -124,7 +123,7 @@ func AddTaint(node *corev1.Node) bool {
 	node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
 		Key:       TaintKey,
 		Effect:    corev1.TaintEffectNoSchedule,
-		TimeAdded: ptr.To(metav1.Now()),
+		TimeAdded: new(metav1.Now()),
 	})
 	return true
 }
