@@ -521,6 +521,10 @@ func (c *Container) cancelInit() {
 // that's not present it will call [nodev1.NetinfoBinary] to extract the from
 // the criu checkpoint.
 func (c *Container) getListeners(ports ...uint16) activator.Listeners {
+	if c.cfg.DisableCheckpointing {
+		return emptyListeners(ports...)
+	}
+
 	lns, err := c.loadListeners()
 	if err == nil {
 		return lns
@@ -536,6 +540,10 @@ func (c *Container) getListeners(ports ...uint16) activator.Listeners {
 		}
 	}
 
+	return emptyListeners(ports...)
+}
+
+func emptyListeners(ports ...uint16) activator.Listeners {
 	listeners := activator.Listeners{}
 	for _, port := range ports {
 		// fallback to just a dual-stack listener for each port. If !skipStart,

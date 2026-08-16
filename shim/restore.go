@@ -146,6 +146,14 @@ func (c *Container) restore(ctx context.Context) (*runc.Container, process.Proce
 	if err := c.activator.DisableRedirects(); err != nil {
 		return nil, nil, fmt.Errorf("could not disable redirects: %w", err)
 	}
+	if c.cfg.DisableCheckpointing {
+		// when checkpointing is disabled, container processes can take a while
+		// to start listening on the configured ports. We wait for all ports to
+		// be ready to avoid routing traffic into a void.
+		for _, port := range c.cfg.Ports {
+			listeningPortReady(c.Pid(), port)
+		}
+	}
 
 	return container, p, nil
 }
