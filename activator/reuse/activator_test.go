@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -165,10 +166,7 @@ func TestReuseActivator(t *testing.T) {
 			require.NoError(t, log.SetLevel(log.DebugLevel.String()))
 			ctx, cancel := context.WithCancel(t.Context())
 
-			// TODO: figure out why forwardToFunc leaks fds (maybe also the forwarder itself)
-			if tc.forwardToFunc == nil {
-				defer checkFDLeaks(t)()
-			}
+			defer checkFDLeaks(t)()
 			s, err := New(ctx, nn, "/sys/fs/cgroup")
 			require.NoError(t, err)
 
@@ -365,21 +363,16 @@ func checkFDLeaks(t *testing.T) func() {
 
 	return func() {
 		t.Helper()
+		// this looks silly but actually solves a false-positive with pipe fd
+		// leaks from the test which calls runApp.
+		runtime.GC()
+		runtime.GC()
 
-		after := map[string]string{}
-		// some fds can take a bit of time to release so we retry a bunch
-		for range 10 {
-			after = getFDs(t)
-			if len(after) <= len(before) {
-				break
-			}
-			time.Sleep(time.Millisecond * 100)
-		}
+		after := getFDs(t)
 		if len(after) > len(before) {
 			b, err := json.MarshalIndent(diff(before, after), "", "  ")
 			assert.NoError(t, err)
-			// TODO: fail the test here eventually but it's a bit flaky
-			t.Logf("file descriptor leak detected! Before: %d, After: %d\nLeaked FDs: %s",
+			t.Errorf("file descriptor leak detected! Before: %d, After: %d\nLeaked FDs: %s",
 				len(before), len(after), b)
 		}
 	}
