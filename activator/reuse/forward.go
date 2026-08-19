@@ -60,7 +60,10 @@ func (act *Activator) ForwardToTarget(ctx context.Context, addr string) error {
 
 func (fwd *forwarder) close() {
 	if fwd.quit != nil {
-		fwd.quit <- struct{}{}
+		select {
+		case fwd.quit <- struct{}{}:
+		default:
+		}
 	}
 	if fwd.ln != nil {
 		_ = fwd.ln.Close()
@@ -84,9 +87,12 @@ func (fwd *forwarder) serveForward(ctx context.Context, listener net.Listener, p
 				fwd.log.Debug("context closed")
 				return
 			default:
-				if !errors.Is(err, net.ErrClosed) {
-					fwd.log.Errorf("error accepting: %s", err)
+				if errors.Is(err, net.ErrClosed) {
+					wg.Wait()
+					fwd.log.Debug("listener closed")
+					return
 				}
+				fwd.log.Errorf("error accepting: %s", err)
 			}
 		} else {
 			wg.Go(func() {

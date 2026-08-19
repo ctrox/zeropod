@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,10 +24,10 @@ type listenerGroup struct {
 }
 
 type wakeListener struct {
-	ln      *net.TCPListener
-	lnFd    *os.File
-	epollFd int
-	stopFd  int
+	ln       *net.TCPListener
+	lnFd     int
+	stopFd   int
+	watching *atomic.Bool
 }
 
 type appListener struct {
@@ -40,16 +41,19 @@ type listenerKey struct {
 }
 
 func (wl *wakeListener) closeListener() {
-	var buf [8]byte
-	buf[0] = 1
-	_, _ = unix.Write(wl.stopFd, buf[:])
+	if wl.watching != nil && wl.watching.CompareAndSwap(true, false) {
+		var buf [8]byte
+		buf[0] = 1
+		_, _ = unix.Write(wl.stopFd, buf[:])
+	}
 	if wl.ln != nil {
 		_ = wl.ln.Close()
+		wl.ln = nil
 	}
-	if wl.lnFd != nil {
-		_ = wl.lnFd.Close()
+	if wl.lnFd > 0 {
+		_ = unix.Close(wl.lnFd)
+		wl.lnFd = 0
 	}
-	unix.Close(wl.stopFd)
 }
 
 func (wl *wakeListener) close() {
@@ -79,42 +83,50 @@ func (act *Activator) attachWake(network activator.Network, lg *listenerGroup) e
 	if dupErr != nil {
 		return dupErr
 	}
-	lg.wake.lnFd = os.NewFile(uintptr(dupFd), "")
+	lg.wake.lnFd = dupFd
 	epfd, err := unix.EpollCreate1(unix.EPOLL_CLOEXEC)
 	if err != nil {
 		act.log.WithError(err).Error("epoll create")
+		_ = unix.Close(dupFd)
 		return err
 	}
-	lg.wake.epollFd = epfd
 
 	var stat syscall.Stat_t
-	if err := syscall.Fstat(int(lg.wake.lnFd.Fd()), &stat); err != nil {
+	if err := syscall.Fstat(dupFd, &stat); err != nil {
+		_ = unix.Close(dupFd)
+		_ = unix.Close(epfd)
 		return err
 	}
 	act.wakeInodes = append(act.wakeInodes, stat.Ino)
 
 	stopFd, err := unix.Eventfd(0, unix.EFD_NONBLOCK|unix.EFD_CLOEXEC)
 	if err != nil {
+		_ = unix.Close(dupFd)
+		_ = unix.Close(epfd)
 		return err
 	}
-	go act.watchWake(epfd, lg.wake.lnFd.Fd(), stopFd, network)
+	watching := &atomic.Bool{}
+	watching.Store(true)
 	lg.wake.stopFd = stopFd
+	lg.wake.watching = watching
+	go act.watchWake(epfd, dupFd, stopFd, watching, network)
 
 	return nil
 }
 
 // watchWake polls the wake listener without ever accepting and calls wake as
 // soon as the poll returns something.
-func (act *Activator) watchWake(epfd int, fd uintptr, stopFd int, network activator.Network) {
+func (act *Activator) watchWake(epfd int, fd int, stopFd int, watching *atomic.Bool, network activator.Network) {
 	defer func() {
-		_ = unix.Close(int(fd))
+		watching.Store(false)
 		_ = unix.Close(epfd)
+		_ = unix.Close(stopFd)
 	}()
 	event := unix.EpollEvent{
 		Events: unix.EPOLLIN | unix.EPOLLONESHOT,
 		Fd:     int32(fd),
 	}
-	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, int(fd), &event); err != nil {
+	if err := unix.EpollCtl(epfd, unix.EPOLL_CTL_ADD, fd, &event); err != nil {
 		act.log.WithError(err).Error("failed to register socket with epoll")
 		return
 	}
@@ -143,10 +155,11 @@ func (act *Activator) watchWake(epfd int, fd uintptr, stopFd int, network activa
 				act.log.Debug("shutdown signal received, exiting epoll")
 				return
 			}
-			if evFd != int(fd) {
+			if evFd != fd {
 				continue
 			}
 			act.log.Info("socket activity detected, waking up")
+			watching.Store(false)
 			if err := act.wake(network); err != nil {
 				act.log.WithError(err).Error("wake")
 			}
