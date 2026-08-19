@@ -537,13 +537,15 @@ func (c *Container) getListeners(ports ...uint16) activator.Listeners {
 		return lns
 	}
 
-	out, err := exec.Command(nodev1.NetinfoBinary, "-id", c.ID()).CombinedOutput()
-	if err != nil && !strings.Contains(err.Error(), "no child processes") {
-		log.G(c.context).WithError(err).Errorf("calling zeropod-migrate: %s", out)
-	} else {
-		lns, err := c.loadListeners()
-		if err == nil {
-			return lns
+	if c.SkipStart() {
+		out, err := exec.Command(nodev1.NetinfoBinary, "-id", c.ID()).CombinedOutput()
+		if err != nil && !strings.Contains(err.Error(), "no child processes") {
+			log.G(c.context).WithError(err).Errorf("calling zeropod-migrate: %s", out)
+		} else {
+			lns, err := c.loadListeners()
+			if err == nil {
+				return lns
+			}
 		}
 	}
 
