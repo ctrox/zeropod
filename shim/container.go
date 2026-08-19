@@ -130,17 +130,19 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 	c.process = p
 	c.initialProcess = p
 
+	if c.SkipStart() {
+		c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, 0)
+	} else {
+		c.setPhaseNotify(v1.ContainerPhase_RUNNING, 0)
+	}
 	if err := c.initActivator(ctx); err != nil {
 		log.G(ctx).Warnf("activator init failed, disabling scale down: %s", err)
 		c.cfg.ScaleDownDuration = 0
 	}
 	if c.SkipStart() {
-		c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, 0)
 		if err := c.scaleDown(ctx); err != nil {
 			return err
 		}
-	} else {
-		c.setPhaseNotify(v1.ContainerPhase_RUNNING, 0)
 	}
 	return nil
 }
