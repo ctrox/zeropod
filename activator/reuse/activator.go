@@ -155,6 +155,7 @@ type Config struct {
 	trackerIgnoreLocalhost bool
 	probeAddr              *netip.Addr
 	restoreHook            activator.RestoreHook
+	connectTimeout         time.Duration
 }
 
 type Option func(cfg *Config)
@@ -174,6 +175,12 @@ func RestoreHook(restoreHook activator.RestoreHook) Option {
 func ProbeAddr(addr *netip.Addr) Option {
 	return func(cfg *Config) {
 		cfg.probeAddr = addr
+	}
+}
+
+func ConnectTimeout(timeout time.Duration) Option {
+	return func(cfg *Config) {
+		cfg.connectTimeout = timeout
 	}
 }
 

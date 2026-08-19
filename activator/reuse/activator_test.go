@@ -185,6 +185,7 @@ func TestReuseActivator(t *testing.T) {
 					time.Sleep(time.Millisecond * 10)
 					return cmd.Process.Pid, nil
 				}),
+				ConnectTimeout(time.Minute),
 			))
 
 			t.Cleanup(func() {

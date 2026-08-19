@@ -32,11 +32,10 @@ func (act *Activator) ForwardToTarget(ctx context.Context, addr string) error {
 	defer act.mu.Unlock()
 	for k, ln := range act.listeners {
 		fwd := &forwarder{
-			targetAddr: addr,
-			log:        act.log.WithField("component", "forwarder"),
-			ns:         act.ns,
-			// TODO: parameter
-			connectTimeout: time.Minute,
+			targetAddr:     addr,
+			log:            act.log.WithField("component", "forwarder"),
+			ns:             act.ns,
+			connectTimeout: act.connectTimeout,
 			quit:           make(chan struct{}, 1),
 		}
 		if err := act.ns.Do(func(nn ns.NetNS) error {

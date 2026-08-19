@@ -445,6 +445,9 @@ func (c *Container) activatorOpts(ctx context.Context) []reuse.Option {
 			opts = append(opts, reuse.ProbeAddr(&addr))
 		}
 	}
+	if c.cfg.ConnectTimeout > 0 {
+		opts = append(opts, reuse.ConnectTimeout(c.cfg.ConnectTimeout))
+	}
 	return opts
 }
 
