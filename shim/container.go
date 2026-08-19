@@ -153,10 +153,10 @@ func (c *Container) Config() *v1.Config {
 
 func (c *Container) reloadConfig(ctx context.Context) error {
 	if c.cfg.LastModified().Equal(c.lastConfigReload) {
-		log.G(ctx).Infof("config file up to date: %s", c.lastConfigReload)
+		log.G(ctx).Debugf("config file up to date: %s", c.lastConfigReload)
 		return nil
 	}
-	log.G(ctx).Infof("reloading config")
+	log.G(ctx).Debug("reloading config")
 	spec, err := GetSpec(c.Bundle)
 	if err != nil {
 		return fmt.Errorf("getting container spec: %w", err)
@@ -228,6 +228,11 @@ func (c *Container) scaleDownCheck(in time.Duration) {
 
 			log.G(c.context).Infof("delaying scale down by %s", delay)
 			c.scaleDownTimer.Reset(delay)
+			// we reload the config here to ensure ignored addresses are up to
+			// date and potentially fix a scaledown issue.
+			if err := c.reloadConfig(c.context); err != nil {
+				log.G(c.context).WithError(err).Error("reloading config")
+			}
 			return
 		}
 	}
