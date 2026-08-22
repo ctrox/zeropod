@@ -60,14 +60,6 @@ func TestRestoreCapacity(t *testing.T) {
 		expectedErr   bool
 		podScaledDown bool
 	}{
-		"no container": {
-			node: newNode("empty", nil),
-			pod: &corev1.Pod{
-				ObjectMeta: metav1.ObjectMeta{Name: "empty", Namespace: "default"},
-			},
-			allowed:     true,
-			expectedErr: true,
-		},
 		"empty node": {
 			node: newNode("empty", nil),
 			pod: newPod("app1", corev1.ResourceList{
@@ -77,8 +69,17 @@ func TestRestoreCapacity(t *testing.T) {
 			containerName: "app1",
 			allowed:       true,
 		},
+		"empty requests": {
+			node: newNode("enough", corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("20Gi"),
+			}),
+			pod:         newPod("empty-req", corev1.ResourceList{}),
+			allowed:     true,
+			expectedErr: false,
+		},
 		"node with enough capacity": {
-			node: newNode("empty", corev1.ResourceList{
+			node: newNode("enough", corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("1"),
 				corev1.ResourceMemory: resource.MustParse("20Gi"),
 			}),

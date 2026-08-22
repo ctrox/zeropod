@@ -50,7 +50,10 @@ const (
 	caKeyFile          = "/tls/ca.key"
 )
 
-var ErrLiveMigrationNotSupported = errors.New("live migration is not supported on this node")
+var (
+	ErrLiveMigrationNotSupported = errors.New("live migration is not supported on this node")
+	errEmptyRequests             = errors.New("container has empty requests")
+)
 
 func nodeSocketAddress() string {
 	return fmt.Sprintf("unix://%s", nodev1.SocketPath)
@@ -220,6 +223,10 @@ func (ns *nodeService) RestoreCapacity(ctx context.Context, req *nodev1.RestoreC
 	}
 	res, err := getContainerResources(pod, req.PodInfo.ContainerName)
 	if err != nil {
+		if errors.Is(err, errEmptyRequests) {
+			log.Debug("allowing container with empty requests")
+			return &nodev1.RestoreCapacityResponse{Allowed: true}, nil
+		}
 		log.Error("getting container resources", "error", err)
 		return &nodev1.RestoreCapacityResponse{Allowed: true}, fmt.Errorf("getting container requests: %w", err)
 	}
@@ -304,7 +311,7 @@ func getContainerResources(pod *corev1.Pod, containerName string) (corev1.Resour
 		}
 	}
 	if c.Resources.Requests == nil {
-		return nil, fmt.Errorf("container %s has empty requests", containerName)
+		return nil, fmt.Errorf("%w: %s", errEmptyRequests, containerName)
 	}
 	res, err := manager.InitialRequests(c, pod.Annotations)
 	if err != nil {
