@@ -27,6 +27,9 @@ zeropod_running{container="nginx",namespace="default",pod="nginx"} 0
 # HELP zeropod_checkpoint_errors_total Total number of checkpoint errors.
 # TYPE zeropod_checkpoint_errors_total counter
 zeropod_checkpoint_errors_total{container="nginx",namespace="default",pod="nginx"} 0
+# HELP zeropod_checkpoint_memory_bytes Memory pages dumped by criu in bytes.
+# TYPE zeropod_checkpoint_memory_bytes gauge
+zeropod_checkpoint_memory_bytes{container="nginx",namespace="default",pod="nginx"} 5.1257344e+07
 # HELP zeropod_restore_errors_total Total number of restore errors.
 # TYPE zeropod_restore_errors_total counter
 zeropod_restore_errors_total{container="nginx",namespace="default",pod="nginx"} 0

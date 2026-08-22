@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/checkpoint-restore/go-criu/v8/stats"
 	"github.com/containerd/containerd/v2/cmd/containerd-shim-runc-v2/process"
 	runcC "github.com/containerd/go-runc"
 	"github.com/containerd/log"
@@ -19,6 +20,7 @@ import (
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/icza/backscanner"
+	"golang.org/x/sys/unix"
 )
 
 func (c *Container) scaleDown(ctx context.Context) error {
@@ -142,6 +144,18 @@ func (c *Container) checkpoint(ctx context.Context) error {
 		log.G(ctx).Errorf("error checkpointing container: %s", err)
 		resetOnErr()
 		return err
+	}
+
+	imgDir, err := os.Open(nodev1.WorkDirPath(c.ID()))
+	if err != nil {
+		return err
+	}
+
+	dumpStats, err := stats.CriuGetDumpStats(imgDir)
+	if err != nil {
+		log.G(ctx).WithError(err).Error("getting criu dump stats")
+	} else {
+		c.metrics.CheckpointMemoryBytes = dumpStats.GetPagesWritten() * uint64(unix.Getpagesize())
 	}
 
 	c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, time.Since(beforeCheckpoint))

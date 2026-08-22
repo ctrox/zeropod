@@ -25,6 +25,7 @@ const (
 	MetricRunning               = "running"
 	MetricCheckpointErrorsTotal = "checkpoint_errors_total"
 	MetricRestoreErrorsTotal    = "restore_errors_total"
+	MetricCheckpointMemoryBytes = "checkpoint_memory_bytes"
 )
 
 var (
@@ -37,14 +38,15 @@ var (
 )
 
 type Collector struct {
-	log                *slog.Logger
-	checkpointDuration *prometheus.HistogramVec
-	restoreDuration    *prometheus.HistogramVec
-	lastCheckpointTime *prometheus.GaugeVec
-	lastRestoreTime    *prometheus.GaugeVec
-	running            *prometheus.GaugeVec
-	checkpointErrors   *prometheus.CounterVec
-	restoreErrors      *prometheus.CounterVec
+	log                   *slog.Logger
+	checkpointDuration    *prometheus.HistogramVec
+	restoreDuration       *prometheus.HistogramVec
+	lastCheckpointTime    *prometheus.GaugeVec
+	lastRestoreTime       *prometheus.GaugeVec
+	running               *prometheus.GaugeVec
+	checkpointErrors      *prometheus.CounterVec
+	restoreErrors         *prometheus.CounterVec
+	checkpointMemoryBytes *prometheus.GaugeVec
 }
 
 func NewCollector(log *slog.Logger) *Collector {
@@ -93,6 +95,12 @@ func NewCollector(log *slog.Logger) *Collector {
 			Name:      MetricRestoreErrorsTotal,
 			Help:      "Total number of restore errors.",
 		}, commonLabels),
+
+		checkpointMemoryBytes: prometheus.NewGaugeVec(prometheus.GaugeOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricCheckpointMemoryBytes,
+			Help:      "Memory pages dumped by criu in bytes.",
+		}, commonLabels),
 	}
 }
 
@@ -136,6 +144,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			}
 			c.checkpointErrors.With(l).Add(float64(metrics.CheckpointErrors))
 			c.restoreErrors.With(l).Add(float64(metrics.RestoreErrors))
+			c.checkpointMemoryBytes.With(l).Set(float64(metrics.CheckpointMemoryBytes))
 		}
 	}
 	c.running.Collect(ch)
@@ -145,6 +154,7 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.lastRestoreTime.Collect(ch)
 	c.checkpointErrors.Collect(ch)
 	c.restoreErrors.Collect(ch)
+	c.checkpointMemoryBytes.Collect(ch)
 }
 
 func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
@@ -186,4 +196,5 @@ func (c *Collector) deleteMetrics(status *v1.ContainerStatus) {
 	c.lastRestoreTime.Delete(l)
 	c.checkpointErrors.Delete(l)
 	c.restoreErrors.Delete(l)
+	c.checkpointMemoryBytes.Delete(l)
 }
