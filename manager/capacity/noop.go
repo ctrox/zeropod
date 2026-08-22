@@ -30,6 +30,10 @@ func (n *NoopTracker) SetRequested(name corev1.ResourceName, q resource.Quantity
 func (n *NoopTracker) IncEvicted() {
 }
 
+func (n *NoopTracker) UseCheckpointMemory() bool {
+	return false
+}
+
 // NewNoopTracker creates a [NoopTracker]
 func NewNoopTracker() Tracker {
 	return &NoopTracker{}

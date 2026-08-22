@@ -27,6 +27,7 @@ func (c *Container) restoreCapacityRequest(ctx context.Context) (*nodev1.Restore
 			Namespace:     c.cfg.PodNamespace,
 			ContainerName: c.cfg.ContainerName,
 		},
+		CheckpointMemoryBytes: c.metrics.CheckpointMemoryBytes,
 	}
 	nodeClient := nodev1.NewNodeClient(ttrpc.NewClient(conn))
 	resp, err := nodeClient.RestoreCapacity(ctx, restoreCapReq)

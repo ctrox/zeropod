@@ -32,6 +32,7 @@ type Tracker interface {
 	SetCapacity(name corev1.ResourceName, q resource.Quantity)
 	SetRequested(name corev1.ResourceName, q resource.Quantity)
 	IncEvicted()
+	UseCheckpointMemory() bool
 }
 
 type NodeTracker struct {
@@ -80,6 +81,10 @@ func (c *NodeTracker) SetRequested(name corev1.ResourceName, q resource.Quantity
 
 func (c *NodeTracker) IncEvicted() {
 	c.metrics.evicted.With(prometheus.Labels{labelNode: c.name}).Inc()
+}
+
+func (c *NodeTracker) UseCheckpointMemory() bool {
+	return false
 }
 
 func (c *NodeTracker) metricLabels(resource string) prometheus.Labels {

@@ -31,6 +31,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -230,9 +231,17 @@ func (ns *nodeService) RestoreCapacity(ctx context.Context, req *nodev1.RestoreC
 		log.Error("getting container resources", "error", err)
 		return &nodev1.RestoreCapacityResponse{Allowed: true}, fmt.Errorf("getting container requests: %w", err)
 	}
-	log.Debug("container resources", "cpu", res.Cpu(), "mem", res.Memory())
+
+	if ns.cap.UseCheckpointMemory() && req.CheckpointMemoryBytes != 0 {
+		res[corev1.ResourceMemory] = *resource.NewQuantity(int64(req.CheckpointMemoryBytes), resource.BinarySI)
+	}
+
+	log.Debug("container resources", "cpu", res.Cpu(), "mem", res.Memory(), "use_checkpoint_memory", ns.cap.UseCheckpointMemory())
 	if ns.hasCapacity(res) {
-		log.Debug("node has enough capacity to restore")
+		log.Debug("node has enough capacity to restore",
+			"cpu", ns.cap.Capacity(corev1.ResourceCPU),
+			"mem", ns.cap.Capacity(corev1.ResourceMemory),
+		)
 		return &nodev1.RestoreCapacityResponse{Allowed: true}, nil
 	}
 	resp, err := ns.evictPod(ctx, req, pod)
