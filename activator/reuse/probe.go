@@ -54,6 +54,14 @@ func (act *Activator) attachProbe(lg *listenerGroup) error {
 // immediately closes the connection. It writes a raw http response to avoid
 // importing net/http which inflates the shim.
 func handleProbe(conn *net.TCPConn) error {
+	defer conn.Close()
+
+	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		return err
+	}
+	var buf [1024]byte
+	_, _ = conn.Read(buf[:])
+
 	_, err := conn.Write([]byte("HTTP/1.1 200 OK\r\nServer: zeropod probe\r\nConnection: close\r\n\r\nok\n"))
 	if err != nil {
 		return fmt.Errorf("writing probe response: %w", err)
