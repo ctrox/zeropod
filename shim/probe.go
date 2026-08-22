@@ -39,14 +39,18 @@ func (c *Container) detectProbe(ctx context.Context) activator.ConnHook {
 	}
 }
 
-func isKubeletAddr(ctx context.Context, remoteAddr net.Addr, activator *activator.Server) bool {
+func isKubeletAddr(ctx context.Context, remoteAddr net.Addr, act activator.Activator) bool {
+	srv, ok := act.(*activator.Server)
+	if !ok {
+		return false
+	}
 	tcpAddr, ok := remoteAddr.(*net.TCPAddr)
 	if !ok {
 		log.G(ctx).Debugf("remoteAddr is not a *net.TCPAddr: %T", remoteAddr)
 		return false
 	}
 	remoteIPAddr := tcpAddr.AddrPort().Addr().Unmap()
-	kubeletAddr, err := activator.GetKubeletAddr(remoteIPAddr.Is6())
+	kubeletAddr, err := srv.GetKubeletAddr(remoteIPAddr.Is6())
 	if err != nil {
 		log.G(ctx).WithError(err).Debug("getting kubelet addr")
 		return false

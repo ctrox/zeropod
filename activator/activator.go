@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -46,10 +47,11 @@ type Server struct {
 	forwardToTarget bool
 	targetAddr      string
 	kubeletAddr     *netip.Addr
+	lns             Listeners
 }
 
 type ConnHook func(net.Conn) (conn net.Conn, cont bool, err error)
-type RestoreHook func() error
+type RestoreHook func() (int, error)
 
 type Option func(s *Server)
 
@@ -59,13 +61,15 @@ func SetTargetAddr(addr string) Option {
 	}
 }
 
-func NewServer(ctx context.Context, nn ns.NetNS, opts ...Option) (*Server, error) {
+func NewServer(ctx context.Context, nn ns.NetNS, connHook ConnHook, restoreHook RestoreHook, opts ...Option) (*Server, error) {
 	s := &Server{
 		quit:           make(chan any),
 		connectTimeout: time.Second * 5,
 		proxyTimeout:   time.Second * 5,
 		ns:             nn,
 		sandboxPid:     parsePidFromNetNS(nn),
+		connHook:       connHook,
+		restoreHook:    restoreHook,
 	}
 	return s, nil
 }
@@ -94,10 +98,8 @@ var (
 	DefaultIfaces  = []string{IfaceLoopback, IfaceETH0}
 )
 
-func (s *Server) Start(ctx context.Context, connHook ConnHook, restoreHook RestoreHook, ports ...uint16) error {
-	s.connHook = connHook
-	s.restoreHook = restoreHook
-	s.ports = ports
+func (s *Server) Start(ctx context.Context, _ int, listeners Listeners, skipStart bool) error {
+	s.ports = listeners.Ports()
 
 	if err := s.loadPinnedMaps(); err != nil {
 		return err
@@ -121,8 +123,33 @@ func (s *Server) Start(ctx context.Context, connHook ConnHook, restoreHook Resto
 		}
 	}
 
+	if skipStart {
+		if err := s.Reset(); err != nil {
+			return err
+		}
+	}
+
 	s.started = true
 	return nil
+}
+
+func (s *Server) GetListeners(ctx context.Context, pid int) []Listener {
+	if s.lns != nil {
+		return s.lns
+	}
+	lns, err := GetListenersOfPID(ctx, pid)
+	if err != nil {
+		return s.lns
+	}
+	listeners := []Listener{}
+	for _, ln := range lns {
+		if !slices.Contains(s.ports, ln.Port) {
+			continue
+		}
+		listeners = append(listeners, ln)
+	}
+	s.lns = listeners
+	return s.lns
 }
 
 const AttachActivatorFlag = "-zeropod-attach-activator"
@@ -175,12 +202,13 @@ func (s *Server) SetPeekBufferSize(size int) {
 
 // ForwardToTarget instructs the activator to forward any incoming traffic to
 // the specified address. The connHook and restoreHook will both be disabled.
-func (s *Server) ForwardToTarget(addr string) {
+func (s *Server) ForwardToTarget(_ context.Context, addr string) error {
 	// disable hooks
 	s.connHook = func(c net.Conn) (net.Conn, bool, error) { return c, true, nil }
-	s.restoreHook = func() error { return nil }
+	s.restoreHook = func() (int, error) { return 0, nil }
 	s.targetAddr = addr
 	s.forwardToTarget = true
+	return nil
 }
 
 func (s *Server) listen(ctx context.Context, port uint16) (int, error) {
@@ -294,7 +322,7 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 		}
 	}()
 
-	if err := s.restoreHook(); err != nil {
+	if _, err := s.restoreHook(); err != nil {
 		log.G(ctx).Errorf("restoreHook: %s", err)
 		return
 	}
@@ -509,7 +537,7 @@ func (s *Server) LastActivity(port uint16) (time.Time, error) {
 		return time.Time{}, NoActivityRecordedErr{}
 	}
 
-	return convertBPFTime(val)
+	return ConvertBPFTime(val)
 }
 
 func (s *Server) initActivityTracker() error {
@@ -526,9 +554,9 @@ func netNSPath(pid int) string {
 	return fmt.Sprintf("/proc/%d/ns/net", pid)
 }
 
-// convertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
+// ConvertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
 // time.Time.
-func convertBPFTime(t uint64) (time.Time, error) {
+func ConvertBPFTime(t uint64) (time.Time, error) {
 	b, err := getBootTimeNS()
 	if err != nil {
 		return time.Time{}, err

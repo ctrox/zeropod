@@ -10,11 +10,13 @@ COPY . .
 
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags "-s -w" -a -o zeropod-installer ./cmd/installer/
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -ldflags "-s -w" -a -o zeropod-netinfo ./cmd/netinfo/
 RUN GOARCH=$TARGETARCH make build
 
 FROM gcr.io/distroless/static-debian12
 WORKDIR /build
 COPY --from=builder /workspace/zeropod-installer .
+COPY --from=builder /workspace/zeropod-netinfo .
 COPY --from=builder /workspace/containerd-shim-zeropod-v2 .
 
 ENTRYPOINT ["/build/zeropod-installer"]

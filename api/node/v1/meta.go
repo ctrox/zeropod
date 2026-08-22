@@ -13,6 +13,8 @@ const (
 	NodeNameEnvKey           = "NODE_NAME"
 	PodIPEnvKey              = "POD_IP"
 	preDumpDirName           = "pre-dump"
+	listenersFile            = "zeropod_listeners.json"
+	NetinfoBinary            = "zeropod-netinfo"
 )
 
 var imageBasePath = "/var/lib/zeropod/"
@@ -47,4 +49,8 @@ func PreDumpDir(id string) string {
 
 func RelativePreDumpDir() string {
 	return filepath.Join("..", SnapshotSuffix, preDumpDirName)
+}
+
+func ListenersFile(id string) string {
+	return filepath.Join(ImagePath(id), SnapshotSuffix, listenersFile)
 }

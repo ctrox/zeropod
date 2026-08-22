@@ -83,6 +83,8 @@ spec:
               name: zeropod-run
             - mountPath: /var/lib/zeropod
               name: zeropod-var
+            - mountPath: /opt/zeropod
+              name: zeropod-opt
             - mountPath: /hostproc
               name: hostproc
             - mountPath: /sys/fs/bpf

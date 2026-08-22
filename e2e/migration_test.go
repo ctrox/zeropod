@@ -172,7 +172,7 @@ func TestMigration(t *testing.T) {
 		if tc.migrateByReq {
 			beforeEvictReq := time.Now()
 			f, err := freezerRead(e2e.port)
-			assert.NoError(t, err)
+			require.NoError(t, err)
 			assert.Equal(t, t.Name(), f.Data, "freezer memory has persisted eviction migration")
 			t.Logf("evict request took %s", time.Since(beforeEvictReq))
 		} else {

@@ -54,7 +54,9 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 		log.G(ctx).WithError(err).Error("requesting restore capacity")
 	} else if !resp.Allowed {
 		if resp.RedirectAddr != "" {
-			c.activator.ForwardToTarget(resp.RedirectAddr)
+			if err := c.activator.ForwardToTarget(ctx, resp.RedirectAddr); err != nil {
+				return nil, nil, err
+			}
 		}
 		return nil, nil, ErrNoCapacity
 	}
@@ -141,6 +143,14 @@ func (c *Container) restore(ctx context.Context) (*runc.Container, process.Proce
 	if err := c.activator.DisableRedirects(); err != nil {
 		return nil, nil, fmt.Errorf("could not disable redirects: %w", err)
 	}
+	if c.cfg.DisableCheckpointing {
+		// when checkpointing is disabled, container processes can take a while
+		// to start listening on the configured ports. We wait for all ports to
+		// be ready to avoid routing traffic into a void.
+		for _, port := range c.cfg.Ports {
+			listeningPortReady(c.Pid(), port)
+		}
+	}
 
 	return container, p, nil
 }
@@ -222,7 +232,7 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 
 // MigrationRestore requests a restore from the node. If a matching migration is
 // found, it sets the Checkpoint path in the CreateTaskRequest.
-func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Config) (skipStart bool, err error) {
+func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Config) (bool, error) {
 	conn, err := net.Dial("unix", nodev1.SocketPath)
 	if err != nil {
 		return false, fmt.Errorf("%w: dialing node service: %w", ErrRestoreDial, err)
@@ -274,8 +284,7 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Co
 	}
 
 	if !resp.MigrationInfo.LiveMigration {
-		skipStart = true
-		return
+		return true, nil
 	}
 
 	// wait for the lazy pages socket file to exist to ensure the pages
