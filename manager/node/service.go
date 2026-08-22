@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -129,7 +130,12 @@ func NewServer(addr string, kube client.Client, log *slog.Logger, timeouts Timeo
 		cap:                    cap,
 	})
 
-	log.Info("new node server", "name", nodeName, "live_migration_supported", liveMigrationSupported)
+	log.Info("new node server",
+		"name", nodeName,
+		"live_migration_supported", liveMigrationSupported,
+		"capacity_tracker", reflect.TypeOf(cap).String(),
+		"eviction_threshold", cap.Threshold(),
+	)
 	return &Server{
 		ttrpc:        s,
 		unixListener: unixListener,
@@ -340,12 +346,23 @@ func (ns *nodeService) hasCapacity(res corev1.ResourceList) bool {
 	if cpuCap.IsZero() || memCap.IsZero() {
 		return true
 	}
-	if cpuRequested.Cmp(cpuCap) > 0 {
-		ns.log.Info("capacity: not enough cpu", "cap", cpuCap.String(), "req", cpuRequested.String())
+
+	if capacity.CmpThreshold(ns.cap, corev1.ResourceCPU, *cpuRequested) > 0 {
+		ns.log.Info("capacity: not enough cpu",
+			"cap", cpuCap.String(),
+			"total_req", cpuRequested.String(),
+			"container_req", res.Cpu().String(),
+			"threshold", ns.cap.Threshold(),
+		)
 		return false
 	}
-	if memRequested.Cmp(memCap) > 0 {
-		ns.log.Info("capacity: not enough memory", "cap", memCap.String(), "req", memRequested.String())
+	if capacity.CmpThreshold(ns.cap, corev1.ResourceMemory, *memRequested) > 0 {
+		ns.log.Info("capacity: not enough memory",
+			"cap", memCap.String(),
+			"total_req", memRequested.String(),
+			"container_req", res.Memory().String(),
+			"threshold", ns.cap.Threshold(),
+		)
 		return false
 	}
 	return true

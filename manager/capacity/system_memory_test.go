@@ -10,7 +10,7 @@ import (
 )
 
 func TestSystemMemoryTracker(t *testing.T) {
-	tracker := NewSystemMemoryTracker(prometheus.NewRegistry(), "name")
+	tracker := NewSystemMemoryTracker(prometheus.NewRegistry(), "name", 1.0)
 	assert.Empty(t, tracker.Capacity(corev1.ResourceCPU))
 	assert.NotEmpty(t, tracker.Capacity(corev1.ResourceMemory))
 	assert.Empty(t, tracker.Requested(corev1.ResourceCPU))
