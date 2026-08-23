@@ -53,9 +53,9 @@ var (
 	migrationServersTimeout = flag.Duration("migration-servers-timeout", time.Second*10, "how long to wait for migration servers")
 	migrationClaimTimeout   = flag.Duration("migration-claim-timeout", time.Second*10, "how long to wait for migration to be claimed")
 	migrationReadyTimeout   = flag.Duration("migration-ready-timeout", time.Minute*5, "how long to wait for migration to be ready")
-	evictionTimeout         = flag.Duration("eviction-timeout", time.Minute, "how long to wait for eviction")
 	autoGCMigrations        = flag.Bool("auto-gc-migrations", true, "automatically garbage collect migrations when owning pod is deleted")
 
+	capacityEvictionTimeout   = flag.Duration("capacity-eviction-timeout", time.Minute, "how long to wait for capacity eviction")
 	capacityEvictionThreshold = flag.Float64("capacity-eviction-threshold", 1.0, "the threshold when capacity eviction starts. Can be above 1.0 for overprovisioning.")
 	capacitySystemMemory      = flag.Bool("capacity-system-memory", false, "use system memory instead of pod requests for capacity tracking")
 
@@ -185,7 +185,7 @@ func main() {
 			MigrationServers: *migrationServersTimeout,
 			MigrationClaim:   *migrationClaimTimeout,
 			MigrationReady:   *migrationReadyTimeout,
-			EvictionTimeout:  *evictionTimeout,
+			EvictionTimeout:  *capacityEvictionTimeout,
 		},
 		cap,
 	)
