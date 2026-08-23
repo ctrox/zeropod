@@ -25,7 +25,6 @@ import (
 	"github.com/ctrox/zeropod/activator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 )
 
 type testCase struct {
@@ -106,7 +105,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "ok\n",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: false,
-			kubeletAddr:        ptr.To(netip.MustParseAddr("127.0.0.1")),
+			kubeletAddr:        new(netip.MustParseAddr("127.0.0.1")),
 			networks:           []activator.Network{activator.NetworkTCP4},
 		},
 		"ignore kubelet traffic ipv6": {
@@ -115,7 +114,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "ok\n",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: false,
-			kubeletAddr:        ptr.To(netip.MustParseAddr("::1")),
+			kubeletAddr:        new(netip.MustParseAddr("::1")),
 			networks:           []activator.Network{activator.NetworkTCPAny},
 		},
 		"forward": {

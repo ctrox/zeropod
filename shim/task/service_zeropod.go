@@ -54,7 +54,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	}
 	s := &service{
 		context:              ctx,
-		events:               make(chan interface{}, 128),
+		events:               make(chan any, 128),
 		ec:                   make(chan runcC.Exit, 32),
 		cg1oom:               ep,
 		publisher:            publisher,
@@ -512,7 +512,7 @@ func (w *wrapper) cleanSandboxPin(ctx context.Context, r *taskAPI.DeleteRequest)
 }
 
 // oomWatch watches the container cgroup for oom events
-func(w *wrapper) oomWatch(ctx context.Context, container *runc.Container){
+func (w *wrapper) oomWatch(ctx context.Context, container *runc.Container) {
 	switch cg := container.Cgroup().(type) {
 	case cgroup1.Cgroup:
 		if err := w.cg1oom.Add(container.ID, cg); err != nil {
