@@ -6,5 +6,6 @@
   * [Grouping](./configuration/grouping.md)
 * [Architecture](./architecture/README.md)
   * [Node](./architecture/node.md)
+  * [Reuseport Activator](./architecture/reuseport.md)
 * [Development](./development.md)
 * [Metrics](./metrics.md)
