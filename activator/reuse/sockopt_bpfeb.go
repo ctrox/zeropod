@@ -12,6 +12,15 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	sockoptProgBindV4     = "bind_v4"
+	sockoptProgBindV6     = "bind_v6"
+	sockoptProgSetsockopt = "setsockopt"
+)
+
 // loadSockopt returns the embedded CollectionSpec for sockopt.
 func loadSockopt() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_SockoptBytes)
@@ -32,7 +41,7 @@ func loadSockopt() (*ebpf.CollectionSpec, error) {
 //	*sockoptMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func loadSockoptObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func loadSockoptObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := loadSockopt()
 	if err != nil {
 		return err

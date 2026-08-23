@@ -24,10 +24,10 @@ import (
 
 const (
 	BPFFSPath                      = "/sys/fs/bpf"
-	SocketTrackerMap               = "socket_tracker"
-	PodKubeletAddrMapv4            = "kubelet_addr_v4"
-	PodKubeletAddrMapv6            = "kubelet_addr_v6"
-	trackerIgnoreLocalhostVariable = "tracker_ignore_localhost"
+	SocketTrackerMap               = bpfMapSocketTracker
+	PodKubeletAddrMapv4            = bpfMapKubeletAddrV4
+	PodKubeletAddrMapv6            = bpfMapKubeletAddrV6
+	trackerIgnoreLocalhostVariable = bpfVarTrackerIgnoreLocalhost
 	tcxIngressPinName              = "tcx_ingress"
 	tcxEgressPinName               = "tcx_egress"
 	ManagedByShimSuffix            = "_managed_by_shim"

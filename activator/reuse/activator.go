@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/containerd/cgroups/v3/cgroup2"
@@ -40,6 +39,7 @@ type Activator struct {
 	bindV6Link     link.Link
 	sockoptObjects *sockoptObjects
 	trackerLink    link.Link
+	trackerLinkLo  link.Link
 	trackerObjs    *trackerObjects
 	cgroupsPath    string
 	sandboxPid     int
@@ -125,15 +125,41 @@ func (act *Activator) LoadBPF() error {
 	}
 	act.trackerObjs = trackerObjs
 
-	trackerLink, err := link.AttachCgroup(link.CgroupOptions{
-		Path:    hostCgroupPath,
-		Attach:  ebpf.AttachCGroupInetIngress,
-		Program: trackerObjs.TrackIngress,
-	})
-	if err != nil {
-		return err
+	if err := act.ns.Do(func(nn ns.NetNS) error {
+		attachFunc := func(ifaceName string) (link.Link, error) {
+			iface, err := net.InterfaceByName(ifaceName)
+			if err != nil {
+				return nil, fmt.Errorf("could not get interface ID: %w", err)
+			}
+			return link.AttachTCX(link.TCXOptions{
+				Interface: iface.Index,
+				Program:   trackerObjs.TrackIngress,
+				Attach:    ebpf.AttachTCXIngress,
+			})
+		}
+		trackerInterface := activator.IfaceETH0
+		if act.trackerInterface != "" {
+			trackerInterface = act.trackerInterface
+		}
+		trackerLink, err := attachFunc(trackerInterface)
+		if err != nil {
+			return err
+		}
+		act.trackerLink = trackerLink
+		// when we ignore localhost completely, there's no point in
+		// attaching the tracker to loopback.
+		if act.trackerIgnoreLocalhost {
+			trackerLinkLo, err := attachFunc(activator.IfaceLoopback)
+			if err != nil {
+				return err
+			}
+			act.trackerLinkLo = trackerLinkLo
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("could not attach TCX tracker: %w", err)
 	}
-	act.trackerLink = trackerLink
+
 	return nil
 }
 
@@ -156,31 +182,45 @@ type Config struct {
 	probeAddr              *netip.Addr
 	restoreHook            activator.RestoreHook
 	connectTimeout         time.Duration
+	trackerInterface       string
 }
 
 type Option func(cfg *Config)
 
+// TrackerIgnoreLocalhost tells the tracker to not count traffic from localhost.
 func TrackerIgnoreLocalhost(ignore bool) Option {
 	return func(cfg *Config) {
 		cfg.trackerIgnoreLocalhost = ignore
 	}
 }
 
+// RestoreHook is called on wake.
 func RestoreHook(restoreHook activator.RestoreHook) Option {
 	return func(cfg *Config) {
 		cfg.restoreHook = restoreHook
 	}
 }
 
+// ProbeAddr to direct probe traffic to and to ignore by the socket tracker.
+// Usually set to the kublet address.
 func ProbeAddr(addr *netip.Addr) Option {
 	return func(cfg *Config) {
 		cfg.probeAddr = addr
 	}
 }
 
+// ConnectTimeout of the forwarding proxy. Does not apply to wake traffic.
 func ConnectTimeout(timeout time.Duration) Option {
 	return func(cfg *Config) {
 		cfg.connectTimeout = timeout
+	}
+}
+
+// trackerInterface overrides the socket trakcer interface, unexported as it's
+// just used for testing.
+func trackerInterface(iface string) Option {
+	return func(cfg *Config) {
+		cfg.trackerInterface = iface
 	}
 }
 
@@ -207,8 +247,6 @@ func (act *Activator) Start(ctx context.Context, pid int, listeners activator.Li
 			act.listeners[key] = &listenerGroup{reuse: objs}
 			act.mu.Unlock()
 		}
-		// we are done loading bpf
-		btf.FlushKernelSpec()
 		if err := act.Reset(); err != nil {
 			return err
 		}
@@ -257,6 +295,9 @@ func (act *Activator) Stop(_ context.Context) {
 	}
 	if act.trackerLink != nil {
 		act.trackerLink.Close()
+	}
+	if act.trackerLinkLo != nil {
+		act.trackerLinkLo.Close()
 	}
 }
 

@@ -12,6 +12,15 @@ import (
 	"github.com/cilium/ebpf"
 )
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	reuseportMapListeners        = "listeners"
+	reuseportProgSelectOrMigrate = "select_or_migrate"
+	reuseportVarProbeAddr        = "probe_addr"
+)
+
 // loadReuseport returns the embedded CollectionSpec for reuseport.
 func loadReuseport() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_ReuseportBytes)
@@ -32,7 +41,7 @@ func loadReuseport() (*ebpf.CollectionSpec, error) {
 //	*reuseportMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func loadReuseportObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func loadReuseportObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := loadReuseport()
 	if err != nil {
 		return err

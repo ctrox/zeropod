@@ -153,9 +153,6 @@ func TestActivator(t *testing.T) {
 			s, err := NewServer(ctx, nn, tc.connHook, func() (int, error) { return 0, nil })
 			require.NoError(t, err)
 
-			port, err := freePort()
-			require.NoError(t, err)
-
 			t.Cleanup(func() {
 				s.Stop(ctx)
 				cancel()
@@ -180,6 +177,8 @@ func TestActivator(t *testing.T) {
 				require.NoError(t, SetKubeletAddr(os.Getpid(), *tc.kubeletAddr))
 			}
 
+			port, err := freePort()
+			require.NoError(t, err)
 			startServer(t, ctx, s, uint16(port), &tc)
 			for i := 0; i < tc.parallelReqs; i++ {
 				wg.Go(func() {
