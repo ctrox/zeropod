@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/rlimit"
 	"github.com/containerd/cgroups/v3/cgroup2"
@@ -248,8 +247,6 @@ func (act *Activator) Start(ctx context.Context, pid int, listeners activator.Li
 			act.listeners[key] = &listenerGroup{reuse: objs}
 			act.mu.Unlock()
 		}
-		// we are done loading bpf
-		btf.FlushKernelSpec()
 		if err := act.Reset(); err != nil {
 			return err
 		}

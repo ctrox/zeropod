@@ -21,6 +21,22 @@ type bpfIn6Addr struct {
 	}
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	bpfMapActiveConnections      = "active_connections"
+	bpfMapDisableRedirect        = "disable_redirect"
+	bpfMapEgressRedirects        = "egress_redirects"
+	bpfMapIngressRedirects       = "ingress_redirects"
+	bpfMapKubeletAddrV4          = "kubelet_addr_v4"
+	bpfMapKubeletAddrV6          = "kubelet_addr_v6"
+	bpfMapSocketTracker          = "socket_tracker"
+	bpfProgTcRedirectEgress      = "tc_redirect_egress"
+	bpfProgTcRedirectIngress     = "tc_redirect_ingress"
+	bpfVarTrackerIgnoreLocalhost = "tracker_ignore_localhost"
+)
+
 // loadBpf returns the embedded CollectionSpec for bpf.
 func loadBpf() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_BpfBytes)
@@ -41,7 +57,7 @@ func loadBpf() (*ebpf.CollectionSpec, error) {
 //	*bpfMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func loadBpfObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func loadBpfObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := loadBpf()
 	if err != nil {
 		return err

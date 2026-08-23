@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/btf"
 	"github.com/ctrox/zeropod/activator"
 	"golang.org/x/sys/unix"
 )
@@ -211,8 +210,6 @@ func (act *Activator) registerListeners(pid int) error {
 		act.log.Debugf("caching port %d fd %d uid %d", l.Port, l.OrigFd, l.UID)
 		act.listeners[key].app = appListener{fd: l.OrigFd, uid: l.UID}
 	}
-	// we are done loading bpf
-	btf.FlushKernelSpec()
 	if len(listeners) == 0 {
 		return activator.ErrNoListeningSockets
 	}

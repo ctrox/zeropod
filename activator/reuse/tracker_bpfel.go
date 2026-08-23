@@ -19,6 +19,15 @@ type trackerIpKey struct {
 	Addr      [16]uint8
 }
 
+// Names of all BPF objects in the ELF.
+//
+// Used for safe lookups in a Collection or CollectionSpec.
+const (
+	trackerMapIgnoredAddrs  = "ignored_addrs"
+	trackerMapSocketTracker = "socket_tracker"
+	trackerProgTrackIngress = "track_ingress"
+)
+
 // loadTracker returns the embedded CollectionSpec for tracker.
 func loadTracker() (*ebpf.CollectionSpec, error) {
 	reader := bytes.NewReader(_TrackerBytes)
@@ -39,7 +48,7 @@ func loadTracker() (*ebpf.CollectionSpec, error) {
 //	*trackerMaps
 //
 // See ebpf.CollectionSpec.LoadAndAssign documentation for details.
-func loadTrackerObjects(obj interface{}, opts *ebpf.CollectionOptions) error {
+func loadTrackerObjects(obj any, opts *ebpf.CollectionOptions) error {
 	spec, err := loadTracker()
 	if err != nil {
 		return err
