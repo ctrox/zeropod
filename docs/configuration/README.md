@@ -173,9 +173,6 @@ also be toggled with their respective kustomize components.
   the zeropod container and should not cause a scale-down delay. Note that
   localhost traffic will still cause the container to restore if it's already
   scaled down.
-* **`-reuseport-activator`** (Experimental - default `false`, component
-  `installer`): Enables the new reuseport activator, which handles traffic to
-  the container purely in the kernel and requires no userspace proxying.
 
 ### In-Place Resource Scaling
 
@@ -255,3 +252,17 @@ requests to the new one as soon as it's available.
   wait for the target pod to reach the ready-for-restoring state.
 * **`-auto-gc-migrations`** (default `true`, component `manager`): Automatically
   garbage collects migration resources when the owning pod is deleted.
+
+### Reuseport Activator (Experimental)
+
+This enables a completely new activator which handles traffic to the container
+purely in the kernel and requires no userspace proxying. See [the architecture
+document](../architecture) for more details on how this works.
+
+> [!WARNING]
+> Requires Linux kernel 6.6 or later. Eventually this aims to be the default
+> activator but until then proceed with caution as this has not yet been tested
+> on a large variety of systems.
+
+* **`-reuseport-activator`** (default `false`, component `installer`): Enables
+  the new reuseport activator.
