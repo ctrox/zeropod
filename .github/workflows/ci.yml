@@ -66,6 +66,9 @@ jobs:
       - name: generate ttrpc and ebpf
         run: make generate
 
+      - name: go fix
+        run: go fix ./...
+
       - name: check for diff
         run: git diff --exit-code
 
