@@ -197,17 +197,17 @@ func (c *Container) scheduleScaleDownIn(in time.Duration) {
 	log.G(c.context).Infof("scheduling scale down in %s", in)
 	if c.scaleDownTimer == nil {
 		c.scaleDownTimer = time.AfterFunc(in, func() {
-			c.scaleDownCheck(in)
+			c.scaleDownCheck()
 		})
 		return
 	}
 	c.scaleDownTimer.Reset(in)
 }
 
-func (c *Container) scaleDownCheck(in time.Duration) {
+func (c *Container) scaleDownCheck() {
 	if !c.activator.Started() {
+		c.scaleDownTimer.Reset(c.initRetry())
 		log.G(c.context).Infof("activator not ready, delaying scale down by %s", c.initBackoff)
-		c.scaleDownTimer.Reset(c.initBackoff)
 		return
 	}
 	last, err := c.lastActivity()
