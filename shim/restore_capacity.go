@@ -18,6 +18,7 @@ func (c *Container) restoreCapacityRequest(ctx context.Context) (*nodev1.Restore
 	if err != nil {
 		return nil, fmt.Errorf("%w: dialing node service: %w", ErrRestoreDial, err)
 	}
+	//nolint:errcheck
 	defer conn.Close()
 	log.G(ctx).Debugf("creating restore capacity request for container: %s", c.cfg.ContainerName)
 

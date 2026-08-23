@@ -298,6 +298,7 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 		log.G(ctx).Errorf("connHook: %s", err)
 		return
 	}
+	//nolint:errcheck
 	defer conn.Close()
 	if !cont {
 		return
@@ -332,6 +333,7 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 		log.G(ctx).Errorf("error establishing connection: %s", err)
 		return
 	}
+	//nolint:errcheck
 	defer backendConn.Close()
 
 	log.G(ctx).Println("dial succeeded", backendConn.RemoteAddr().String())
@@ -610,7 +612,9 @@ func (s *Server) enableRedirect(port uint16) error {
 
 // proxy just proxies between conn1 and conn2.
 func proxy(ctx context.Context, conn1, conn2 net.Conn) error {
+	//nolint:errcheck
 	defer conn1.Close()
+	//nolint:errcheck
 	defer conn2.Close()
 
 	errors := make(chan error, 2)
@@ -673,6 +677,7 @@ func (s *Server) GetKubeletAddr(isV6 bool) (*netip.Addr, error) {
 	if err != nil {
 		return nil, fmt.Errorf("loading pinned kubelet addr: %w", err)
 	}
+	//nolint:errcheck
 	defer kubeletAddrMap.Close()
 
 	key := uint32(0)

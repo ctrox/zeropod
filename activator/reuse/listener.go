@@ -185,6 +185,7 @@ func (act *Activator) registerListeners(pid int) error {
 		if l.FD == nil {
 			continue
 		}
+		//nolint:errcheck
 		defer l.FD.Close()
 
 		key := listenerKey{port: l.Port, network: l.Network}
@@ -268,7 +269,7 @@ func (act *Activator) attachListener(key uint32, lnFd uintptr, bpfMap *ebpf.Map,
 func (act *Activator) attachNetListener(ln net.Listener, key uint32, bpfMap *ebpf.Map, prog *ebpf.Program, fdfunc func(fd uintptr)) error {
 	sc, err := ln.(syscall.Conn).SyscallConn()
 	if err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return err
 	}
 	var registerErr error
@@ -280,11 +281,11 @@ func (act *Activator) attachNetListener(ln net.Listener, key uint32, bpfMap *ebp
 			}
 		}
 	}); err != nil {
-		ln.Close()
+		_ = ln.Close()
 		return err
 	}
 	if registerErr != nil {
-		ln.Close()
+		_ = ln.Close()
 		return registerErr
 	}
 	return nil
@@ -339,6 +340,7 @@ func (act *Activator) listenerFdsFromCache(pid int) (activator.Listeners, error)
 		if err != nil {
 			continue
 		}
+		//nolint:errcheck
 		defer unix.Close(pidfd)
 
 		for k, v := range cache {

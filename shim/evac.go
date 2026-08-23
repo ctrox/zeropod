@@ -68,6 +68,7 @@ func (c *Container) evac(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("dialing node service: %w", err)
 	}
+	//nolint:errcheck
 	defer conn.Close()
 
 	evacReq := &nodev1.EvacRequest{
@@ -144,6 +145,7 @@ func (c *Container) evac(ctx context.Context) error {
 			if err != nil {
 				return fmt.Errorf("timeout checkpointing container: dialing page server: %w", err)
 			}
+			//nolint:errcheck
 			defer conn.Close()
 			if _, err := conn.Write([]byte("abort")); err != nil {
 				return fmt.Errorf("timeout checkpointing container: writing to page server: %w", err)
@@ -197,6 +199,7 @@ func (c *Container) evacScaledDown(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("dialing node service: %w", err)
 	}
+	//nolint:errcheck
 	defer conn.Close()
 
 	ports := []int32{}

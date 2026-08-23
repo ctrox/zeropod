@@ -108,6 +108,7 @@ func (fwd *forwarder) handleForwardConn(ctx context.Context, conn net.Conn, port
 		log.G(ctx).Errorf("error establishing connection: %s", err)
 		return
 	}
+	//nolint:errcheck
 	defer backendConn.Close()
 
 	requestContext, cancel := context.WithTimeout(ctx, time.Minute)
@@ -168,7 +169,9 @@ func (fwd *forwarder) connect(ctx context.Context, port uint16, addr string) (ne
 
 // proxy just proxies between conn1 and conn2.
 func proxy(ctx context.Context, conn1, conn2 net.Conn) error {
+	//nolint:errcheck
 	defer conn1.Close()
+	//nolint:errcheck
 	defer conn2.Close()
 
 	errors := make(chan error, 2)

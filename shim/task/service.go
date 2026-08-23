@@ -807,7 +807,7 @@ func (s *service) forward(ctx context.Context, publisher shim.Publisher) {
 			log.G(ctx).WithError(err).Error("post event")
 		}
 	}
-	publisher.Close()
+	_ = publisher.Close()
 }
 
 func (s *service) getContainer(id string) (*runc.Container, error) {

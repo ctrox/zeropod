@@ -182,8 +182,16 @@ func (s *Server) Start(ctx context.Context) {
 		_ = s.listener.Close()
 		_ = os.Remove(nodeSocketAddress())
 	}()
-	go s.ttrpc.Serve(ctx, s.unixListener)
-	go s.ttrpc.Serve(ctx, s.listener)
+	go func() {
+		if err := s.ttrpc.Serve(ctx, s.unixListener); err != nil {
+			s.log.Error("serving ttrpc unix listener", "error", err)
+		}
+	}()
+	go func() {
+		if err := s.ttrpc.Serve(ctx, s.listener); err != nil {
+			s.log.Error("serving ttrpc listener", "error", err)
+		}
+	}()
 
 	s.log.Info("starting node server", "unix", s.unixListener.Addr(), "socket", s.listener.Addr())
 
@@ -618,6 +626,7 @@ func (ns *nodeService) pullImage(ctx context.Context, nodeClient nodev1.NodeClie
 	errs := make(chan error)
 	transferredBytes := 0
 	r, w := io.Pipe()
+	//nolint:errcheck
 	defer w.Close()
 	go func() {
 		defer close(errs)
@@ -686,12 +695,14 @@ func extract(ctx context.Context, id string, reader io.ReadCloser) error {
 		if err != nil {
 			return err
 		}
+		//nolint:errcheck
 		defer rc.Close()
 
 		file, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode())
 		if err != nil {
 			return err
 		}
+		//nolint:errcheck
 		defer file.Close()
 
 		if _, err := io.Copy(file, rc); err != nil {
@@ -885,7 +896,9 @@ func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyP
 		return &emptypb.Empty{}, fmt.Errorf("error running lazy-pages daemon: %s", err)
 	}
 	go func() {
-		cmd.Wait()
+		if err := cmd.Wait(); err != nil {
+			ns.log.Error("lazy-pages wait", "error", err)
+		}
 		cancel()
 		if err := psp.Wait(); err != nil {
 			ns.log.Error("page server dst proxy", "error", err)
@@ -924,6 +937,7 @@ func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageReque
 	r, w := io.Pipe()
 	archive := func() {
 		defer close(errChan)
+		//nolint:errcheck
 		defer w.Close()
 		if err := format.Archive(ctx, w, files); err != nil {
 			log.Error("archiving checkpoint", "error", err)

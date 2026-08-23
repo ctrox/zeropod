@@ -173,6 +173,7 @@ func SetKubeletAddr(pid int, addr netip.Addr) error {
 			return fmt.Errorf("failed to create map: %w", err)
 		}
 	}
+	//nolint:errcheck
 	defer kubeletAddrMap.Close()
 
 	info, err := kubeletAddrMap.Info()

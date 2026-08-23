@@ -64,7 +64,7 @@ func (g *wgCloser) Wait() {
 
 func (g *wgCloser) Close() {
 	for _, f := range g.set {
-		f.Close()
+		_ = f.Close()
 	}
 }
 
@@ -121,7 +121,7 @@ func newStdioStream(fifos *cio.FIFOSet) (_ *stdioStream, _ *wgCloser, err error)
 	defer func() {
 		if err != nil {
 			for _, f := range set {
-				f.Close()
+				_ = f.Close()
 			}
 			cancel()
 		}

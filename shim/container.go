@@ -1,3 +1,4 @@
+// Package shim contains the zeropod container handling
 package shim
 
 import (
@@ -615,7 +616,7 @@ func (c *Container) restoreHandler(ctx context.Context) activator.RestoreHook {
 		}
 		c.Container = restoredContainer
 		c.ScheduleScaleDown()
-		return c.Container.Pid(), nil
+		return c.Pid(), nil
 	}
 }
 

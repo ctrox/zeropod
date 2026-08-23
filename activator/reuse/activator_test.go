@@ -25,7 +25,6 @@ import (
 	"github.com/ctrox/zeropod/activator"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"k8s.io/utils/ptr"
 )
 
 type testCase struct {
@@ -106,7 +105,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "ok\n",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: false,
-			kubeletAddr:        ptr.To(netip.MustParseAddr("127.0.0.1")),
+			kubeletAddr:        new(netip.MustParseAddr("127.0.0.1")),
 			networks:           []activator.Network{activator.NetworkTCP4},
 		},
 		"ignore kubelet traffic ipv6": {
@@ -115,7 +114,7 @@ func TestReuseActivator(t *testing.T) {
 			expectedBody:       "ok\n",
 			expectedCode:       http.StatusOK,
 			expectLastActivity: false,
-			kubeletAddr:        ptr.To(netip.MustParseAddr("::1")),
+			kubeletAddr:        new(netip.MustParseAddr("::1")),
 			networks:           []activator.Network{activator.NetworkTCPAny},
 		},
 		"forward": {
@@ -127,7 +126,8 @@ func TestReuseActivator(t *testing.T) {
 			networks:           []activator.Network{activator.NetworkTCP4},
 			forwardToFunc: func(t *testing.T, port int) (string, *httptest.Server) {
 				ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					fmt.Fprint(w, "hello from another server")
+					_, err := fmt.Fprint(w, "hello from another server")
+					assert.NoError(t, err)
 				}))
 				// usually forwarding happens to a different pod IP, to simulate
 				// that we just use a different localhost IP
@@ -135,7 +135,7 @@ func TestReuseActivator(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				ts.Listener.Close()
+				assert.NoError(t, ts.Listener.Close())
 				ts.Listener = l
 				ts.Start()
 				return "127.0.0.2", ts
@@ -200,6 +200,7 @@ func TestReuseActivator(t *testing.T) {
 			require.NoError(t, s.Start(ctx, os.Getpid(), listeners, true))
 			if tc.forwardToFunc != nil {
 				addr, ts := tc.forwardToFunc(t, port)
+				//nolint:errcheck
 				defer ts.Close()
 				assert.NoError(t, s.ForwardToTarget(ctx, addr))
 				assert.NoError(t, s.Reload(RestoreHook(func() (int, error) { return 0, nil })))
@@ -294,19 +295,21 @@ func runApp(t *testing.T, port int, networks ...activator.Network) (*exec.Cmd, e
 	if err != nil {
 		t.Fatalf("failed to create pipe: %v", err)
 	}
+	//nolint:errcheck
 	defer r.Close()
 	cmd.ExtraFiles = []*os.File{w}
 
 	require.NoError(t, cmd.Start())
-	w.Close()
+	assert.NoError(t, w.Close())
 	t.Cleanup(func() {
-		cmd.Process.Kill()
-		cmd.Wait()
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
 	})
 	ready := make(chan struct{})
 	go func() {
 		buf := make([]byte, 1)
-		r.Read(buf)
+		_, err := r.Read(buf)
+		assert.NoError(t, err)
 		close(ready)
 	}()
 	<-ready
@@ -342,17 +345,20 @@ func listenAndServe(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create listener in isolated netns: %v", err)
 		}
+		//nolint:errcheck
 		defer ln.Close()
 		pipe := os.NewFile(fd, "pipe")
 		if pipe != nil {
-			pipe.Write([]byte{1})
-			pipe.Close()
+			_, err := pipe.Write([]byte{1})
+			assert.NoError(t, err)
+			assert.NoError(t, pipe.Close())
 		}
 		fd++
 		wg.Go(func() {
-			http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				fmt.Fprint(w, os.Getenv("RESPONSE"))
-			}))
+			assert.NoError(t, http.Serve(ln, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, err := fmt.Fprint(w, os.Getenv("RESPONSE"))
+				assert.NoError(t, err)
+			})))
 		})
 	}
 	fmt.Println("serving")

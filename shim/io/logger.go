@@ -110,6 +110,7 @@ func readLine(b *bufio.Reader) (line []byte, isPrefix bool, err error) {
 }
 
 func redirectLogs(path string, rc io.ReadCloser, w io.Writer, s StreamType, maxLen int) {
+	//nolint:errcheck
 	defer rc.Close()
 	var (
 		stream    = []byte(s)

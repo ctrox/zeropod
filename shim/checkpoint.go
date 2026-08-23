@@ -177,6 +177,7 @@ func (c *Container) storeListeners(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	//nolint:errcheck
 	defer f.Close()
 	return json.NewEncoder(f).Encode(c.activator.GetListeners(ctx, c.Pid()))
 }
@@ -186,6 +187,7 @@ func (c *Container) loadListeners() (activator.Listeners, error) {
 	if err != nil {
 		return nil, err
 	}
+	//nolint:errcheck
 	defer f.Close()
 	listeners := activator.Listeners{}
 	if err := json.NewDecoder(f).Decode(&listeners); err != nil {
@@ -195,7 +197,7 @@ func (c *Container) loadListeners() (activator.Listeners, error) {
 }
 
 func printCriuLogs(ctx context.Context, file string) string {
-	lines, err := getLastLines(ctx, file, 20)
+	lines, err := getLastLines(file, 20)
 	if err != nil {
 		log.G(ctx).Errorf("error reading criu log: %s", err)
 	}
@@ -203,11 +205,12 @@ func printCriuLogs(ctx context.Context, file string) string {
 	return lines
 }
 
-func getLastLines(ctx context.Context, filepath string, num int) (string, error) {
+func getLastLines(filepath string, num int) (string, error) {
 	file, err := os.Open(filepath)
 	if err != nil {
 		return "", err
 	}
+	//nolint:errcheck
 	defer file.Close()
 	stat, err := os.Stat(filepath)
 	if err != nil {

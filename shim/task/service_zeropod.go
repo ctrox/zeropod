@@ -1,3 +1,4 @@
+// Package task contains the zeropod containerd task service
 package task
 
 import (
@@ -54,7 +55,7 @@ func NewZeropodService(ctx context.Context, publisher shim.Publisher, sd shutdow
 	}
 	s := &service{
 		context:              ctx,
-		events:               make(chan interface{}, 128),
+		events:               make(chan any, 128),
 		ec:                   make(chan runcC.Exit, 32),
 		cg1oom:               ep,
 		publisher:            publisher,
@@ -366,7 +367,9 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 		return w.service.Kill(ctx, r)
 	}
 	zeropodContainer.CheckpointRestore.Lock()
-	zeropodContainer.CheckpointRestore.Unlock() //lint:ignore SA2001 ensure cr is finished
+	//lint:ignore SA2001 ensure cr is finished
+	//nolint:staticcheck
+	zeropodContainer.CheckpointRestore.Unlock()
 
 	log.G(ctx).Infof("kill called in zeropod: %s", zeropodContainer.ID())
 	zeropodContainer.CancelScaleDown()
@@ -430,7 +433,7 @@ func (w *wrapper) processExits() {
 			continue
 		}
 		// pass event to service exit channel
-		w.service.ec <- e
+		w.ec <- e
 	}
 }
 
@@ -512,7 +515,7 @@ func (w *wrapper) cleanSandboxPin(ctx context.Context, r *taskAPI.DeleteRequest)
 }
 
 // oomWatch watches the container cgroup for oom events
-func(w *wrapper) oomWatch(ctx context.Context, container *runc.Container){
+func (w *wrapper) oomWatch(ctx context.Context, container *runc.Container) {
 	switch cg := container.Cgroup().(type) {
 	case cgroup1.Cgroup:
 		if err := w.cg1oom.Add(container.ID, cg); err != nil {

@@ -35,7 +35,7 @@ func (pl *PodLabeller) Handle(ctx context.Context, status *v1.ContainerStatus, p
 	return nil
 }
 
-func (pu *PodLabeller) setLabel(pod *corev1.Pod, status *v1.ContainerStatus) {
+func (pl *PodLabeller) setLabel(pod *corev1.Pod, status *v1.ContainerStatus) {
 	if pod.Labels == nil {
 		pod.Labels = map[string]string{}
 	}

@@ -129,6 +129,7 @@ func getListenersOfPID(ctx context.Context, pid int, closeFD bool, ignoredInodes
 				log.G(ctx).WithError(err).Debug("pidfdopen")
 				continue
 			}
+			//nolint:errcheck
 			defer unix.Close(pidfd)
 
 			fd, err := unix.PidfdGetfd(pidfd, target, 0)

@@ -54,8 +54,16 @@ func AttachRedirectors(ctx context.Context, log *slog.Logger, activatorOpts ...a
 		}
 	}
 
-	go r.syncLoop(ctx)
-	go r.watchForSandboxPids(ctx)
+	go func() {
+		if err := r.syncLoop(ctx); err != nil {
+			r.log.Error("sync loop", "error", err)
+		}
+	}()
+	go func() {
+		if err := r.watchForSandboxPids(ctx); err != nil {
+			r.log.Error("watch sandbox pids", "error", err)
+		}
+	}()
 	return r, r.reconcile()
 }
 
@@ -93,7 +101,9 @@ func (r *Redirector) reconcile() error {
 	for _, pid := range pids {
 		if err := statNetNS(pid); os.IsNotExist(err) {
 			r.log.Info("net ns not found, removing leftover pid", "path", netNSPath(pid))
-			os.RemoveAll(activator.PinPath(pid))
+			if err := os.RemoveAll(activator.PinPath(pid)); err != nil {
+				r.log.Error("removing pin path", "error", err)
+			}
 			continue
 		}
 
@@ -134,6 +144,7 @@ func (r *Redirector) watchForSandboxPids(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	//nolint:errcheck
 	defer watcher.Close()
 
 	if err := watcher.Add(activator.MapsPath()); err != nil {
