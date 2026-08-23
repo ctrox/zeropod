@@ -170,7 +170,7 @@ func TestReuseActivator(t *testing.T) {
 			if name != "forward" {
 				defer checkFDLeaks(t)()
 			}
-			s, err := New(ctx, nn, "/sys/fs/cgroup")
+			s, err := New(ctx, nn, "/sys/fs/cgroup", trackerInterface("lo"))
 			require.NoError(t, err)
 
 			cmd, err := runApp(t, port, tc.networks...)
