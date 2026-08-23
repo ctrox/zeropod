@@ -257,7 +257,7 @@ requests to the new one as soon as it's available.
 
 This enables a completely new activator which handles traffic to the container
 purely in the kernel and requires no userspace proxying. See [the architecture
-document](../architecture) for more details on how this works.
+document](../architecture/reuseport.md) for more details on how this works.
 
 > [!WARNING]
 > Requires Linux kernel 6.6 or later. Eventually this aims to be the default
