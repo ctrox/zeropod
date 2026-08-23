@@ -54,6 +54,7 @@ func (act *Activator) attachProbe(lg *listenerGroup) error {
 // immediately closes the connection. It writes a raw http response to avoid
 // importing net/http which inflates the shim.
 func handleProbe(conn *net.TCPConn) error {
+	//nolint:errcheck
 	defer conn.Close()
 
 	if err := conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {

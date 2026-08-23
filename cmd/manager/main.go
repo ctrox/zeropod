@@ -278,7 +278,9 @@ func probeHander(redirector *manager.Redirector, log *slog.Logger) http.HandlerF
 		}
 		_ = r.Body.Close()
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, http.StatusText(http.StatusOK))
+		if _, err := fmt.Fprint(w, http.StatusText(http.StatusOK)); err != nil {
+			log.Error("writing probe response", "error", err)
+		}
 	}
 }
 

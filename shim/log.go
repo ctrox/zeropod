@@ -22,6 +22,7 @@ func getLogPath(cfg *v1.Config) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	//nolint:errcheck
 	defer dir.Close()
 
 	names, err := dir.Readdirnames(0)

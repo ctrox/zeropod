@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestPageServerProxy(t *testing.T) {
@@ -52,10 +54,12 @@ func TestPageServerProxy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	//nolint:errcheck
 	go io.Copy(sockConn, sockConn)
 
 	testData := []byte("fooo")
-	conn.Write(testData)
+	_, err = conn.Write(testData)
+	assert.NoError(t, err)
 	buf := make([]byte, len(testData))
 	n, err := conn.Read(buf)
 	if err != nil {

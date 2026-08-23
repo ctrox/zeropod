@@ -40,6 +40,7 @@ func storeListeners(containerID string, listeners activator.Listeners) error {
 	if err != nil {
 		return err
 	}
+	//nolint:errcheck
 	defer f.Close()
 	return json.NewEncoder(f).Encode(listeners)
 }
@@ -50,6 +51,7 @@ func getListenersFromImage(containerID string) (activator.Listeners, error) {
 	if err != nil {
 		return nil, err
 	}
+	//nolint:errcheck
 	defer f.Close()
 
 	cr := crit.New(f, nil, "", false, false)

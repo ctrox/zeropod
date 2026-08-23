@@ -1,3 +1,4 @@
+// Package task contains the zeropod containerd task service
 package task
 
 import (
@@ -366,7 +367,9 @@ func (w *wrapper) Kill(ctx context.Context, r *taskAPI.KillRequest) (*emptypb.Em
 		return w.service.Kill(ctx, r)
 	}
 	zeropodContainer.CheckpointRestore.Lock()
-	zeropodContainer.CheckpointRestore.Unlock() //lint:ignore SA2001 ensure cr is finished
+	//lint:ignore SA2001 ensure cr is finished
+	//nolint:staticcheck
+	zeropodContainer.CheckpointRestore.Unlock()
 
 	log.G(ctx).Infof("kill called in zeropod: %s", zeropodContainer.ID())
 	zeropodContainer.CancelScaleDown()
@@ -430,7 +433,7 @@ func (w *wrapper) processExits() {
 			continue
 		}
 		// pass event to service exit channel
-		w.service.ec <- e
+		w.ec <- e
 	}
 }
 

@@ -138,7 +138,7 @@ func TestMigrationReconcilerCheckpointCleanup(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, container := range tc.migration.Spec.Containers {
-				os.MkdirAll(nodev1.ImagePath(container.ID), os.ModeDir)
+				assert.NoError(t, os.MkdirAll(nodev1.ImagePath(container.ID), os.ModeDir))
 			}
 			if tc.sourceNodeName == "" {
 				tc.sourceNodeName = defaultSourceNode

@@ -174,10 +174,10 @@ func (c *Container) restoreLoggers(id string, stdio stdio.Stdio) error {
 	defer func() {
 		if err != nil {
 			if stdoutWC != nil {
-				stdoutWC.Close()
+				_ = stdoutWC.Close()
 			}
 			if stderrWC != nil {
-				stderrWC.Close()
+				_ = stderrWC.Close()
 			}
 		}
 	}()
@@ -203,7 +203,7 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 		}
 		defer func() {
 			if err != nil {
-				f.Close()
+				_ = f.Close()
 			}
 		}()
 		var stdoutCh, stderrCh <-chan struct{}
@@ -221,7 +221,7 @@ func createContainerLoggers(ctx context.Context, logPath string, tty bool) (stdo
 				<-stderrCh
 			}
 			log.G(ctx).Infof("finish redirecting log file %q, closing it", logPath)
-			f.Close()
+			_ = f.Close()
 		}()
 	} else {
 		stdout = crio.NewDiscardLogger()
@@ -257,6 +257,7 @@ func MigrationRestore(ctx context.Context, r *task.CreateTaskRequest, cfg *v1.Co
 		},
 	}
 	nodeClient := nodev1.NewNodeClient(ttrpc.NewClient(conn))
+	//nolint:errcheck
 	defer conn.Close()
 	resp, err := nodeClient.Restore(ctx, restoreReq)
 	if err != nil {
@@ -337,6 +338,7 @@ func FinishRestore(ctx context.Context, id string, cfg *v1.Config, startTime tim
 	if err != nil {
 		return fmt.Errorf("dialing node service: %w", err)
 	}
+	//nolint:errcheck
 	defer conn.Close()
 
 	restoreReq := &nodev1.RestoreRequest{

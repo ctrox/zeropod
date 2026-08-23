@@ -83,6 +83,7 @@ func sysMemoryStats() (*sysMemory, error) {
 	if err != nil {
 		return nil, err
 	}
+	//nolint:errcheck
 	defer file.Close()
 
 	var memTotal, memAvailable uint64

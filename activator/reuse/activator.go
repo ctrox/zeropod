@@ -1,3 +1,4 @@
+// Package reuse implements a [activator.Activator] using BPF_PROG_TYPE_SK_REUSEPORT
 package reuse
 
 import (
@@ -275,29 +276,29 @@ func (act *Activator) Stop(_ context.Context) {
 		ln.probe.close()
 		ln.forwarder.close()
 		if ln.reuse != nil {
-			ln.reuse.Close()
+			_ = ln.reuse.Close()
 		}
 	}
 	if act.sockoptObjects != nil {
-		act.sockoptObjects.Close()
+		_ = act.sockoptObjects.Close()
 	}
 	if act.sockoptLink != nil {
-		act.sockoptLink.Close()
+		_ = act.sockoptLink.Close()
 	}
 	if act.bindV4Link != nil {
-		act.bindV4Link.Close()
+		_ = act.bindV4Link.Close()
 	}
 	if act.bindV6Link != nil {
-		act.bindV6Link.Close()
+		_ = act.bindV6Link.Close()
 	}
 	if act.trackerObjs != nil {
-		act.trackerObjs.Close()
+		_ = act.trackerObjs.Close()
 	}
 	if act.trackerLink != nil {
-		act.trackerLink.Close()
+		_ = act.trackerLink.Close()
 	}
 	if act.trackerLinkLo != nil {
-		act.trackerLinkLo.Close()
+		_ = act.trackerLinkLo.Close()
 	}
 }
 

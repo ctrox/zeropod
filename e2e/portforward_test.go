@@ -201,5 +201,5 @@ func (p *PortForward) findPodByLabels() (string, error) {
 		return "", errors.New(fmt.Sprintf("Ambiguous pod: found more than one pod for selector: labels \"%s\"", formatted))
 	}
 
-	return pods.Items[0].ObjectMeta.Name, nil
+	return pods.Items[0].Name, nil
 }

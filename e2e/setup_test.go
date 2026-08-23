@@ -84,8 +84,8 @@ type e2eConfig struct {
 }
 
 func (e2e *e2eConfig) cleanup() error {
-	defer os.RemoveAll(e2e.kubeconfigName)
 	if err := stopKind(e2e.clusterName, e2e.kubeconfigName); err != nil {
+		_ = os.RemoveAll(e2e.kubeconfigName)
 		return err
 	}
 	return os.RemoveAll(e2e.kubeconfigName)
@@ -250,6 +250,7 @@ func loadImages(node nodes.Node, imageFile string) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to open image")
 	}
+	//nolint:errcheck
 	defer f.Close()
 	return nodeutils.LoadImageArchive(node, f)
 }
@@ -260,7 +261,7 @@ func getImages(t testing.TB) (string, error) {
 		return "", fmt.Errorf("failed to create tempdir: %w", err)
 	}
 	t.Cleanup(func() {
-		os.RemoveAll(dir)
+		assert.NoError(t, os.RemoveAll(dir))
 	})
 
 	imagesTarPath := filepath.Join(dir, "images.tar")
@@ -529,7 +530,7 @@ func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, p
 	}, time.Minute, time.Second, "waiting for pod to be running")
 
 	return func() {
-		client.Delete(ctx, pod)
+		assert.NoError(t, client.Delete(ctx, pod))
 		assert.NoError(t, err)
 		require.Eventually(t, func() bool {
 			if err := client.Get(ctx, objectName(pod), pod); err != nil {
@@ -697,7 +698,7 @@ func probeHTTP(t testing.TB, addr string) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		assert.NoError(t, resp.Body.Close())
 		return true
 	}, time.Second*10, time.Millisecond*100)
 }
@@ -1001,6 +1002,7 @@ func getPodLogs(ctx context.Context, cfg *rest.Config, pod corev1.Pod) (string, 
 	if err != nil {
 		return "", fmt.Errorf("opening log stream: %w", err)
 	}
+	//nolint:errcheck
 	defer podLogs.Close()
 
 	buf := new(bytes.Buffer)
@@ -1035,6 +1037,7 @@ func freezerRead(port int) (*freeze, error) {
 	if err != nil {
 		return nil, err
 	}
+	//nolint:errcheck
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -1054,7 +1057,7 @@ func availabilityCheck(ctx context.Context, port int) time.Duration {
 			downtime += time.Since(beforeReq)
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		select {
 		case <-ctx.Done():
 			return downtime

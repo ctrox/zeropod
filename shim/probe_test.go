@@ -98,12 +98,12 @@ func TestDetectProbe(t *testing.T) {
 				resp := http.Response{
 					StatusCode: http.StatusOK,
 				}
-				resp.Write(newConn)
+				_ = resp.Write(newConn)
 			}
 			assert.Equal(t, !tc.probeDetected, cont)
 
 			<-clientDone
-			newConn.Close()
+			assert.NoError(t, newConn.Close())
 		})
 	}
 }
@@ -154,7 +154,8 @@ func writeRandomTCPData(size int) func(t *testing.T, addr string) {
 		if !assert.NoError(t, err) {
 			return
 		}
-		conn.Write(randomData)
+		_, err = conn.Write(randomData)
+		assert.NoError(t, err)
 	}
 }
 

@@ -20,7 +20,7 @@ func WriteAddress(path, address string) error {
 	}
 	_, err = f.Write([]byte(address))
 	if err != nil {
-		f.Cancel()
+		_ = f.Cancel()
 		return err
 	}
 	return f.Close()

@@ -72,7 +72,7 @@ func (p *pageServerProxy) Start(ctx context.Context) error {
 	go p.accept(ctx)
 	go func() {
 		<-ctx.Done()
-		p.listener.Close()
+		_ = p.listener.Close()
 	}()
 	return nil
 }
@@ -143,7 +143,9 @@ func (p *pageServerProxy) Wait() error {
 // proxy just proxies between conn1 and conn2. If the ctx is cancelled, both
 // sides of the connections are closed.
 func proxy(ctx context.Context, conn1, conn2 net.Conn) error {
+	//nolint:errcheck
 	defer conn1.Close()
+	//nolint:errcheck
 	defer conn2.Close()
 
 	done := make(chan struct{}, 1)

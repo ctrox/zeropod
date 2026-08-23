@@ -226,7 +226,7 @@ func TestActivator(t *testing.T) {
 			}
 			assert.NoError(t, s.Reset())
 			s.Stop(t.Context())
-			bpf.Cleanup()
+			assert.NoError(t, bpf.Cleanup())
 		})
 	}
 }
@@ -234,7 +234,8 @@ func TestActivator(t *testing.T) {
 func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *testCase) {
 	response := "ok"
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, response)
+		_, err := fmt.Fprint(w, response)
+		assert.NoError(t, err)
 	}))
 
 	once := sync.Once{}
@@ -265,13 +266,15 @@ func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *
 			}
 
 			// replace listener of server
-			ts.Listener.Close()
+			assert.NoError(t, ts.Listener.Close())
 			ts.Listener = l
 			ts.Start()
 			t.Logf("listening on %s", l.Addr().String())
 
 			t.Cleanup(func() {
+				//nolint:errcheck
 				l.Close()
+				//nolint:errcheck
 				ts.Close()
 			})
 		})
@@ -284,5 +287,5 @@ func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *
 		false,
 	)
 	require.NoError(t, err)
-	s.enableRedirect(port)
+	assert.NoError(t, s.enableRedirect(port))
 }
