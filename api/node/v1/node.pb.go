@@ -540,10 +540,11 @@ func (x *PullImageRequest) GetImageId() string {
 }
 
 type RestoreCapacityRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PodInfo       *PodInfo               `protobuf:"bytes,1,opt,name=pod_info,json=podInfo,proto3" json:"pod_info,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                 protoimpl.MessageState `protogen:"open.v1"`
+	PodInfo               *PodInfo               `protobuf:"bytes,1,opt,name=pod_info,json=podInfo,proto3" json:"pod_info,omitempty"`
+	CheckpointMemoryBytes uint64                 `protobuf:"varint,3,opt,name=checkpoint_memory_bytes,json=checkpointMemoryBytes,proto3" json:"checkpoint_memory_bytes,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
 }
 
 func (x *RestoreCapacityRequest) Reset() {
@@ -581,6 +582,13 @@ func (x *RestoreCapacityRequest) GetPodInfo() *PodInfo {
 		return x.PodInfo
 	}
 	return nil
+}
+
+func (x *RestoreCapacityRequest) GetCheckpointMemoryBytes() uint64 {
+	if x != nil {
+		return x.CheckpointMemoryBytes
+	}
+	return 0
 }
 
 type RestoreCapacityResponse struct {
@@ -675,9 +683,10 @@ const file_node_proto_rawDesc = "" +
 	"\x04port\x18\x03 \x01(\x05R\x04port\x12\x10\n" +
 	"\x03tls\x18\x04 \x01(\bR\x03tls\"-\n" +
 	"\x10PullImageRequest\x12\x19\n" +
-	"\bimage_id\x18\x01 \x01(\tR\aimageId\"M\n" +
+	"\bimage_id\x18\x01 \x01(\tR\aimageId\"\x85\x01\n" +
 	"\x16RestoreCapacityRequest\x123\n" +
-	"\bpod_info\x18\x01 \x01(\v2\x18.zeropod.node.v1.PodInfoR\apodInfo\"X\n" +
+	"\bpod_info\x18\x01 \x01(\v2\x18.zeropod.node.v1.PodInfoR\apodInfo\x126\n" +
+	"\x17checkpoint_memory_bytes\x18\x03 \x01(\x04R\x15checkpointMemoryBytes\"X\n" +
 	"\x17RestoreCapacityResponse\x12\x18\n" +
 	"\aallowed\x18\x01 \x01(\bR\aallowed\x12#\n" +
 	"\rredirect_addr\x18\x02 \x01(\tR\fredirectAddr2\xbc\x04\n" +

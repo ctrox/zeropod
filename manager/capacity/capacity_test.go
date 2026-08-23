@@ -11,7 +11,7 @@ import (
 )
 
 func TestNodeTracker(t *testing.T) {
-	tracker := NewNodeTracker(prometheus.NewRegistry(), "name")
+	tracker := NewNodeTracker(prometheus.NewRegistry(), "name", 1.0)
 	assert.Empty(t, tracker.Capacity(corev1.ResourceCPU))
 	assert.Empty(t, tracker.Capacity(corev1.ResourceMemory))
 	assert.Empty(t, tracker.Requested(corev1.ResourceCPU))

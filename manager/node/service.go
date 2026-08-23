@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
@@ -31,6 +32,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -128,7 +130,12 @@ func NewServer(addr string, kube client.Client, log *slog.Logger, timeouts Timeo
 		cap:                    cap,
 	})
 
-	log.Info("new node server", "name", nodeName, "live_migration_supported", liveMigrationSupported)
+	log.Info("new node server",
+		"name", nodeName,
+		"live_migration_supported", liveMigrationSupported,
+		"capacity_tracker", reflect.TypeOf(cap).String(),
+		"eviction_threshold", cap.Threshold(),
+	)
 	return &Server{
 		ttrpc:        s,
 		unixListener: unixListener,
@@ -230,9 +237,17 @@ func (ns *nodeService) RestoreCapacity(ctx context.Context, req *nodev1.RestoreC
 		log.Error("getting container resources", "error", err)
 		return &nodev1.RestoreCapacityResponse{Allowed: true}, fmt.Errorf("getting container requests: %w", err)
 	}
-	log.Debug("container resources", "cpu", res.Cpu(), "mem", res.Memory())
+
+	if ns.cap.UseCheckpointMemory() && req.CheckpointMemoryBytes != 0 {
+		res[corev1.ResourceMemory] = *resource.NewQuantity(int64(req.CheckpointMemoryBytes), resource.BinarySI)
+	}
+
+	log.Debug("container resources", "cpu", res.Cpu(), "mem", res.Memory(), "use_checkpoint_memory", ns.cap.UseCheckpointMemory())
 	if ns.hasCapacity(res) {
-		log.Debug("node has enough capacity to restore")
+		log.Debug("node has enough capacity to restore",
+			"cpu", ns.cap.Capacity(corev1.ResourceCPU),
+			"mem", ns.cap.Capacity(corev1.ResourceMemory),
+		)
 		return &nodev1.RestoreCapacityResponse{Allowed: true}, nil
 	}
 	resp, err := ns.evictPod(ctx, req, pod)
@@ -331,12 +346,23 @@ func (ns *nodeService) hasCapacity(res corev1.ResourceList) bool {
 	if cpuCap.IsZero() || memCap.IsZero() {
 		return true
 	}
-	if cpuRequested.Cmp(cpuCap) > 0 {
-		ns.log.Info("capacity: not enough cpu", "cap", cpuCap.String(), "req", cpuRequested.String())
+
+	if capacity.CmpThreshold(ns.cap, corev1.ResourceCPU, *cpuRequested) > 0 {
+		ns.log.Info("capacity: not enough cpu",
+			"cap", cpuCap.String(),
+			"total_req", cpuRequested.String(),
+			"container_req", res.Cpu().String(),
+			"threshold", ns.cap.Threshold(),
+		)
 		return false
 	}
-	if memRequested.Cmp(memCap) > 0 {
-		ns.log.Info("capacity: not enough memory", "cap", memCap.String(), "req", memRequested.String())
+	if capacity.CmpThreshold(ns.cap, corev1.ResourceMemory, *memRequested) > 0 {
+		ns.log.Info("capacity: not enough memory",
+			"cap", memCap.String(),
+			"total_req", memRequested.String(),
+			"container_req", res.Memory().String(),
+			"threshold", ns.cap.Threshold(),
+		)
 		return false
 	}
 	return true

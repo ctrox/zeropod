@@ -56,6 +56,9 @@ var (
 	evictionTimeout         = flag.Duration("eviction-timeout", time.Minute, "how long to wait for eviction")
 	autoGCMigrations        = flag.Bool("auto-gc-migrations", true, "automatically garbage collect migrations when owning pod is deleted")
 
+	capacityEvictionThreshold = flag.Float64("capacity-eviction-threshold", 1.0, "the threshold when capacity eviction starts. Can be above 1.0 for overprovisioning.")
+	capacitySystemMemory      = flag.Bool("capacity-system-memory", false, "use system memory instead of pod requests for capacity tracking")
+
 	version   = ""
 	revision  = ""
 	goVersion = goruntime.Version()
@@ -167,7 +170,12 @@ func main() {
 		}
 	}()
 
-	cap := capacity.NewNodeTracker(registry, nodeName)
+	var cap capacity.Tracker
+	if *capacitySystemMemory {
+		cap = capacity.NewSystemMemoryTracker(registry, nodeName, *capacityEvictionThreshold)
+	} else {
+		cap = capacity.NewNodeTracker(registry, nodeName, *capacityEvictionThreshold)
+	}
 	nodeServer, err := node.NewServer(
 		*nodeServerAddr,
 		mgr.GetClient(),

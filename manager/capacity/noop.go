@@ -30,6 +30,16 @@ func (n *NoopTracker) SetRequested(name corev1.ResourceName, q resource.Quantity
 func (n *NoopTracker) IncEvicted() {
 }
 
+// UseCheckpointMemory implements [Tracker].
+func (n *NoopTracker) UseCheckpointMemory() bool {
+	return false
+}
+
+// Threshold implements [Tracker].
+func (n *NoopTracker) Threshold() float64 {
+	return 1.0
+}
+
 // NewNoopTracker creates a [NoopTracker]
 func NewNoopTracker() Tracker {
 	return &NoopTracker{}

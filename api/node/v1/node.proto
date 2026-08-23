@@ -70,6 +70,7 @@ message PullImageRequest {
 
 message RestoreCapacityRequest {
   PodInfo pod_info = 1;
+  uint64 checkpoint_memory_bytes = 3;
 }
 
 message RestoreCapacityResponse {

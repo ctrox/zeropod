@@ -31,13 +31,16 @@ type Tracker interface {
 	Requested(name corev1.ResourceName) resource.Quantity
 	SetCapacity(name corev1.ResourceName, q resource.Quantity)
 	SetRequested(name corev1.ResourceName, q resource.Quantity)
+	Threshold() float64
 	IncEvicted()
+	UseCheckpointMemory() bool
 }
 
 type NodeTracker struct {
 	name      string
 	capacity  corev1.ResourceList
 	requested corev1.ResourceList
+	threshold float64
 	mu        sync.RWMutex
 	metrics   metrics
 }
@@ -82,16 +85,26 @@ func (c *NodeTracker) IncEvicted() {
 	c.metrics.evicted.With(prometheus.Labels{labelNode: c.name}).Inc()
 }
 
+// Threshold where capacity eviction starts.
+func (c *NodeTracker) Threshold() float64 {
+	return c.threshold
+}
+
+func (c *NodeTracker) UseCheckpointMemory() bool {
+	return false
+}
+
 func (c *NodeTracker) metricLabels(resource string) prometheus.Labels {
 	return prometheus.Labels{labelNode: c.name, labelResource: resource}
 }
 
 // NewNodeTracker creates a [NodeTracker].
-func NewNodeTracker(reg prometheus.Registerer, name string) Tracker {
+func NewNodeTracker(reg prometheus.Registerer, name string, threshold float64) Tracker {
 	return &NodeTracker{
 		name:      name,
 		capacity:  corev1.ResourceList{},
 		requested: corev1.ResourceList{},
+		threshold: threshold,
 		mu:        sync.RWMutex{},
 		metrics: metrics{
 			capacity: promauto.With(reg).NewGaugeVec(prometheus.GaugeOpts{
@@ -148,4 +161,16 @@ func RemoveTaint(node *corev1.Node) {
 	node.Spec.Taints = slices.DeleteFunc(node.Spec.Taints, func(t corev1.Taint) bool {
 		return t.Key == TaintKey
 	})
+}
+
+// CmpThreshold returns 0 if requested is equal to capacity, -1 if the requested is less
+// than capacity, or 1 if the requested is greater than capacity. Note that
+// capacity will be multiplied by the [Tracker] threshold.
+func CmpThreshold(cap Tracker, name corev1.ResourceName, requested resource.Quantity) int {
+	return requested.Cmp(multiplyQuantity(cap.Capacity(name), cap.Threshold()))
+}
+
+func multiplyQuantity(q resource.Quantity, factor float64) resource.Quantity {
+	newMilli := int64(float64(q.MilliValue()) * factor)
+	return *resource.NewMilliQuantity(newMilli, q.Format)
 }

@@ -478,13 +478,17 @@ func TestE2E(t *testing.T) {
 			},
 			"checkpoint errors": {
 				metric:       prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricCheckpointErrorsTotal),
-				pod:          restoredPod,
+				pod:          checkpointedPod,
 				counterValue: new(float64(0)),
 			},
 			"restore errors": {
 				metric:       prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricRestoreErrorsTotal),
 				pod:          restoredPod,
 				counterValue: new(float64(0)),
+			},
+			"checkpoint memory": {
+				metric: prometheus.BuildFQName(manager.MetricsNamespace, "", manager.MetricCheckpointMemoryBytes),
+				pod:    checkpointedPod,
 			},
 		}
 

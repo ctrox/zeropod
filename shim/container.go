@@ -267,6 +267,9 @@ func (c *Container) setPhase(phase v1.ContainerPhase, duration time.Duration) {
 		}
 		c.scaledDown = true
 		c.metrics.Running = false
+		if err := c.updateCheckpointMemoryBytes(); err != nil {
+			log.G(c.context).WithError(err).Error("updating checkpoint memory metric")
+		}
 	}
 }
 

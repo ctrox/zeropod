@@ -362,8 +362,8 @@ func (r podReconciler) updateNodeResources(ctx context.Context) (time.Duration, 
 	if ok && time.Since(timeAdded) < capacity.MinTaintDuration {
 		return capacity.MinTaintDuration, nil
 	}
-	if ok && node.Status.Capacity.Cpu().Cmp(cpuRequested) == 1 &&
-		node.Status.Capacity.Memory().Cmp(memRequested) == 1 {
+	if ok && capacity.CmpThreshold(r.cap, corev1.ResourceCPU, cpuRequested) == -1 &&
+		capacity.CmpThreshold(r.cap, corev1.ResourceMemory, memRequested) == -1 {
 		capacity.RemoveTaint(node)
 		r.log.Info("removing taint from node", "node", node.Name)
 		if err := r.kube.Update(ctx, node); err != nil {
