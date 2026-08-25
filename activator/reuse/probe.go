@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"syscall"
 	"time"
 
 	"github.com/ctrox/zeropod/activator"
@@ -68,9 +69,15 @@ func handleProbe(conn *net.TCPConn) error {
 		return fmt.Errorf("writing probe response: %w", err)
 	}
 	if err := conn.CloseWrite(); err != nil {
+		if errors.Is(err, syscall.ENOTCONN) || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
 		return fmt.Errorf("closing write probe connection: %w", err)
 	}
 	if err := conn.Close(); err != nil {
+		if errors.Is(err, syscall.ENOTCONN) || errors.Is(err, net.ErrClosed) {
+			return nil
+		}
 		return fmt.Errorf("closing probe connection: %w", err)
 	}
 	return err
