@@ -187,9 +187,16 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 
-	liveMigrateValue := spec.Annotations[LiveMigrateAnnotationKey]
-	if dryRun && (slices.Contains(migrate, containerName) || (liveMigrateValue != "" && liveMigrateValue == containerName)) {
-		return nil, fmt.Errorf("dry-run (%s) cannot be combined with migrate/live-migrate for container %q", DryRunAnnotationKey, containerName)
+	liveMigrate := spec.Annotations[LiveMigrateAnnotationKey]
+	if dryRun {
+		if slices.Contains(migrate, containerName) {
+			log.G(ctx).Warnf("dry-run (%s) is set, disabling migrate for container %q", DryRunAnnotationKey, containerName)
+			migrate = slices.DeleteFunc(migrate, func(s string) bool { return s == containerName })
+		}
+		if liveMigrate != "" && liveMigrate == containerName {
+			log.G(ctx).Warnf("dry-run (%s) is set, disabling live-migrate for container %q", DryRunAnnotationKey, containerName)
+			liveMigrate = ""
+		}
 	}
 
 	ns, ok := namespaces.Namespace(ctx)
@@ -263,7 +270,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		DryRun:                dryRun,
 		PreDump:               preDump,
 		Migrate:               migrate,
-		LiveMigrate:           spec.Annotations[LiveMigrateAnnotationKey],
+		LiveMigrate:           liveMigrate,
 		ZeropodContainerNames: containerNames,
 		ContainerName:         containerName,
 		ContainerType:         containerType,

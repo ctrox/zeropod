@@ -33,7 +33,7 @@ zeropod_restore_errors_total{container="nginx",namespace="default",pod="nginx"} 
 # HELP zeropod_dry_run_scale_downs_total Total number of simulated dry-run scale downs.
 # TYPE zeropod_dry_run_scale_downs_total counter
 zeropod_dry_run_scale_downs_total{container="nginx",namespace="default",pod="nginx"} 0
-# HELP zeropod_dry_run_would_restores_total Total number of simulated dry-run restores.
-# TYPE zeropod_dry_run_would_restores_total counter
-zeropod_dry_run_would_restores_total{container="nginx",namespace="default",pod="nginx"} 0
+# HELP zeropod_dry_run_restores_total Total number of simulated dry-run restores.
+# TYPE zeropod_dry_run_restores_total counter
+zeropod_dry_run_restores_total{container="nginx",namespace="default",pod="nginx"} 0
 ```

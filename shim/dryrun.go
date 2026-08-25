@@ -74,7 +74,7 @@ func (c *Container) DryRunExec(ctx context.Context) {
 // cycle immediately; otherwise the caller is responsible for rescheduling
 // once appropriate.
 func (c *Container) dryRunRestore(ctx context.Context, reason string, reschedule bool) {
-	c.metrics.DryRunWouldRestores += 1
+	c.metrics.DryRunRestores += 1
 	log.G(ctx).Infof("dry-run: would have restored container %s, %s", c.ID(), reason)
 	c.sendDryRunEvent(fmt.Sprintf("would have restored (%s)", reason))
 	c.dryRunScaledDown = false

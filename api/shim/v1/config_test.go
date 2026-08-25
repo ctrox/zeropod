@@ -135,12 +135,15 @@ func TestNewConfig(t *testing.T) {
 }
 
 func TestNewConfigDryRunMigrateConflict(t *testing.T) {
-	_, err := NewConfig(context.Background(), &specs.Spec{
+	cfg, err := NewConfig(context.Background(), &specs.Spec{
 		Annotations: map[string]string{
 			CRIContainerNameAnnotation: "app",
 			DryRunAnnotationKey:        "true",
 			MigrateAnnotationKey:       "app",
+			LiveMigrateAnnotationKey:   "app",
 		},
 	})
-	require.Error(t, err)
+	require.NoError(t, err)
+	assert.True(t, cfg.DryRun)
+	assert.False(t, cfg.AnyMigrationEnabled())
 }

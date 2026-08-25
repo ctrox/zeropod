@@ -173,9 +173,11 @@ process and never enables traffic redirection - the container keeps running
 and serving traffic uninterrupted. Instead, zeropod logs when it *would have*
 scaled down and when it *would have* restored (also emitted as a Kubernetes
 event on the pod, and counted in the `zeropod_dry_run_scale_downs_total`/
-`zeropod_dry_run_would_restores_total` metrics - see [metrics](../metrics.md)).
+`zeropod_dry_run_restores_total` metrics - see [metrics](../metrics.md)).
 Use this to evaluate zeropod's behaviour on a workload risk-free before
-enabling it for real. Cannot be combined with `migrate`/`live-migrate`. Note
-that in-place resource scaling (`cpu-requests`/`memory-requests`) is also not
+enabling it for real. If `migrate`/`live-migrate` is also set for the
+container, dry-run takes precedence: migrate/live-migrate is disabled with a
+warning logged, since the two are contradictory by definition. Note that
+in-place resource scaling (`cpu-requests`/`memory-requests`) is also not
 previewed - since the container is never actually marked as scaled down, its
 resource requests are never touched while dry-run is active.
