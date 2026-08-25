@@ -16,7 +16,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -92,6 +91,7 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Setenv(nodev1.NodeNameEnvKey, tc.nodeName)
+			ensureNode(t, kube, tc.nodeName)
 			r, err := newPodReconciler(kube, slog.Default())
 			require.NoError(t, err)
 			r.autoGCMigrations = tc.garbageCollection
@@ -110,7 +110,9 @@ func TestPodReconcilerMigrationSource(t *testing.T) {
 				NamespacedName: client.ObjectKeyFromObject(tc.pod),
 			})
 			assert.NoError(t, err)
-			assert.Equal(t, tc.expectedRequeue, res.Requeue)
+			if tc.expectedRequeue {
+				assert.Greater(t, res.RequeueAfter, 0)
+			}
 
 			if tc.expectedMigration {
 				migration := &v1.Migration{}
@@ -194,6 +196,7 @@ func TestPodReconcilerMigrationTarget(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			require.NoError(t, kube.Create(ctx, tc.existingMigration))
 			t.Setenv(nodev1.NodeNameEnvKey, tc.nodeName)
+			ensureNode(t, kube, tc.nodeName)
 			r, err := newPodReconciler(kube, slog.Default())
 			require.NoError(t, err)
 			r.autoGCMigrations = tc.garbageCollection
@@ -210,7 +213,9 @@ func TestPodReconcilerMigrationTarget(t *testing.T) {
 				NamespacedName: client.ObjectKeyFromObject(tc.pod),
 			})
 			assert.NoError(t, err)
-			assert.Equal(t, tc.expectedRequeue, res.Requeue)
+			if tc.expectedRequeue {
+				assert.Greater(t, res.RequeueAfter, 0)
+			}
 
 			require.NoError(t, kube.Get(ctx, client.ObjectKeyFromObject(tc.existingMigration), tc.existingMigration))
 			if tc.expectClaimed {
@@ -232,7 +237,7 @@ func newMigratePod(nodeName, runtimeClassName string, phase shimv1.ContainerPhas
 	pod.Name = ""
 	pod.GenerateName = "controller-test-"
 	pod.Spec.NodeName = nodeName
-	pod.Spec.RuntimeClassName = ptr.To(runtimeClassName)
+	pod.Spec.RuntimeClassName = new(runtimeClassName)
 	containerName := pod.Spec.Containers[0].Name
 	pod.SetAnnotations(map[string]string{
 		nodev1.MigrateAnnotationKey: pod.Spec.Containers[0].Name,
@@ -274,4 +279,12 @@ func setPodTemplateHash(pod *corev1.Pod, podTemplateHash string) *corev1.Pod {
 func setPhase(pod *corev1.Pod, phase corev1.PodPhase) *corev1.Pod {
 	pod.Status.Phase = phase
 	return pod
+}
+
+func ensureNode(t *testing.T, kube client.Client, nodeName string) {
+	if err := kube.Create(t.Context(), &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}); err != nil {
+		if !errors.IsAlreadyExists(err) {
+			t.Fatal(err)
+		}
+	}
 }

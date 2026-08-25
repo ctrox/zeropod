@@ -6,7 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -19,6 +21,7 @@ import (
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	"github.com/ctrox/zeropod/manager"
+	"github.com/ctrox/zeropod/manager/capacity"
 	"github.com/ctrox/zeropod/manager/node"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
@@ -39,9 +42,10 @@ var (
 	debugFlag      = flag.Bool("debug", false, "enable debug logs")
 	inPlaceScaling = flag.Bool("in-place-scaling", false,
 		"enable in-place resource scaling, requires InPlacePodVerticalScaling feature flag")
-	statusLabels            = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	statusLabels           = flag.Bool("status-labels", false, "update pod labels to reflect container status")
+	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", true, "set to ignore traffic from localhost in socket tracker (Deprecated: this has moved to the installer)")
+	//lint:ignore U1000 kept for compatibility
 	probeBinaryName         = flag.String("probe-binary-name", "kubelet", "set the probe binary name for probe detection (Deprecated: this has moved to the installer)")
-	trackerIgnoreLocalhost  = flag.Bool("tracker-ignore-localhost", true, "set to ignore traffic from localhost in socket tracker (Deprecated: this has moved to the installer)")
 	statusEvents            = flag.Bool("status-events", false, "create status events to reflect container status")
 	versionFlag             = flag.Bool("version", false, "output version and exit")
 	maxConcurrentReconciles = flag.Int("max-concurrent-reconciles", 10, "num reconciles the pod controller processes concurrently")
@@ -50,6 +54,10 @@ var (
 	migrationClaimTimeout   = flag.Duration("migration-claim-timeout", time.Second*10, "how long to wait for migration to be claimed")
 	migrationReadyTimeout   = flag.Duration("migration-ready-timeout", time.Minute*5, "how long to wait for migration to be ready")
 	autoGCMigrations        = flag.Bool("auto-gc-migrations", true, "automatically garbage collect migrations when owning pod is deleted")
+
+	capacityEvictionTimeout   = flag.Duration("capacity-eviction-timeout", time.Minute, "how long to wait for capacity eviction")
+	capacityEvictionThreshold = flag.Float64("capacity-eviction-threshold", 1.0, "the threshold when capacity eviction starts. Can be above 1.0 for overprovisioning.")
+	capacitySystemMemory      = flag.Bool("capacity-system-memory", false, "use system memory instead of pod requests for capacity tracking")
 
 	version   = ""
 	revision  = ""
@@ -99,14 +107,18 @@ func main() {
 	defer stop()
 
 	activatorOpts := []activator.BPFOpts{
-		activator.ProbeBinaryName(*probeBinaryName),
 		activator.TrackerIgnoreLocalhost(*trackerIgnoreLocalhost),
 	}
-	if err := manager.AttachRedirectors(ctx, log, activatorOpts...); err != nil {
+	redirector, err := manager.AttachRedirectors(ctx, log, activatorOpts...)
+	if err != nil {
 		log.Warn("attaching redirectors failed: restoring containers on traffic is disabled", "err", err)
 	}
 
-	mgr, err := newControllerManager()
+	nodeName, ok := os.LookupEnv(nodev1.NodeNameEnvKey)
+	if !ok {
+		log.Error("could not find node name, env is not set", "env", nodev1.NodeNameEnvKey)
+	}
+	mgr, err := newControllerManager(nodeName)
 	if err != nil {
 		log.Error("creating controller manager", "err", err)
 		os.Exit(1)
@@ -146,6 +158,7 @@ func main() {
 			EnableOpenMetrics: true,
 		}),
 	)
+	mux.Handle("/probe", http.HandlerFunc(probeHander(redirector, log)))
 	server := &http.Server{Addr: *metricsAddr, Handler: mux}
 
 	go func() {
@@ -157,6 +170,12 @@ func main() {
 		}
 	}()
 
+	var cap capacity.Tracker
+	if *capacitySystemMemory {
+		cap = capacity.NewSystemMemoryTracker(registry, nodeName, *capacityEvictionThreshold)
+	} else {
+		cap = capacity.NewNodeTracker(registry, nodeName, *capacityEvictionThreshold)
+	}
 	nodeServer, err := node.NewServer(
 		*nodeServerAddr,
 		mgr.GetClient(),
@@ -166,7 +185,9 @@ func main() {
 			MigrationServers: *migrationServersTimeout,
 			MigrationClaim:   *migrationClaimTimeout,
 			MigrationReady:   *migrationReadyTimeout,
+			EvictionTimeout:  *capacityEvictionTimeout,
 		},
+		cap,
 	)
 	if err != nil {
 		log.Error("creating node server", "err", err)
@@ -179,6 +200,7 @@ func main() {
 		manager.AutoGCMigrations(*autoGCMigrations),
 		manager.RegisterPodLabeller(labeller),
 		manager.RegisterPodScaler(scaler),
+		manager.CapacityTracker(cap),
 	); err != nil {
 		log.Error("running pod controller", "error", err)
 	}
@@ -200,7 +222,7 @@ func main() {
 	}
 }
 
-func newControllerManager() (ctrlmanager.Manager, error) {
+func newControllerManager(nodeName string) (ctrlmanager.Manager, error) {
 	cfg, err := config.GetConfig()
 	if err != nil {
 		return nil, fmt.Errorf("getting client config: %w", err)
@@ -211,10 +233,6 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 	}
 	if err := v1.AddToScheme(scheme); err != nil {
 		return nil, err
-	}
-	nodeName, ok := os.LookupEnv(nodev1.NodeNameEnvKey)
-	if !ok {
-		return nil, fmt.Errorf("could not find node name, env %s is not set", nodev1.NodeNameEnvKey)
 	}
 	mgr, err := ctrlmanager.New(cfg, ctrlmanager.Options{
 		Scheme: scheme, Metrics: server.Options{BindAddress: "0"},
@@ -229,6 +247,11 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 						"spec.nodeName": nodeName,
 					}),
 				},
+				&corev1.Node{}: cache.ByObject{
+					Field: fields.SelectorFromSet(fields.Set{
+						"metadata.name": nodeName,
+					}),
+				},
 			},
 		},
 	})
@@ -236,6 +259,29 @@ func newControllerManager() (ctrlmanager.Manager, error) {
 		return nil, err
 	}
 	return mgr, nil
+}
+
+// probeHandler responds to kublet probes and extracts the remoteAddr to
+// populate the kubeletAddr of the redirector which is used for probe detection.
+func probeHander(redirector *manager.Redirector, log *slog.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err == nil {
+			addr, err := netip.ParseAddr(host)
+			if err == nil {
+				if redirector != nil {
+					if err := redirector.InitKubeletAddr(addr); err != nil {
+						log.Error("init kubelet addr failed", "error", err)
+					}
+				}
+			}
+		}
+		_ = r.Body.Close()
+		w.WriteHeader(http.StatusOK)
+		if _, err := fmt.Fprint(w, http.StatusText(http.StatusOK)); err != nil {
+			log.Error("writing probe response", "error", err)
+		}
+	}
 }
 
 func printVersion() {

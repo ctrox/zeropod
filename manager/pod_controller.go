@@ -7,17 +7,21 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"time"
 
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/ctrox/zeropod/manager/capacity"
 	"github.com/go-logr/logr"
 	"google.golang.org/protobuf/types/known/durationpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -79,6 +83,12 @@ func RegisterPodScaler(handler PodHandler) PodControllerOption {
 	}
 }
 
+func CapacityTracker(cap capacity.Tracker) PodControllerOption {
+	return func(pr *podReconciler) {
+		pr.cap = cap
+	}
+}
+
 type podReconciler struct {
 	kube             client.Client
 	log              *slog.Logger
@@ -86,6 +96,7 @@ type podReconciler struct {
 	autoGCMigrations bool
 	labeller         PodHandler
 	scaler           PodHandler
+	cap              capacity.Tracker
 }
 
 func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, error) {
@@ -97,10 +108,16 @@ func newPodReconciler(kube client.Client, log *slog.Logger) (*podReconciler, err
 		log:      log,
 		kube:     kube,
 		nodeName: nodeName,
+		cap:      capacity.NewNoopTracker(),
 	}, nil
 }
 
 func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
+	requeueAfter, err := r.updateNodeResources(ctx)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
 	if err := r.kube.Get(ctx, request.NamespacedName, &v1.Migration{}); err == nil {
 		// migration already exists, there's nothing for us to do
 		return reconcile.Result{}, nil
@@ -126,10 +143,13 @@ func (r *podReconciler) Reconcile(ctx context.Context, request reconcile.Request
 		if err != nil {
 			return reconcile.Result{}, fmt.Errorf("preparing migration target: %w", err)
 		}
-		return reconcile.Result{Requeue: requeue}, nil
+		if requeue {
+			requeueAfter = time.Millisecond * 100
+		}
+		return reconcile.Result{RequeueAfter: requeueAfter}, nil
 	}
 
-	return reconcile.Result{}, nil
+	return reconcile.Result{RequeueAfter: requeueAfter}, nil
 }
 
 func (r podReconciler) isMigrationSource(pod *corev1.Pod) bool {
@@ -154,7 +174,7 @@ func (r podReconciler) isMigrationCandidate(pod *corev1.Pod) bool {
 		return false
 	}
 
-	return anyMigrationEnabled(pod)
+	return shimv1.AnyMigrationEnabled(pod.Annotations)
 }
 
 func (r podReconciler) prepareMigrationSource(ctx context.Context, pod *corev1.Pod) error {
@@ -262,7 +282,7 @@ func (r podReconciler) newMigration(pod *corev1.Pod) (*v1.Migration, error) {
 			SourceNode:      pod.Spec.NodeName,
 			PodTemplateHash: pod.Labels[appsv1.DefaultDeploymentUniqueLabelKey],
 			Containers:      containers,
-			LiveMigration:   liveMigrationEnabled(pod),
+			LiveMigration:   shimv1.LiveMigrationEnabled(pod.Annotations),
 		},
 	}
 	if r.autoGCMigrations {
@@ -301,15 +321,57 @@ func (r podReconciler) updatePodResources(ctx context.Context, pod *corev1.Pod, 
 	return nil
 }
 
-func anyMigrationEnabled(pod *corev1.Pod) bool {
-	_, migrate := pod.Annotations[nodev1.MigrateAnnotationKey]
-	_, liveMigrate := pod.Annotations[nodev1.LiveMigrateAnnotationKey]
-	return migrate || liveMigrate
-}
+func (r podReconciler) updateNodeResources(ctx context.Context) (time.Duration, error) {
+	if r.cap == nil {
+		return 0, fmt.Errorf("capacity tracker is uninitialized")
+	}
+	node := &corev1.Node{}
+	if err := r.kube.Get(ctx, types.NamespacedName{Name: r.nodeName}, node); err != nil {
+		return 0, err
+	}
+	r.cap.SetCapacity(corev1.ResourceCPU, *node.Status.Capacity.Cpu())
+	r.cap.SetCapacity(corev1.ResourceMemory, *node.Status.Capacity.Memory())
+	podList := &corev1.PodList{}
+	if err := r.kube.List(ctx, podList); err != nil {
+		return 0, err
+	}
+	cpuRequested, memRequested := resource.Quantity{}, resource.Quantity{}
+	for _, pod := range podList.Items {
+		if pod.Spec.NodeName != r.nodeName {
+			continue
+		}
+		if pod.Status.Phase != corev1.PodRunning {
+			continue
+		}
+		if pod.Spec.Resources != nil {
+			memRequested.Add(*pod.Spec.Resources.Requests.Memory())
+			cpuRequested.Add(*pod.Spec.Resources.Requests.Cpu())
+		}
+		for _, container := range pod.Status.ContainerStatuses {
+			if container.Resources == nil {
+				continue
+			}
+			memRequested.Add(*container.Resources.Requests.Memory())
+			cpuRequested.Add(*container.Resources.Requests.Cpu())
+		}
+	}
+	r.cap.SetRequested(corev1.ResourceCPU, cpuRequested)
+	r.cap.SetRequested(corev1.ResourceMemory, memRequested)
 
-func liveMigrationEnabled(pod *corev1.Pod) bool {
-	_, ok := pod.Annotations[nodev1.LiveMigrateAnnotationKey]
-	return ok
+	ok, timeAdded := capacity.HasTaint(node)
+	if ok && time.Since(timeAdded) < capacity.MinTaintDuration {
+		return capacity.MinTaintDuration, nil
+	}
+	if ok && capacity.CmpThreshold(r.cap, corev1.ResourceCPU, cpuRequested) == -1 &&
+		capacity.CmpThreshold(r.cap, corev1.ResourceMemory, memRequested) == -1 {
+		capacity.RemoveTaint(node)
+		r.log.Info("removing taint from node", "node", node.Name)
+		if err := r.kube.Update(ctx, node); err != nil {
+			return 0, fmt.Errorf("removing taint: %w", err)
+		}
+		return 0, nil
+	}
+	return 0, nil
 }
 
 func containerRunning(pod *corev1.Pod, containerName string) bool {

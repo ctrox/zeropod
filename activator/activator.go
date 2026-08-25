@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -27,33 +29,47 @@ import (
 )
 
 type Server struct {
-	listeners      []net.Listener
-	ports          []uint16
-	quit           chan any
-	wg             sync.WaitGroup
-	connHook       ConnHook
-	restoreHook    RestoreHook
-	connectTimeout time.Duration
-	proxyTimeout   time.Duration
-	proxyCancel    context.CancelFunc
-	ns             ns.NetNS
-	maps           bpfMaps
-	sandboxPid     int
-	started        bool
-	peekBufferSize int
-	lastAddr       string
+	listeners       []net.Listener
+	ports           []uint16
+	quit            chan any
+	wg              sync.WaitGroup
+	connHook        ConnHook
+	restoreHook     RestoreHook
+	connectTimeout  time.Duration
+	proxyTimeout    time.Duration
+	proxyCancel     context.CancelFunc
+	ns              ns.NetNS
+	maps            bpfMaps
+	sandboxPid      int
+	started         bool
+	peekBufferSize  int
+	lastAddr        string
+	forwardToTarget bool
+	targetAddr      string
+	kubeletAddr     *netip.Addr
+	lns             Listeners
 }
 
 type ConnHook func(net.Conn) (conn net.Conn, cont bool, err error)
-type RestoreHook func() error
+type RestoreHook func() (int, error)
 
-func NewServer(ctx context.Context, nn ns.NetNS) (*Server, error) {
+type Option func(s *Server)
+
+func SetTargetAddr(addr string) Option {
+	return func(s *Server) {
+		s.targetAddr = addr
+	}
+}
+
+func NewServer(ctx context.Context, nn ns.NetNS, connHook ConnHook, restoreHook RestoreHook, opts ...Option) (*Server, error) {
 	s := &Server{
 		quit:           make(chan any),
 		connectTimeout: time.Second * 5,
 		proxyTimeout:   time.Second * 5,
 		ns:             nn,
 		sandboxPid:     parsePidFromNetNS(nn),
+		connHook:       connHook,
+		restoreHook:    restoreHook,
 	}
 	return s, nil
 }
@@ -82,10 +98,8 @@ var (
 	DefaultIfaces  = []string{IfaceLoopback, IfaceETH0}
 )
 
-func (s *Server) Start(ctx context.Context, connHook ConnHook, restoreHook RestoreHook, ports ...uint16) error {
-	s.connHook = connHook
-	s.restoreHook = restoreHook
-	s.ports = ports
+func (s *Server) Start(ctx context.Context, _ int, listeners Listeners, skipStart bool) error {
+	s.ports = listeners.Ports()
 
 	if err := s.loadPinnedMaps(); err != nil {
 		return err
@@ -109,8 +123,33 @@ func (s *Server) Start(ctx context.Context, connHook ConnHook, restoreHook Resto
 		}
 	}
 
+	if skipStart {
+		if err := s.Reset(); err != nil {
+			return err
+		}
+	}
+
 	s.started = true
 	return nil
+}
+
+func (s *Server) GetListeners(ctx context.Context, pid int) []Listener {
+	if s.lns != nil {
+		return s.lns
+	}
+	lns, err := GetListenersOfPID(ctx, pid)
+	if err != nil {
+		return s.lns
+	}
+	listeners := []Listener{}
+	for _, ln := range lns {
+		if !slices.Contains(s.ports, ln.Port) {
+			continue
+		}
+		listeners = append(listeners, ln)
+	}
+	s.lns = listeners
+	return s.lns
 }
 
 const AttachActivatorFlag = "-zeropod-attach-activator"
@@ -159,6 +198,17 @@ func (s *Server) SetConnectTimeout(d time.Duration) {
 
 func (s *Server) SetPeekBufferSize(size int) {
 	s.peekBufferSize = size
+}
+
+// ForwardToTarget instructs the activator to forward any incoming traffic to
+// the specified address. The connHook and restoreHook will both be disabled.
+func (s *Server) ForwardToTarget(_ context.Context, addr string) error {
+	// disable hooks
+	s.connHook = func(c net.Conn) (net.Conn, bool, error) { return c, true, nil }
+	s.restoreHook = func() (int, error) { return 0, nil }
+	s.targetAddr = addr
+	s.forwardToTarget = true
+	return nil
 }
 
 func (s *Server) listen(ctx context.Context, port uint16) (int, error) {
@@ -248,6 +298,7 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 		log.G(ctx).Errorf("connHook: %s", err)
 		return
 	}
+	//nolint:errcheck
 	defer conn.Close()
 	if !cont {
 		return
@@ -272,7 +323,7 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 		}
 	}()
 
-	if err := s.restoreHook(); err != nil {
+	if _, err := s.restoreHook(); err != nil {
 		log.G(ctx).Errorf("restoreHook: %s", err)
 		return
 	}
@@ -282,6 +333,7 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 		log.G(ctx).Errorf("error establishing connection: %s", err)
 		return
 	}
+	//nolint:errcheck
 	defer backendConn.Close()
 
 	log.G(ctx).Println("dial succeeded", backendConn.RemoteAddr().String())
@@ -305,16 +357,29 @@ func (s *Server) handleConnection(ctx context.Context, netConn net.Conn, port ui
 
 func (s *Server) connect(ctx context.Context, port uint16, remoteAddr *net.TCPAddr) (net.Conn, error) {
 	var backendConn net.Conn
-	// use v4/v6 local and backend addr depending on remoteAddr type
-	addr := loopbackV4(0)
 	backendAddr := loopbackV4(port)
-	if remoteAddr.IP.To4() == nil {
-		addr = loopbackV6(0)
-		backendAddr = loopbackV6(port)
-	}
 	dialer := net.Dialer{
-		LocalAddr: addr,
-		Timeout:   s.connectTimeout,
+		Timeout: s.connectTimeout,
+	}
+	if s.forwardToTarget {
+		targetAddr, err := net.ResolveTCPAddr("tcp", s.targetAddr+":0")
+		if err != nil {
+			return nil, fmt.Errorf("parsing target addr: %w", err)
+		}
+		targetAddr.Port = int(port)
+		backendAddr = targetAddr
+		// if we dial a remote target we want a smaller timeout as we might run
+		// into an io timeout instead of connection refused
+		dialer.Timeout = time.Millisecond * 10
+		log.G(ctx).Infof("connecting to target address %s", backendAddr.String())
+	} else {
+		// use v4/v6 local and backend addr depending on remoteAddr type
+		addr := loopbackV4(0)
+		if remoteAddr.IP.To4() == nil {
+			addr = loopbackV6(0)
+			backendAddr = loopbackV6(port)
+		}
+		dialer.LocalAddr = addr
 	}
 
 	ticker := time.NewTicker(time.Millisecond)
@@ -336,6 +401,11 @@ func (s *Server) connect(ctx context.Context, port uint16, remoteAddr *net.TCPAd
 				var serr syscall.Errno
 				if errors.As(err, &serr) && serr == syscall.ECONNREFUSED {
 					// executed program might not be ready yet, so retry in a bit.
+					continue
+				}
+				var operr *net.OpError
+				if errors.As(err, &operr) && operr.Temporary() {
+					log.G(ctx).Errorf("temporary operr: %s", operr)
 					continue
 				}
 				return nil, fmt.Errorf("unable to connect to process: %s", err)
@@ -469,7 +539,7 @@ func (s *Server) LastActivity(port uint16) (time.Time, error) {
 		return time.Time{}, NoActivityRecordedErr{}
 	}
 
-	return convertBPFTime(val)
+	return ConvertBPFTime(val)
 }
 
 func (s *Server) initActivityTracker() error {
@@ -486,9 +556,9 @@ func netNSPath(pid int) string {
 	return fmt.Sprintf("/proc/%d/ns/net", pid)
 }
 
-// convertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
+// ConvertBPFTime takes the value of bpf_ktime_get_ns and converts it to a
 // time.Time.
-func convertBPFTime(t uint64) (time.Time, error) {
+func ConvertBPFTime(t uint64) (time.Time, error) {
 	b, err := getBootTimeNS()
 	if err != nil {
 		return time.Time{}, err
@@ -542,7 +612,9 @@ func (s *Server) enableRedirect(port uint16) error {
 
 // proxy just proxies between conn1 and conn2.
 func proxy(ctx context.Context, conn1, conn2 net.Conn) error {
+	//nolint:errcheck
 	defer conn1.Close()
+	//nolint:errcheck
 	defer conn2.Close()
 
 	errors := make(chan error, 2)
@@ -585,4 +657,71 @@ func freePort() (int, error) {
 	}
 
 	return addr.Port, nil
+}
+
+func (s *Server) SetKubeletAddr(addr *netip.Addr) {
+	s.kubeletAddr = addr
+}
+
+func (s *Server) GetKubeletAddr(isV6 bool) (*netip.Addr, error) {
+	if s.kubeletAddr != nil {
+		return s.kubeletAddr, nil
+	}
+
+	mapName := PodKubeletAddrMapv4
+	if isV6 {
+		mapName = PodKubeletAddrMapv6
+	}
+
+	kubeletAddrMap, err := ebpf.LoadPinnedMap(filepath.Join(PinPath(s.sandboxPid), mapName), &ebpf.LoadPinOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("loading pinned kubelet addr: %w", err)
+	}
+	//nolint:errcheck
+	defer kubeletAddrMap.Close()
+
+	key := uint32(0)
+	if isV6 {
+		value := [16]byte{}
+		if err := kubeletAddrMap.Lookup(key, &value); err != nil {
+			return nil, fmt.Errorf("looking up kubelet addr from map %s: %w", mapName, err)
+		}
+		return new(netip.AddrFrom16(value)), nil
+	}
+	value := [4]byte{}
+	if err := kubeletAddrMap.Lookup(key, &value); err != nil {
+		return nil, fmt.Errorf("looking up kubelet addr from map %s: %w", mapName, err)
+	}
+	s.kubeletAddr = new(netip.AddrFrom4(value))
+	return new(netip.AddrFrom4(value)), nil
+}
+
+func GetSandboxIPs(ifaceName string) ([]netip.Addr, error) {
+	ips := []netip.Addr{}
+	iface, err := net.InterfaceByName(ifaceName)
+	if err != nil {
+		return ips, fmt.Errorf("could not get interface: %w", err)
+	}
+	addrs, err := iface.Addrs()
+	if err != nil {
+		return ips, fmt.Errorf("could not get interface addrs: %w", err)
+	}
+	for _, addr := range addrs {
+		if ipnet, ok := addr.(*net.IPNet); ok {
+			// no need to track link local addresses
+			if ipnet.IP.IsLinkLocalUnicast() {
+				continue
+			}
+			ip, ok := netip.AddrFromSlice(ipnet.IP)
+			if !ok {
+				return ips, fmt.Errorf("unable to convert net.IP to netip.Addr: %s", ipnet.IP)
+			}
+			// use Unmap as the ipv4 might be mapped in v6
+			ips = append(ips, ip.Unmap())
+		}
+	}
+	if len(ips) == 0 {
+		return ips, fmt.Errorf("sandbox IPs not found")
+	}
+	return ips, nil
 }

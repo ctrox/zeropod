@@ -1,0 +1,27 @@
+name: Cleanup Dev Container Images
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Cleanup dev manager images
+        uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          package: zeropod-manager
+          delete-tags: '^dev-[0-9a-fA-F]{7}$'
+          keep-n-tagged: 10
+          use-regex: true
+      - name: Cleanup dev installer images
+        uses: dataaxiom/ghcr-cleanup-action@d52806a0dc70b430571a37da1fde39733ffd640f # v1.2.2
+        with:
+          package: zeropod-installer
+          delete-tags: '^dev-[0-9a-fA-F]{7}$'
+          keep-n-tagged: 10
+          use-regex: true

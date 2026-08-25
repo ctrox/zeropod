@@ -9,8 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -27,9 +27,9 @@ type testCase struct {
 	expectedCode           int
 	expectLastActivity     bool
 	ipv6                   bool
-	setBinaryName          bool
 	trackerIgnoreLocalhost bool
 	loopConnection         bool
+	kubeletAddr            *netip.Addr
 }
 
 func TestActivator(t *testing.T) {
@@ -101,21 +101,6 @@ func TestActivator(t *testing.T) {
 			expectLastActivity: true,
 			ipv6:               true,
 		},
-		"ignore activity with binary name set": {
-			parallelReqs:       1,
-			expectedBody:       "ok",
-			expectedCode:       http.StatusOK,
-			setBinaryName:      true,
-			expectLastActivity: false,
-		},
-		"ignore activity with binary name set ipv6": {
-			parallelReqs:       1,
-			expectedBody:       "ok",
-			expectedCode:       http.StatusOK,
-			ipv6:               true,
-			setBinaryName:      true,
-			expectLastActivity: false,
-		},
 		"ignore activity from localhost v4": {
 			parallelReqs:           1,
 			expectedBody:           "ok",
@@ -132,6 +117,22 @@ func TestActivator(t *testing.T) {
 			expectLastActivity:     false,
 			trackerIgnoreLocalhost: true,
 		},
+		"ignore kubelet traffic ipv4": {
+			parallelReqs:       1,
+			expectedBody:       "ok",
+			expectedCode:       http.StatusOK,
+			ipv6:               false,
+			expectLastActivity: false,
+			kubeletAddr:        new(netip.MustParseAddr("127.0.0.1")),
+		},
+		"ignore kubelet traffic ipv6": {
+			parallelReqs:       1,
+			expectedBody:       "ok",
+			expectedCode:       http.StatusOK,
+			ipv6:               true,
+			expectLastActivity: false,
+			kubeletAddr:        new(netip.MustParseAddr("::1")),
+		},
 		"loop detection": {
 			parallelReqs:       1,
 			loopConnection:     true,
@@ -144,10 +145,12 @@ func TestActivator(t *testing.T) {
 	for name, tc := range tests {
 		t.Run(name, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(context.Background())
-			s, err := NewServer(ctx, nn)
-			require.NoError(t, err)
-
-			port, err := freePort()
+			if tc.connHook == nil {
+				tc.connHook = func(c net.Conn) (net.Conn, bool, error) {
+					return c, true, nil
+				}
+			}
+			s, err := NewServer(ctx, nn, tc.connHook, func() (int, error) { return 0, nil })
 			require.NoError(t, err)
 
 			t.Cleanup(func() {
@@ -155,14 +158,7 @@ func TestActivator(t *testing.T) {
 				cancel()
 			})
 
-			exeName := ""
-			if tc.setBinaryName {
-				currentExe, err := os.Executable()
-				require.NoError(t, err)
-				exeName = filepath.Base(currentExe)
-			}
 			bpf, err := InitBPF(os.Getpid(), slog.Default(),
-				ProbeBinaryName(exeName),
 				OverrideMapSize(
 					// not completely sure why this happens but when testing in
 					// github actions, the default map size of 128 makes the test
@@ -177,7 +173,12 @@ func TestActivator(t *testing.T) {
 			)
 			require.NoError(t, err)
 			require.NoError(t, bpf.AttachRedirector("lo"))
+			if tc.kubeletAddr != nil {
+				require.NoError(t, SetKubeletAddr(os.Getpid(), *tc.kubeletAddr))
+			}
 
+			port, err := freePort()
+			require.NoError(t, err)
 			startServer(t, ctx, s, uint16(port), &tc)
 			for i := 0; i < tc.parallelReqs; i++ {
 				wg.Go(func() {
@@ -225,7 +226,7 @@ func TestActivator(t *testing.T) {
 			}
 			assert.NoError(t, s.Reset())
 			s.Stop(t.Context())
-			bpf.Cleanup()
+			assert.NoError(t, bpf.Cleanup())
 		})
 	}
 }
@@ -233,59 +234,58 @@ func TestActivator(t *testing.T) {
 func startServer(t *testing.T, ctx context.Context, s *Server, port uint16, tc *testCase) {
 	response := "ok"
 	ts := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, response)
+		_, err := fmt.Fprint(w, response)
+		assert.NoError(t, err)
 	}))
-	if tc.connHook == nil {
-		tc.connHook = func(c net.Conn) (net.Conn, bool, error) {
-			return c, true, nil
-		}
-	}
 
 	once := sync.Once{}
 	loopIterations := 0
+	s.restoreHook = func() (int, error) {
+		if tc.loopConnection {
+			loopIterations += 1
+			if loopIterations > 10 {
+				t.Error("loop detection failed")
+				return 0, fmt.Errorf("loop detection failed")
+			}
+			// return nil
+		}
+		once.Do(func() {
+			// simulate a delay until our server is started
+			time.Sleep(time.Millisecond * 200)
+			network := "tcp4"
+			if tc.ipv6 {
+				network = "tcp6"
+			}
+			l, err := net.Listen(network, fmt.Sprintf(":%d", port))
+			require.NoError(t, err)
+
+			if !tc.loopConnection {
+				if err := s.DisableRedirects(); err != nil {
+					t.Errorf("could not disable redirects: %s", err)
+				}
+			}
+
+			// replace listener of server
+			assert.NoError(t, ts.Listener.Close())
+			ts.Listener = l
+			ts.Start()
+			t.Logf("listening on %s", l.Addr().String())
+
+			t.Cleanup(func() {
+				//nolint:errcheck
+				l.Close()
+				//nolint:errcheck
+				ts.Close()
+			})
+		})
+		return 0, nil
+	}
 	err := s.Start(
 		ctx,
-		tc.connHook,
-		func() error {
-			if tc.loopConnection {
-				loopIterations += 1
-				if loopIterations > 10 {
-					t.Error("loop detection failed")
-					return fmt.Errorf("loop detection failed")
-				}
-				// return nil
-			}
-			once.Do(func() {
-				// simulate a delay until our server is started
-				time.Sleep(time.Millisecond * 200)
-				network := "tcp4"
-				if tc.ipv6 {
-					network = "tcp6"
-				}
-				l, err := net.Listen(network, fmt.Sprintf(":%d", port))
-				require.NoError(t, err)
-
-				if !tc.loopConnection {
-					if err := s.DisableRedirects(); err != nil {
-						t.Errorf("could not disable redirects: %s", err)
-					}
-				}
-
-				// replace listener of server
-				ts.Listener.Close()
-				ts.Listener = l
-				ts.Start()
-				t.Logf("listening on %s", l.Addr().String())
-
-				t.Cleanup(func() {
-					l.Close()
-					ts.Close()
-				})
-			})
-			return nil
-		},
-		port,
+		os.Getpid(),
+		Listeners{{Port: port}},
+		false,
 	)
 	require.NoError(t, err)
-	s.enableRedirect(port)
+	assert.NoError(t, s.enableRedirect(port))
 }

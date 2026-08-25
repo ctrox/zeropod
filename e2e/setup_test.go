@@ -29,6 +29,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
 	"github.com/prometheus/common/expfmt"
+	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
@@ -48,7 +49,6 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/remotecommand"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/kind/pkg/apis/config/v1alpha4"
@@ -84,8 +84,8 @@ type e2eConfig struct {
 }
 
 func (e2e *e2eConfig) cleanup() error {
-	defer os.RemoveAll(e2e.kubeconfigName)
 	if err := stopKind(e2e.clusterName, e2e.kubeconfigName); err != nil {
+		_ = os.RemoveAll(e2e.kubeconfigName)
 		return err
 	}
 	return os.RemoveAll(e2e.kubeconfigName)
@@ -250,6 +250,7 @@ func loadImages(node nodes.Node, imageFile string) error {
 	if err != nil {
 		return errors.Wrap(err, "failed to open image")
 	}
+	//nolint:errcheck
 	defer f.Close()
 	return nodeutils.LoadImageArchive(node, f)
 }
@@ -260,7 +261,7 @@ func getImages(t testing.TB) (string, error) {
 		return "", fmt.Errorf("failed to create tempdir: %w", err)
 	}
 	t.Cleanup(func() {
-		os.RemoveAll(dir)
+		assert.NoError(t, os.RemoveAll(dir))
 	})
 
 	imagesTarPath := filepath.Join(dir, "images.tar")
@@ -484,7 +485,7 @@ func testPod(opts ...podOption) *corev1.Pod {
 			Labels:       map[string]string{"app": "zeropod-e2e"},
 		},
 		Spec: corev1.PodSpec{
-			RuntimeClassName: ptr.To(v1.RuntimeClassName),
+			RuntimeClassName: new(v1.RuntimeClassName),
 		},
 	}
 
@@ -535,7 +536,7 @@ func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, p
 	}, time.Minute, time.Second, "waiting for pod to be running")
 
 	return func() {
-		client.Delete(ctx, pod)
+		assert.NoError(t, client.Delete(ctx, pod))
 		assert.NoError(t, err)
 		require.Eventually(t, func() bool {
 			if err := client.Get(ctx, objectName(pod), pod); err != nil {
@@ -547,7 +548,7 @@ func createPodAndWait(t testing.TB, ctx context.Context, client client.Client, p
 	}
 }
 
-func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption) *appsv1.Deployment {
+func freezerDeployment(name, namespace string, memoryMiB int, opts ...podOption) *appsv1.Deployment {
 	deploy := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -560,7 +561,7 @@ func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption)
 					"name": name,
 				},
 			},
-			Replicas: ptr.To(int32(1)),
+			Replicas: new(int32(1)),
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
@@ -569,13 +570,13 @@ func freezerDeployment(name, namespace string, memoryGiB int, opts ...podOption)
 					},
 				},
 				Spec: corev1.PodSpec{
-					RuntimeClassName: ptr.To(v1.RuntimeClassName),
+					RuntimeClassName: new(v1.RuntimeClassName),
 					Containers: []corev1.Container{{
 						Name:            "freezer",
 						Image:           "ghcr.io/ctrox/zeropod-freezer",
 						ImagePullPolicy: corev1.PullIfNotPresent,
 						Command:         []string{"/freezer"},
-						Args:            []string{"-memory", strconv.Itoa(memoryGiB)},
+						Args:            []string{"-memory", strconv.Itoa(memoryMiB)},
 						Ports: []corev1.ContainerPort{{
 							Name:          "freezer",
 							ContainerPort: 8080,
@@ -613,13 +614,16 @@ func createDeployAndWait(t testing.TB, ctx context.Context, c client.Client, dep
 	}, time.Minute, time.Second, "waiting for pods of deployment to be running")
 
 	return func() {
-		c.Delete(ctx, deploy)
-		assert.NoError(t, err)
+		assert.NoError(t, c.Delete(ctx, deploy))
 		require.Eventually(t, func() bool {
 			if err := c.Get(ctx, objectName(deploy), deploy); err != nil {
 				return true
 			}
-			return false
+			podList := &corev1.PodList{}
+			if err := c.List(ctx, podList, client.MatchingLabels(deploy.Spec.Selector.MatchLabels)); err != nil {
+				return false
+			}
+			return len(podList.Items) == 0
 		}, time.Minute*2, time.Second, "waiting for deployment to be deleted")
 	}
 }
@@ -700,7 +704,7 @@ func probeHTTP(t testing.TB, addr string) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		assert.NoError(t, resp.Body.Close())
 		return true
 	}, time.Second*10, time.Millisecond*100)
 }
@@ -949,7 +953,7 @@ func getNodeMetrics(ctx context.Context, c client.Client, cfg *rest.Config) (map
 			return nil, err
 		}
 
-		var parser expfmt.TextParser
+		parser := expfmt.NewTextParser(model.UTF8Validation)
 		m, err := parser.TextToMetricFamilies(resp.Body)
 		if err != nil {
 			return nil, err
@@ -1004,6 +1008,7 @@ func getPodLogs(ctx context.Context, cfg *rest.Config, pod corev1.Pod) (string, 
 	if err != nil {
 		return "", fmt.Errorf("opening log stream: %w", err)
 	}
+	//nolint:errcheck
 	defer podLogs.Close()
 
 	buf := new(bytes.Buffer)
@@ -1038,6 +1043,7 @@ func freezerRead(port int) (*freeze, error) {
 	if err != nil {
 		return nil, err
 	}
+	//nolint:errcheck
 	defer resp.Body.Close()
 
 	body, err := io.ReadAll(resp.Body)
@@ -1057,7 +1063,7 @@ func availabilityCheck(ctx context.Context, port int) time.Duration {
 			downtime += time.Since(beforeReq)
 			continue
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		select {
 		case <-ctx.Done():
 			return downtime

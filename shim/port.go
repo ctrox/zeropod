@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/prometheus/procfs"
 )
@@ -43,6 +45,23 @@ func listeningPortsDeep(pid int) ([]uint16, error) {
 	}
 
 	return ports, nil
+}
+
+// listeningPortReady looks for listening ports of the pid process tree matching
+// the supplied port. It retries with a backoff returning after roughly 5s.
+func listeningPortReady(pid int, port uint16) {
+	exp := 1.0
+	for range 8 {
+		ports, err := listeningPortsDeep(pid)
+		if err != nil {
+			continue
+		}
+		if slices.Contains(ports, port) {
+			return
+		}
+		time.Sleep(time.Duration(20*exp) * time.Millisecond)
+		exp *= 2.0
+	}
 }
 
 // listeningPorts finds all ports of the pid that are in listen state of the

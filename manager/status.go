@@ -80,12 +80,16 @@ func StartSubscribers(ctx context.Context, sc SubscriberConfig, podHandlers ...P
 	for _, sock := range socks {
 		go func() {
 			if err := subscribe(ctx, sc, filepath.Join(v1.ShimSocketPath, sock.Name()), podHandlers); err != nil {
-				sc.Log.Error("error subscribing", "sock", sock.Name(), "err", err)
+				sc.Log.Error("error subscribing", "sock", sock.Name(), "error", err)
 			}
 		}()
 	}
 
-	go watchForShims(ctx, sc, podHandlers)
+	go func() {
+		if err := watchForShims(ctx, sc, podHandlers); err != nil {
+			sc.Log.Error("watching shims", "error", err)
+		}
+	}()
 
 	return nil
 }
@@ -237,6 +241,7 @@ func watchForShims(ctx context.Context, sc SubscriberConfig, podHandlers []PodHa
 	if err != nil {
 		return err
 	}
+	//nolint:errcheck
 	defer watcher.Close()
 
 	if err := watcher.Add(v1.ShimSocketPath); err != nil {

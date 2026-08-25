@@ -11,15 +11,15 @@ components:
 images:
 - name: installer
   newName: ghcr.io/ctrox/zeropod-installer
-  newTag: v0.12.1
+  newTag: v0.13.0
 - name: manager
   newName: ghcr.io/ctrox/zeropod-manager
-  newTag: v0.12.1
+  newTag: v0.13.0
 patches:
 - patch: |-
     - op: add
       path: /spec/template/spec/initContainers/0/args/-
-      value: -criu-image=ghcr.io/ctrox/zeropod-criu:v4.2
+      value: -criu-image=ghcr.io/ctrox/zeropod-criu:v4.2.1
   target:
     kind: DaemonSet
 apiVersion: kustomize.config.k8s.io/v1beta1

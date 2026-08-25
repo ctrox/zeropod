@@ -76,16 +76,19 @@ func startShimServer(ctx context.Context, id string, task *wrapper) {
 		log.G(ctx).WithError(err).Errorf("failed to create ttrpc server")
 		return
 	}
-	defer s.Close()
+	defer func() {
+		_ = s.Close()
+		_ = listener.Close()
+		_ = os.Remove(socket)
+	}()
 
 	v1.RegisterShimService(s, &shimService{task: task})
 
-	defer func() {
-		s.Close()
-		listener.Close()
-		os.Remove(socket)
+	go func() {
+		if err := s.Serve(ctx, listener); err != nil {
+			log.G(ctx).WithError(err).Error("serving shim service")
+		}
 	}()
-	go s.Serve(ctx, listener)
 
 	<-ctx.Done()
 

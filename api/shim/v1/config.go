@@ -18,6 +18,7 @@ import (
 )
 
 const (
+	DefaultOptDir                    = "/opt/zeropod"
 	ConfigDir                        = "etc"
 	ConfigFileName                   = "shim.json"
 	NodeLabel                        = "zeropod.ctrox.dev/node"
@@ -54,6 +55,8 @@ const (
 	DefaultProbeBufferSize        = 1024
 	DefaultProbeBinaryName        = "kubelet"
 	DefaultTrackerIgnoreLocalhost = true
+	DefaultCapacityRequest        = false
+	DefaultReuseportActivator     = false
 )
 
 var ContainerdAnnotations = []string{
@@ -97,8 +100,10 @@ type AnnotationConfig struct {
 }
 
 type Config struct {
-	ProbeBinaryName        string `json:"probeBinaryName"`
 	TrackerIgnoreLocalhost bool   `json:"trackerIgnoreLocalhost"`
+	CapacityRequest        bool   `json:"capacityRequest"`
+	ProbeAddress           string `json:"probeAddress"`
+	ReuseportActivator     bool   `json:"reuseportActivator"`
 	AnnotationConfig       `json:"-"`
 }
 
@@ -249,14 +254,15 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		}
 	}
 	cfg := &Config{
-		ProbeBinaryName:        DefaultProbeBinaryName,
 		TrackerIgnoreLocalhost: DefaultTrackerIgnoreLocalhost,
+		CapacityRequest:        DefaultCapacityRequest,
+		ReuseportActivator:     DefaultReuseportActivator,
 	}
-	e, err := os.Executable()
+	path, err := relativeConfigFile()
 	if err != nil {
-		return nil, fmt.Errorf("getting executable dir: %w", err)
+		return nil, err
 	}
-	b, err := os.ReadFile(filepath.Join(filepath.Dir(e), "..", ConfigDir, ConfigFileName))
+	b, err := os.ReadFile(path)
 	if err == nil {
 		if err := json.Unmarshal(b, cfg); err != nil {
 			return nil, err
@@ -288,6 +294,14 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 	return cfg, nil
 }
 
+func relativeConfigFile() (string, error) {
+	e, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("getting executable dir: %w", err)
+	}
+	return filepath.Join(filepath.Dir(e), "..", ConfigDir, ConfigFileName), nil
+}
+
 func (cfg Config) IsZeropodContainer() bool {
 	if slices.Contains(cfg.ZeropodContainerNames, cfg.ContainerName) {
 		return true
@@ -307,4 +321,53 @@ func (cfg Config) LiveMigrationEnabled() bool {
 
 func (cfg Config) AnyMigrationEnabled() bool {
 	return cfg.migrationEnabled() || cfg.LiveMigrationEnabled()
+}
+
+func AnyMigrationEnabled(annotations map[string]string) bool {
+	_, migrate := annotations[MigrateAnnotationKey]
+	_, liveMigrate := annotations[LiveMigrateAnnotationKey]
+	return migrate || liveMigrate
+}
+
+func LiveMigrationEnabled(annotations map[string]string) bool {
+	_, ok := annotations[LiveMigrateAnnotationKey]
+	return ok
+}
+
+func (cfg Config) LastModified() time.Time {
+	configPath, err := relativeConfigFile()
+	if err != nil {
+		return time.Time{}
+	}
+	info, err := os.Stat(configPath)
+	if err != nil {
+		return time.Time{}
+	}
+	return info.ModTime()
+}
+
+func Load(optDir string) (*Config, error) {
+	b, err := os.ReadFile(filepath.Join(optDir, ConfigDir, ConfigFileName))
+	if err != nil {
+		return nil, err
+	}
+	cfg := &Config{}
+	if err := json.Unmarshal(b, cfg); err != nil {
+		return nil, err
+	}
+	return cfg, nil
+}
+
+func (cfg *Config) Write(optPath string) error {
+	b, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling config: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(optPath, ConfigDir), os.ModePerm); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(optPath, ConfigDir, ConfigFileName), b, 0600); err != nil {
+		return fmt.Errorf("unable to write shim file: %w", err)
+	}
+	return nil
 }

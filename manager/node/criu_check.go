@@ -3,14 +3,13 @@ package node
 import (
 	"fmt"
 
-	"github.com/checkpoint-restore/go-criu/v7"
-	"github.com/checkpoint-restore/go-criu/v7/rpc"
-	"k8s.io/utils/ptr"
+	"github.com/checkpoint-restore/go-criu/v8"
+	"github.com/checkpoint-restore/go-criu/v8/rpc"
 )
 
 func checkLazyPages() error {
 	c := criu.MakeCriu()
-	feat, err := c.FeatureCheck(&rpc.CriuFeatures{LazyPages: ptr.To(true)})
+	feat, err := c.FeatureCheck(&rpc.CriuFeatures{LazyPages: new(true)})
 	if err != nil {
 		return fmt.Errorf("lazy pages feature check failed with: %w", err)
 	}

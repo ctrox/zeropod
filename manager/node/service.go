@@ -13,22 +13,26 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"slices"
 	"strconv"
 	"time"
 
-	"github.com/checkpoint-restore/go-criu/v7/stats"
+	"github.com/checkpoint-restore/go-criu/v8/stats"
 	"github.com/containerd/containerd/v2/pkg/shim"
 	"github.com/containerd/ttrpc"
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/runtime/v1"
 	shimv1 "github.com/ctrox/zeropod/api/shim/v1"
+	"github.com/ctrox/zeropod/manager"
+	"github.com/ctrox/zeropod/manager/capacity"
 	"github.com/klauspost/compress/zstd"
 	"github.com/mholt/archives"
 	"google.golang.org/protobuf/types/known/emptypb"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -48,7 +52,10 @@ const (
 	caKeyFile          = "/tls/ca.key"
 )
 
-var ErrLiveMigrationNotSupported = errors.New("live migration is not supported on this node")
+var (
+	ErrLiveMigrationNotSupported = errors.New("live migration is not supported on this node")
+	errEmptyRequests             = errors.New("container has empty requests")
+)
 
 func nodeSocketAddress() string {
 	return fmt.Sprintf("unix://%s", nodev1.SocketPath)
@@ -66,13 +73,14 @@ type Timeouts struct {
 	MigrationClaim,
 	MigrationReady,
 	MigrationServers,
+	EvictionTimeout,
 	PagesTransfer time.Duration
 }
 
 // NewServer starts a node server with two listeners:
 // * Unix socket for the shims to connect to it locally
 // * TCP+TLS socket to allow the other node instances to connect
-func NewServer(addr string, kube client.Client, log *slog.Logger, timeouts Timeouts) (*Server, error) {
+func NewServer(addr string, kube client.Client, log *slog.Logger, timeouts Timeouts, cap capacity.Tracker) (*Server, error) {
 	host, ok := os.LookupEnv(nodev1.PodIPEnvKey)
 	if !ok {
 		return nil, fmt.Errorf("could not find host, env POD_IP is not set")
@@ -119,9 +127,15 @@ func NewServer(addr string, kube client.Client, log *slog.Logger, timeouts Timeo
 		pageServerTLS:          true,
 		liveMigrationSupported: liveMigrationSupported,
 		timeouts:               timeouts,
+		cap:                    cap,
 	})
 
-	log.Info("new node server", "name", nodeName, "live_migration_supported", liveMigrationSupported)
+	log.Info("new node server",
+		"name", nodeName,
+		"live_migration_supported", liveMigrationSupported,
+		"capacity_tracker", reflect.TypeOf(cap).String(),
+		"eviction_threshold", cap.Threshold(),
+	)
 	return &Server{
 		ttrpc:        s,
 		unixListener: unixListener,
@@ -168,8 +182,16 @@ func (s *Server) Start(ctx context.Context) {
 		_ = s.listener.Close()
 		_ = os.Remove(nodeSocketAddress())
 	}()
-	go s.ttrpc.Serve(ctx, s.unixListener)
-	go s.ttrpc.Serve(ctx, s.listener)
+	go func() {
+		if err := s.ttrpc.Serve(ctx, s.unixListener); err != nil {
+			s.log.Error("serving ttrpc unix listener", "error", err)
+		}
+	}()
+	go func() {
+		if err := s.ttrpc.Serve(ctx, s.listener); err != nil {
+			s.log.Error("serving ttrpc listener", "error", err)
+		}
+	}()
 
 	s.log.Info("starting node server", "unix", s.unixListener.Addr(), "socket", s.listener.Addr())
 
@@ -189,6 +211,7 @@ type nodeService struct {
 	pageServerTLS          bool
 	liveMigrationSupported bool
 	timeouts               Timeouts
+	cap                    capacity.Tracker
 }
 
 var findMigrationBackoff = wait.Backoff{
@@ -196,6 +219,161 @@ var findMigrationBackoff = wait.Backoff{
 	Duration: 50 * time.Millisecond,
 	Factor:   1.0,
 	Jitter:   0.1,
+}
+
+// RestoreCapacity checks if the node has enough capacity to restore the
+// container in the request. If the node is at capacity, the pod is evicted.
+func (ns *nodeService) RestoreCapacity(ctx context.Context, req *nodev1.RestoreCapacityRequest) (*nodev1.RestoreCapacityResponse, error) {
+	log := ns.log.With("pod_name", req.PodInfo.Name,
+		"namespace", req.PodInfo.Namespace,
+		"container_name", req.PodInfo.ContainerName)
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      req.PodInfo.Name,
+			Namespace: req.PodInfo.Namespace,
+		},
+	}
+	if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(pod), pod); err != nil {
+		return nil, err
+	}
+	res, err := getContainerResources(pod, req.PodInfo.ContainerName)
+	if err != nil {
+		if errors.Is(err, errEmptyRequests) {
+			log.Debug("allowing container with empty requests")
+			return &nodev1.RestoreCapacityResponse{Allowed: true}, nil
+		}
+		log.Error("getting container resources", "error", err)
+		return &nodev1.RestoreCapacityResponse{Allowed: true}, fmt.Errorf("getting container requests: %w", err)
+	}
+
+	if ns.cap.UseCheckpointMemory() && req.CheckpointMemoryBytes != 0 {
+		res[corev1.ResourceMemory] = *resource.NewQuantity(int64(req.CheckpointMemoryBytes), resource.BinarySI)
+	}
+
+	log.Debug("container resources", "cpu", res.Cpu(), "mem", res.Memory(), "use_checkpoint_memory", ns.cap.UseCheckpointMemory())
+	if ns.hasCapacity(res) {
+		log.Debug("node has enough capacity to restore",
+			"cpu", ns.cap.Capacity(corev1.ResourceCPU),
+			"mem", ns.cap.Capacity(corev1.ResourceMemory),
+		)
+		return &nodev1.RestoreCapacityResponse{Allowed: true}, nil
+	}
+	resp, err := ns.evictPod(ctx, req, pod)
+	if err != nil {
+		log.Error("evicting pod", "error", err)
+		return &nodev1.RestoreCapacityResponse{Allowed: true}, fmt.Errorf("evicting pod: %w", err)
+	}
+	return resp, nil
+}
+
+func (ns *nodeService) evictPod(ctx context.Context, req *nodev1.RestoreCapacityRequest, pod *corev1.Pod) (*nodev1.RestoreCapacityResponse, error) {
+	log := ns.log.With("pod_name", req.PodInfo.Name,
+		"namespace", req.PodInfo.Namespace,
+		"container_name", req.PodInfo.ContainerName)
+
+	if err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		node := &corev1.Node{}
+		if err := ns.kube.Get(ctx, types.NamespacedName{Name: ns.nodeName}, node); err != nil {
+			return err
+		}
+		if needsUpdate := capacity.AddTaint(node); needsUpdate {
+			return ns.kube.Update(ctx, node)
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := ns.kube.Delete(ctx, pod); err != nil {
+		return nil, err
+	}
+	ns.cap.IncEvicted()
+	if !shimv1.AnyMigrationEnabled(pod.Annotations) {
+		return &nodev1.RestoreCapacityResponse{
+			Allowed: false,
+		}, nil
+	}
+	migration := &v1.Migration{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      req.PodInfo.Name,
+			Namespace: req.PodInfo.Namespace,
+		},
+	}
+	// wait for the migration to have target pod IP
+	pCtx, cancel := context.WithTimeout(ctx, ns.timeouts.EvictionTimeout)
+	defer cancel()
+	log.Info("eviction waiting for migration target pod IP")
+	if err := pollUntilContextCancel(pCtx, func(ctx context.Context) (bool, error) {
+		if err := ns.kube.Get(ctx, client.ObjectKeyFromObject(migration), migration); err != nil {
+			if kerrors.IsNotFound(err) {
+				return false, nil
+			}
+			return false, err
+		}
+		if migration.Spec.TargetPodIP != "" {
+			return true, nil
+		}
+		return false, nil
+	}); err != nil {
+		// although we failed to get a target IP, the pod has already been
+		// evicted we should still tell in the response that the restore was
+		// denied.
+		log.Error("waiting for target pod IP failed", "name", migration.Name, "error", err)
+	}
+	ns.cap.IncEvicted()
+	return &nodev1.RestoreCapacityResponse{
+		Allowed:      false,
+		RedirectAddr: migration.Spec.TargetPodIP,
+	}, nil
+}
+
+func getContainerResources(pod *corev1.Pod, containerName string) (corev1.ResourceList, error) {
+	c := corev1.Container{}
+	for _, container := range pod.Spec.Containers {
+		if container.Name == containerName {
+			c = container
+		}
+	}
+	if c.Resources.Requests == nil {
+		return nil, fmt.Errorf("%w: %s", errEmptyRequests, containerName)
+	}
+	res, err := manager.InitialRequests(c, pod.Annotations)
+	if err != nil {
+		return nil, fmt.Errorf("checking initial requests: %w", err)
+	}
+	return res, nil
+}
+
+func (ns *nodeService) hasCapacity(res corev1.ResourceList) bool {
+	cpuRequested, memRequested := res.Cpu(), res.Memory()
+	cpuRequested.Add(ns.cap.Requested(corev1.ResourceCPU))
+	memRequested.Add(ns.cap.Requested(corev1.ResourceMemory))
+	cpuCap := ns.cap.Capacity(corev1.ResourceCPU)
+	memCap := ns.cap.Capacity(corev1.ResourceMemory)
+	// the capacity might be uninitialized on a fresh node, we can assume that
+	// an empty node has enough capacity.
+	if cpuCap.IsZero() || memCap.IsZero() {
+		return true
+	}
+
+	if capacity.CmpThreshold(ns.cap, corev1.ResourceCPU, *cpuRequested) > 0 {
+		ns.log.Info("capacity: not enough cpu",
+			"cap", cpuCap.String(),
+			"total_req", cpuRequested.String(),
+			"container_req", res.Cpu().String(),
+			"threshold", ns.cap.Threshold(),
+		)
+		return false
+	}
+	if capacity.CmpThreshold(ns.cap, corev1.ResourceMemory, *memRequested) > 0 {
+		ns.log.Info("capacity: not enough memory",
+			"cap", memCap.String(),
+			"total_req", memRequested.String(),
+			"container_req", res.Memory().String(),
+			"threshold", ns.cap.Threshold(),
+		)
+		return false
+	}
+	return true
 }
 
 func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) (*nodev1.RestoreResponse, error) {
@@ -232,6 +410,7 @@ func (ns *nodeService) Restore(ctx context.Context, req *nodev1.RestoreRequest) 
 
 	if err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		migration.Spec.RestoreReady = true
+		migration.Spec.TargetPodIP = req.PodInfo.Ip
 		return ns.kube.Update(ctx, migration)
 	}); err != nil {
 		log.Error("updating migration to be ready for restore failed", "error", err)
@@ -447,6 +626,7 @@ func (ns *nodeService) pullImage(ctx context.Context, nodeClient nodev1.NodeClie
 	errs := make(chan error)
 	transferredBytes := 0
 	r, w := io.Pipe()
+	//nolint:errcheck
 	defer w.Close()
 	go func() {
 		defer close(errs)
@@ -515,12 +695,14 @@ func extract(ctx context.Context, id string, reader io.ReadCloser) error {
 		if err != nil {
 			return err
 		}
+		//nolint:errcheck
 		defer rc.Close()
 
 		file, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, f.Mode())
 		if err != nil {
 			return err
 		}
+		//nolint:errcheck
 		defer file.Close()
 
 		if _, err := io.Copy(file, rc); err != nil {
@@ -714,7 +896,9 @@ func (ns *nodeService) NewCriuLazyPages(ctx context.Context, r *nodev1.CriuLazyP
 		return &emptypb.Empty{}, fmt.Errorf("error running lazy-pages daemon: %s", err)
 	}
 	go func() {
-		cmd.Wait()
+		if err := cmd.Wait(); err != nil {
+			ns.log.Error("lazy-pages wait", "error", err)
+		}
 		cancel()
 		if err := psp.Wait(); err != nil {
 			ns.log.Error("page server dst proxy", "error", err)
@@ -753,6 +937,7 @@ func (ns *nodeService) PullImage(ctx context.Context, req *nodev1.PullImageReque
 	r, w := io.Pipe()
 	archive := func() {
 		defer close(errChan)
+		//nolint:errcheck
 		defer w.Close()
 		if err := format.Archive(ctx, w, files); err != nil {
 			log.Error("archiving checkpoint", "error", err)

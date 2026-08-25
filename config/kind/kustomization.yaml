@@ -6,6 +6,8 @@ components:
   - ../status-labels
   - ../status-events
   - ../migration-manager
+  - ../capacity-request
+  - ../reuseport-activator
 images:
   - name: manager
     newName: ghcr.io/ctrox/zeropod-manager

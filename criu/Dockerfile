@@ -1,4 +1,4 @@
-FROM debian:12 as build
+FROM debian:12 AS build
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     git build-essential libprotobuf-dev libprotobuf-c-dev \
     protobuf-c-compiler protobuf-compiler python3-protobuf \
@@ -10,8 +10,7 @@ WORKDIR /workspace
 RUN git clone https://github.com/checkpoint-restore/criu.git
 WORKDIR /workspace/criu
 ADD criu/*.patch .
-ARG CRIU_VERSION
-RUN test -n "$CRIU_VERSION"
+ARG CRIU_VERSION=v4.2.1
 RUN git checkout $CRIU_VERSION
 RUN git apply *.patch
 RUN make -j $(nproc)

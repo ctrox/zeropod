@@ -6,8 +6,10 @@ import (
 	"encoding/base64"
 	"net"
 	"net/http"
+	"net/netip"
 	"testing"
 
+	"github.com/ctrox/zeropod/activator"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -19,6 +21,7 @@ func TestDetectProbe(t *testing.T) {
 	for name, tc := range map[string]struct {
 		probeDetected bool
 		clientFunc    func(t *testing.T, addr string)
+		kubeletAddr   *netip.Addr
 	}{
 		"http kube-probe/1.32": {
 			probeDetected: true,
@@ -60,6 +63,11 @@ func TestDetectProbe(t *testing.T) {
 			clientFunc:    writeRandomTCPData(v1.DefaultProbeBufferSize * 1024),
 			probeDetected: false,
 		},
+		"probe request not from kubelet": {
+			clientFunc:    kubeTCPProbe,
+			probeDetected: false,
+			kubeletAddr:   new(netip.MustParseAddr("10.0.0.1")),
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -73,19 +81,29 @@ func TestDetectProbe(t *testing.T) {
 
 			conn, err := l.Accept()
 			require.NoError(t, err)
-			c := &Container{cfg: &v1.Config{AnnotationConfig: v1.AnnotationConfig{ProbeBufferSize: v1.DefaultProbeBufferSize}}}
+			act := &activator.Server{}
+			if tc.kubeletAddr != nil {
+				act.SetKubeletAddr(tc.kubeletAddr)
+			} else {
+				// default to localhost
+				act.SetKubeletAddr(new(netip.MustParseAddr("127.0.0.1")))
+			}
+			c := &Container{
+				cfg:       &v1.Config{AnnotationConfig: v1.AnnotationConfig{ProbeBufferSize: v1.DefaultProbeBufferSize}},
+				activator: act,
+			}
 			newConn, cont, err := c.detectProbe(ctx)(conn)
 			require.NoError(t, err)
 			if cont {
 				resp := http.Response{
 					StatusCode: http.StatusOK,
 				}
-				resp.Write(newConn)
+				_ = resp.Write(newConn)
 			}
 			assert.Equal(t, !tc.probeDetected, cont)
 
 			<-clientDone
-			newConn.Close()
+			assert.NoError(t, newConn.Close())
 		})
 	}
 }
@@ -136,7 +154,8 @@ func writeRandomTCPData(size int) func(t *testing.T, addr string) {
 		if !assert.NoError(t, err) {
 			return
 		}
-		conn.Write(randomData)
+		_, err = conn.Write(randomData)
+		assert.NoError(t, err)
 	}
 }
 

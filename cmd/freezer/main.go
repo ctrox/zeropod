@@ -43,7 +43,9 @@ func main() {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 		}
 		slog.Info("get called", "data", b)
-		fmt.Fprintf(w, "%s", b)
+		if _, err := fmt.Fprintf(w, "%s", b); err != nil {
+			slog.Error("write failed", "error", err)
+		}
 	})
 
 	http.HandleFunc("/set", func(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +70,9 @@ func main() {
 			slog.Error("marshal req body", "error", err)
 			return
 		}
-		fmt.Fprintf(w, "%s", freezeJSON)
+		if _, err := fmt.Fprintf(w, "%s", freezeJSON); err != nil {
+			slog.Error("write failed", "error", err)
+		}
 	})
 
 	lc := net.ListenConfig{}
@@ -80,7 +84,11 @@ func main() {
 		slog.Error("tcp listen", "err", err)
 		os.Exit(1)
 	}
-	go http.Serve(ln, nil)
+	go func() {
+		if err := http.Serve(ln, nil); err != nil {
+			slog.Error("serving", "error", err)
+		}
+	}()
 	for {
 		since := time.Since(f.LastObservation)
 		if since > time.Millisecond*50 {

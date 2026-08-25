@@ -53,28 +53,22 @@ struct {
 } socket_tracker SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
-    __type(key, u8); // fixed identifier (0)
+    __type(key, __u32); // fixed identifier (0)
     __type(value, __be32); // kubelet addr
     __uint(pinning, LIBBPF_PIN_BY_NAME);
-} kubelet_addrs_v4 SEC(".maps");
-
-struct ipv6_addr {
-    __u8 u6_addr8[16];
-};
+} kubelet_addr_v4 SEC(".maps");
 
 struct {
-    __uint(type, BPF_MAP_TYPE_LRU_HASH);
+    __uint(type, BPF_MAP_TYPE_ARRAY);
     __uint(max_entries, 1);
-    __type(key, u8); // fixed identifier (0)
-    __type(value, struct ipv6_addr); // kubelet addr
+    __type(key, __u32); // fixed identifier (0)
+    __type(value, struct in6_addr); // kubelet addr
     __uint(pinning, LIBBPF_PIN_BY_NAME);
-} kubelet_addrs_v6 SEC(".maps");
+} kubelet_addr_v6 SEC(".maps");
 
-const volatile char probe_binary_name[TASK_COMM_LEN] = "";
 const volatile bool tracker_ignore_localhost = false;
-const volatile __u32 task_comm_offset = 0;
 
 static __always_inline int track_activity(__be16 dport) {
     __u64 time = bpf_ktime_get_ns();
@@ -169,22 +163,12 @@ static __always_inline struct iphdr* ipv4_header(void *data, void *data_end) {
 }
 
 static __always_inline __be32 lookup_kubelet_ip_v4(struct iphdr *ip) {
-    u8 key = 0;
-    char comm[TASK_COMM_LEN];
-    void *kubelet_addrs = &kubelet_addrs_v4;
-    __be32 *existing_addr = bpf_map_lookup_elem(kubelet_addrs, &key);
+    __u32 key = 0;
+    void *kubelet_addr = &kubelet_addr_v4;
+    __be32 *existing_addr = bpf_map_lookup_elem(kubelet_addr, &key);
     if (existing_addr) {
         // bpf_printk("returning existing kubelet addr: %pI4", existing_addr);
         return *existing_addr;
-    }
-    // bpf_get_current_comm is not available in a tc program on arm64, so we use
-    // bpf_get_current_task to get the comm.
-    char *task = (char *)bpf_get_current_task();
-    bpf_probe_read_kernel(&comm, sizeof(comm), task + task_comm_offset);
-    if (bpf_strncmp(comm, TASK_COMM_LEN, (char *)probe_binary_name) == 0) {
-        // bpf_printk("found kubelet addr v4: %pI4", &ip->saddr);
-        bpf_map_update_elem(kubelet_addrs, &key, &ip->saddr, BPF_ANY);
-        return ip->saddr;
     }
     return 0;
 }
@@ -194,7 +178,7 @@ static __always_inline bool ipv6_addr_equal(const struct in6_addr *a1, const str
         return false;
     }
     #pragma unroll
-    for (int i = 0; i < 15; i++) {
+    for (int i = 0; i < sizeof(struct in6_addr); i++) {
         if (a1->in6_u.u6_addr8[i] != a2->in6_u.u6_addr8[i]) {
             return false;
         }
@@ -203,22 +187,12 @@ static __always_inline bool ipv6_addr_equal(const struct in6_addr *a1, const str
 }
 
 static __always_inline struct in6_addr* lookup_kubelet_ip_v6(struct ipv6hdr *ip) {
-    char comm[TASK_COMM_LEN];
-    u8 key = 0;
-    void *kubelet_addrs = &kubelet_addrs_v6;
-    struct in6_addr *existing_addr = bpf_map_lookup_elem(kubelet_addrs, &key);
+    __u32 key = 0;
+    void *kubelet_addr = &kubelet_addr_v6;
+    struct in6_addr *existing_addr = bpf_map_lookup_elem(kubelet_addr, &key);
     if (existing_addr) {
         // bpf_printk("returning existing kubelet v6 addr: %pI6", existing_addr);
         return existing_addr;
-    }
-    // bpf_get_current_comm is not available in a tc program on arm64, so we use
-    // bpf_get_current_task to get the comm.
-    char *task = (char *)bpf_get_current_task();
-    bpf_probe_read_kernel(&comm, sizeof(comm), task + task_comm_offset);
-    if (bpf_strncmp(comm, TASK_COMM_LEN, (char *)probe_binary_name) == 0) {
-        // bpf_printk("found kubelet addr v6: %pI6", &ip->saddr);
-        bpf_map_update_elem(kubelet_addrs, &key, &ip->saddr, BPF_ANY);
-        return &ip->saddr;
     }
     return NULL;
 }

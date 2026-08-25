@@ -135,7 +135,7 @@ func (c *ContainerIO) Pipe() {
 			if _, err := io.Copy(c.stdoutGroup, c.stdout); err != nil {
 				log.L.WithError(err).Errorf("Failed to pipe stdout of container %q", c.id)
 			}
-			c.stdout.Close()
+			_ = c.stdout.Close()
 			c.stdoutGroup.Close()
 			wg.Done()
 			log.L.Debugf("Finish piping stdout of container %q", c.id)
@@ -148,7 +148,7 @@ func (c *ContainerIO) Pipe() {
 			if _, err := io.Copy(c.stderrGroup, c.stderr); err != nil {
 				log.L.WithError(err).Errorf("Failed to pipe stderr of container %q", c.id)
 			}
-			c.stderr.Close()
+			_ = c.stderr.Close()
 			c.stderrGroup.Close()
 			wg.Done()
 			log.L.Debugf("Finish piping stderr of container %q", c.id)

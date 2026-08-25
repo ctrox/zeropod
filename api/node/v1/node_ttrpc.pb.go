@@ -15,6 +15,7 @@ type NodeService interface {
 	FinishRestore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	NewCriuLazyPages(context.Context, *CriuLazyPagesRequest) (*emptypb.Empty, error)
 	PullImage(context.Context, *PullImageRequest, Node_PullImageServer) error
+	RestoreCapacity(context.Context, *RestoreCapacityRequest) (*RestoreCapacityResponse, error)
 }
 
 type Node_PullImageServer interface {
@@ -68,6 +69,13 @@ func RegisterNodeService(srv *ttrpc.Server, svc NodeService) {
 				}
 				return svc.NewCriuLazyPages(ctx, &req)
 			},
+			"RestoreCapacity": func(ctx context.Context, unmarshal func(interface{}) error) (interface{}, error) {
+				var req RestoreCapacityRequest
+				if err := unmarshal(&req); err != nil {
+					return nil, err
+				}
+				return svc.RestoreCapacity(ctx, &req)
+			},
 		},
 		Streams: map[string]ttrpc.Stream{
 			"PullImage": {
@@ -92,6 +100,7 @@ type NodeClient interface {
 	FinishRestore(context.Context, *RestoreRequest) (*RestoreResponse, error)
 	NewCriuLazyPages(context.Context, *CriuLazyPagesRequest) (*emptypb.Empty, error)
 	PullImage(context.Context, *PullImageRequest) (Node_PullImageClient, error)
+	RestoreCapacity(context.Context, *RestoreCapacityRequest) (*RestoreCapacityResponse, error)
 }
 
 type nodeClient struct {
@@ -171,4 +180,12 @@ func (x *nodePullImageClient) Recv() (*Image, error) {
 		return nil, err
 	}
 	return m, nil
+}
+
+func (c *nodeClient) RestoreCapacity(ctx context.Context, req *RestoreCapacityRequest) (*RestoreCapacityResponse, error) {
+	var resp RestoreCapacityResponse
+	if err := c.client.Call(ctx, "zeropod.node.v1.Node", "RestoreCapacity", req, &resp); err != nil {
+		return nil, err
+	}
+	return &resp, nil
 }

@@ -60,7 +60,8 @@ message ContainerMetrics {
     bool running = 8;
     int64 checkpoint_errors = 9;
     int64 restore_errors = 10;
-    int64 dry_run_scale_downs = 11;
-    int64 dry_run_restores = 12;
-    bool dry_run = 13;
+    uint64 checkpoint_memory_bytes = 11;
+    int64 dry_run_scale_downs = 12;
+    int64 dry_run_restores = 13;
+    bool dry_run = 14;
 }

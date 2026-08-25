@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"flag"
@@ -22,6 +21,7 @@ import (
 	containerd "github.com/containerd/containerd/v2/client"
 	"github.com/containerd/containerd/v2/cmd/containerd/server/config"
 	"github.com/coreos/go-systemd/v22/dbus"
+	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 	v1 "github.com/ctrox/zeropod/api/shim/v1"
 	"github.com/ctrox/zeropod/manager/node"
 	"github.com/pelletier/go-toml/v2"
@@ -33,14 +33,17 @@ import (
 )
 
 var (
-	criuImage              = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v4.2", "criu image to use.")
+	criuImage              = flag.String("criu-image", "ghcr.io/ctrox/zeropod-criu:v4.2.1", "criu image to use.")
 	runtime                = flag.String("runtime", "containerd", "specifies which runtime to configure. containerd/k3s/rke2")
 	hostOptPath            = flag.String("host-opt-path", defaultOptPath, "path where zeropod binaries are stored on the host")
 	uninstall              = flag.Bool("uninstall", false, "uninstalls zeropod by cleaning up all the files the installer created")
 	installTimeout         = flag.Duration("timeout", time.Minute, "duration the installer waits for the installation to complete")
 	versionFlag            = flag.Bool("version", false, "output version and exit")
-	probeBinaryName        = flag.String("probe-binary-name", v1.DefaultProbeBinaryName, "set the probe binary name for probe detection")
 	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", v1.DefaultTrackerIgnoreLocalhost, "set to ignore traffic from localhost in socket tracker")
+	capacityRequest        = flag.Bool("capacity-request", v1.DefaultCapacityRequest, "enable shim to make a capacity request before restoring")
+	reuseportActivator     = flag.Bool("reuseport-activator", v1.DefaultReuseportActivator, "enable the new reuseport activator")
+	//lint:ignore U1000 kept for compatibility
+	probeBinaryName = flag.String("probe-binary-name", v1.DefaultProbeBinaryName, "Deprecated: this is no longer used, flag will be removed in future release")
 
 	version   = ""
 	revision  = ""
@@ -57,8 +60,9 @@ const (
 	hostRoot                    = "/host"
 	binPath                     = "bin/"
 	criuConfigFile              = "/etc/criu/default.conf"
+	buildPath                   = "/build/"
 	shimBinaryName              = "containerd-shim-zeropod-v2"
-	runtimePath                 = "/build/" + shimBinaryName
+	runtimePath                 = buildPath + shimBinaryName
 	defaultContainerdConfigPath = "/etc/containerd/config.toml"
 	containerdSock              = "/run/containerd/containerd.sock"
 	configBackupSuffix          = ".original"
@@ -230,18 +234,33 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 		return fmt.Errorf("unable to write shim file: %w", err)
 	}
 
-	b, err := json.MarshalIndent(&v1.Config{
-		ProbeBinaryName:        *probeBinaryName,
-		TrackerIgnoreLocalhost: *trackerIgnoreLocalhost,
-	}, "", "  ")
+	netinfoDest := filepath.Join(opt, binPath, nodev1.NetinfoBinary)
+	if err := os.Remove(netinfoDest); err != nil {
+		log.Printf("unable to remove netinfo binary, continuing with install: %s", err)
+	}
+
+	netinfo, err := os.ReadFile(filepath.Join(buildPath, nodev1.NetinfoBinary))
 	if err != nil {
-		return fmt.Errorf("marshaling config: %w", err)
+		return fmt.Errorf("unable to read netinfo file: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Join(opt, v1.ConfigDir), os.ModePerm); err != nil {
-		return err
+
+	if err := os.WriteFile(netinfoDest, netinfo, 0755); err != nil {
+		return fmt.Errorf("unable to write netinfo file: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(opt, v1.ConfigDir, v1.ConfigFileName), b, 0600); err != nil {
-		return fmt.Errorf("unable to write shim file: %w", err)
+
+	cfg, err := v1.Load(opt)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			return fmt.Errorf("loading config: %w", err)
+		}
+		log.Printf("existing config not found, creating from scratch")
+		cfg = &v1.Config{}
+	}
+	cfg.TrackerIgnoreLocalhost = *trackerIgnoreLocalhost
+	cfg.CapacityRequest = *capacityRequest
+	cfg.ReuseportActivator = *reuseportActivator
+	if err := cfg.Write(opt); err != nil {
+		return fmt.Errorf("writing config: %w", err)
 	}
 
 	if runtime == runtimeK3S {
