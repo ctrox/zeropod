@@ -33,4 +33,10 @@ zeropod_checkpoint_memory_bytes{container="nginx",namespace="default",pod="nginx
 # HELP zeropod_restore_errors_total Total number of restore errors.
 # TYPE zeropod_restore_errors_total counter
 zeropod_restore_errors_total{container="nginx",namespace="default",pod="nginx"} 0
+# HELP zeropod_dry_run_scale_downs_total Total number of simulated dry-run scale downs.
+# TYPE zeropod_dry_run_scale_downs_total counter
+zeropod_dry_run_scale_downs_total{container="nginx",namespace="default",pod="nginx"} 0
+# HELP zeropod_dry_run_restores_total Total number of simulated dry-run restores.
+# TYPE zeropod_dry_run_restores_total counter
+zeropod_dry_run_restores_total{container="nginx",namespace="default",pod="nginx"} 0
 ```

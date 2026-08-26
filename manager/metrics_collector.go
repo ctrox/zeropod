@@ -26,6 +26,8 @@ const (
 	MetricCheckpointErrorsTotal = "checkpoint_errors_total"
 	MetricRestoreErrorsTotal    = "restore_errors_total"
 	MetricCheckpointMemoryBytes = "checkpoint_memory_bytes"
+	MetricDryRunScaleDownsTotal = "dry_run_scale_downs_total"
+	MetricDryRunRestoresTotal   = "dry_run_restores_total"
 )
 
 var (
@@ -47,6 +49,8 @@ type Collector struct {
 	checkpointErrors      *prometheus.CounterVec
 	restoreErrors         *prometheus.CounterVec
 	checkpointMemoryBytes *prometheus.GaugeVec
+	dryRunScaleDowns      *prometheus.CounterVec
+	dryRunRestores        *prometheus.CounterVec
 }
 
 func NewCollector(log *slog.Logger) *Collector {
@@ -101,6 +105,18 @@ func NewCollector(log *slog.Logger) *Collector {
 			Name:      MetricCheckpointMemoryBytes,
 			Help:      "Memory pages dumped by criu in bytes.",
 		}, commonLabels),
+
+		dryRunScaleDowns: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricDryRunScaleDownsTotal,
+			Help:      "Total number of simulated dry-run scale downs.",
+		}, commonLabels),
+
+		dryRunRestores: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: MetricsNamespace,
+			Name:      MetricDryRunRestoresTotal,
+			Help:      "Total number of simulated dry-run restores.",
+		}, commonLabels),
 	}
 }
 
@@ -145,6 +161,10 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 			c.checkpointErrors.With(l).Add(float64(metrics.CheckpointErrors))
 			c.restoreErrors.With(l).Add(float64(metrics.RestoreErrors))
 			c.checkpointMemoryBytes.With(l).Set(float64(metrics.CheckpointMemoryBytes))
+			if metrics.DryRun {
+				c.dryRunScaleDowns.With(l).Add(float64(metrics.DryRunScaleDowns))
+				c.dryRunRestores.With(l).Add(float64(metrics.DryRunRestores))
+			}
 		}
 	}
 	c.running.Collect(ch)
@@ -155,6 +175,8 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.checkpointErrors.Collect(ch)
 	c.restoreErrors.Collect(ch)
 	c.checkpointMemoryBytes.Collect(ch)
+	c.dryRunScaleDowns.Collect(ch)
+	c.dryRunRestores.Collect(ch)
 }
 
 func (c *Collector) Describe(ch chan<- *prometheus.Desc) {
@@ -198,4 +220,6 @@ func (c *Collector) deleteMetrics(status *v1.ContainerStatus) {
 	c.checkpointErrors.Delete(l)
 	c.restoreErrors.Delete(l)
 	c.checkpointMemoryBytes.Delete(l)
+	c.dryRunScaleDowns.Delete(l)
+	c.dryRunRestores.Delete(l)
 }

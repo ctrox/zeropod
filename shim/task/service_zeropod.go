@@ -281,6 +281,9 @@ func (w *wrapper) Exec(ctx context.Context, r *taskAPI.ExecProcessRequest) (*emp
 		}
 	}
 
+	// no-op unless dry-run is active and currently simulating scaled down
+	zeropodContainer.DryRunExec(ctx)
+
 	return w.service.Exec(ctx, r)
 }
 

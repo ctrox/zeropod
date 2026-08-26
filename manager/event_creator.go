@@ -20,6 +20,7 @@ const (
 	reasonScaledDown       = "Scaled down"
 	reasonCheckpointFailed = "Checkpoint failed"
 	reasonRestoreFailed    = "Restore failed"
+	reasonDryRun           = "Dry run"
 )
 
 type EventCreator struct {
@@ -44,24 +45,27 @@ func (ec *EventCreator) Handle(ctx context.Context, status *v1.ContainerStatus, 
 	clog.Info("status event")
 
 	message, reason := "", ""
-	switch status.Phase {
-	case v1.ContainerPhase_RUNNING:
+	switch {
+	case status.DryRun:
+		reason = reasonDryRun
+		message = fmt.Sprintf("Dry-run: container %s %s", status.Name, status.EventLog)
+	case status.Phase == v1.ContainerPhase_RUNNING:
 		reason = reasonRunning
 		// don't create an event if container was simply started without being restored
 		if status.EventDuration == nil || status.EventDuration.AsDuration() == 0 {
 			return nil
 		}
 		message = fmt.Sprintf("Restored container %s in %s", status.Name, status.EventDuration.AsDuration())
-	case v1.ContainerPhase_SCALED_DOWN:
+	case status.Phase == v1.ContainerPhase_SCALED_DOWN:
 		reason = reasonScaledDown
 		message = fmt.Sprintf("Scaled down container %s", status.Name)
 		if status.EventDuration != nil {
 			message += " in " + status.EventDuration.AsDuration().String()
 		}
-	case v1.ContainerPhase_CHECKPOINT_FAILED:
+	case status.Phase == v1.ContainerPhase_CHECKPOINT_FAILED:
 		reason = reasonCheckpointFailed
 		message = fmt.Sprintf("Checkpoint failed for container %s", status.Name)
-	case v1.ContainerPhase_RESTORE_FAILED:
+	case status.Phase == v1.ContainerPhase_RESTORE_FAILED:
 		reason = reasonRestoreFailed
 		message = fmt.Sprintf("Restore failed for container %s", status.Name)
 	}

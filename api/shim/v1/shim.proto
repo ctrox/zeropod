@@ -46,6 +46,7 @@ message ContainerStatus {
 	google.protobuf.Timestamp event_time = 6;
 	google.protobuf.Duration event_duration = 7;
 	string event_log = 8;
+	bool dry_run = 9;
 }
 
 message ContainerMetrics {
@@ -60,4 +61,7 @@ message ContainerMetrics {
     int64 checkpoint_errors = 9;
     int64 restore_errors = 10;
     uint64 checkpoint_memory_bytes = 11;
+    int64 dry_run_scale_downs = 12;
+    int64 dry_run_restores = 13;
+    bool dry_run = 14;
 }

@@ -16,6 +16,7 @@ func newMetrics(cfg *v1.Config, running bool) *v1.ContainerMetrics {
 		PodName:      cfg.PodName,
 		PodNamespace: cfg.PodNamespace,
 		Running:      running,
+		DryRun:       cfg.DryRun,
 	}
 }
 

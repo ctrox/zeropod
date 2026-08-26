@@ -265,6 +265,7 @@ type ContainerStatus struct {
 	EventTime     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=event_time,json=eventTime,proto3" json:"event_time,omitempty"`
 	EventDuration *durationpb.Duration   `protobuf:"bytes,7,opt,name=event_duration,json=eventDuration,proto3" json:"event_duration,omitempty"`
 	EventLog      string                 `protobuf:"bytes,8,opt,name=event_log,json=eventLog,proto3" json:"event_log,omitempty"`
+	DryRun        bool                   `protobuf:"varint,9,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -355,6 +356,13 @@ func (x *ContainerStatus) GetEventLog() string {
 	return ""
 }
 
+func (x *ContainerStatus) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
 type ContainerMetrics struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Name                   string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -368,6 +376,9 @@ type ContainerMetrics struct {
 	CheckpointErrors       int64                  `protobuf:"varint,9,opt,name=checkpoint_errors,json=checkpointErrors,proto3" json:"checkpoint_errors,omitempty"`
 	RestoreErrors          int64                  `protobuf:"varint,10,opt,name=restore_errors,json=restoreErrors,proto3" json:"restore_errors,omitempty"`
 	CheckpointMemoryBytes  uint64                 `protobuf:"varint,11,opt,name=checkpoint_memory_bytes,json=checkpointMemoryBytes,proto3" json:"checkpoint_memory_bytes,omitempty"`
+	DryRunScaleDowns       int64                  `protobuf:"varint,12,opt,name=dry_run_scale_downs,json=dryRunScaleDowns,proto3" json:"dry_run_scale_downs,omitempty"`
+	DryRunRestores         int64                  `protobuf:"varint,13,opt,name=dry_run_restores,json=dryRunRestores,proto3" json:"dry_run_restores,omitempty"`
+	DryRun                 bool                   `protobuf:"varint,14,opt,name=dry_run,json=dryRun,proto3" json:"dry_run,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -479,6 +490,27 @@ func (x *ContainerMetrics) GetCheckpointMemoryBytes() uint64 {
 	return 0
 }
 
+func (x *ContainerMetrics) GetDryRunScaleDowns() int64 {
+	if x != nil {
+		return x.DryRunScaleDowns
+	}
+	return 0
+}
+
+func (x *ContainerMetrics) GetDryRunRestores() int64 {
+	if x != nil {
+		return x.DryRunRestores
+	}
+	return 0
+}
+
+func (x *ContainerMetrics) GetDryRun() bool {
+	if x != nil {
+		return x.DryRun
+	}
+	return false
+}
+
 var File_shim_proto protoreflect.FileDescriptor
 
 const file_shim_proto_rawDesc = "" +
@@ -492,7 +524,7 @@ const file_shim_proto_rawDesc = "" +
 	"\x0fMetricsResponse\x12;\n" +
 	"\ametrics\x18\x01 \x03(\v2!.zeropod.shim.v1.ContainerMetricsR\ametrics\"\"\n" +
 	"\x10ContainerRequest\x12\x0e\n" +
-	"\x02id\x18\x01 \x01(\tR\x02id\"\xc6\x02\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\"\xdf\x02\n" +
 	"\x0fContainerStatus\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x19\n" +
@@ -502,7 +534,8 @@ const file_shim_proto_rawDesc = "" +
 	"\n" +
 	"event_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\teventTime\x12@\n" +
 	"\x0eevent_duration\x18\a \x01(\v2\x19.google.protobuf.DurationR\reventDuration\x12\x1b\n" +
-	"\tevent_log\x18\b \x01(\tR\beventLog\"\xae\x04\n" +
+	"\tevent_log\x18\b \x01(\tR\beventLog\x12\x17\n" +
+	"\adry_run\x18\t \x01(\bR\x06dryRun\"\xa0\x05\n" +
 	"\x10ContainerMetrics\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
 	"\bpod_name\x18\x02 \x01(\tR\apodName\x12#\n" +
@@ -515,7 +548,10 @@ const file_shim_proto_rawDesc = "" +
 	"\x11checkpoint_errors\x18\t \x01(\x03R\x10checkpointErrors\x12%\n" +
 	"\x0erestore_errors\x18\n" +
 	" \x01(\x03R\rrestoreErrors\x126\n" +
-	"\x17checkpoint_memory_bytes\x18\v \x01(\x04R\x15checkpointMemoryBytes*g\n" +
+	"\x17checkpoint_memory_bytes\x18\v \x01(\x04R\x15checkpointMemoryBytes\x12-\n" +
+	"\x13dry_run_scale_downs\x18\f \x01(\x03R\x10dryRunScaleDowns\x12(\n" +
+	"\x10dry_run_restores\x18\r \x01(\x03R\x0edryRunRestores\x12\x17\n" +
+	"\adry_run\x18\x0e \x01(\bR\x06dryRun*g\n" +
 	"\x0eContainerPhase\x12\x0f\n" +
 	"\vSCALED_DOWN\x10\x00\x12\v\n" +
 	"\aRUNNING\x10\x01\x12\f\n" +

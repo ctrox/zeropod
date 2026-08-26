@@ -22,6 +22,10 @@ import (
 )
 
 func (c *Container) scaleDown(ctx context.Context) error {
+	if c.cfg.DryRun {
+		return c.dryRunScaleDown(ctx)
+	}
+
 	if c.ScaledDown() {
 		return nil
 	}

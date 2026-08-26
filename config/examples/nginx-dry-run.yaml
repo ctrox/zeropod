@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-dry-run
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx-dry-run
+  template:
+    metadata:
+      labels:
+        app: nginx-dry-run
+      annotations:
+        zeropod.ctrox.dev/scaledown-duration: 15s
+        zeropod.ctrox.dev/dry-run: "true"
+    spec:
+      runtimeClassName: zeropod
+      containers:
+        - image: nginx
+          name: nginx
+          ports:
+            - containerPort: 80
+          livenessProbe:
+            periodSeconds: 1
+            httpGet:
+              port: 80
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi

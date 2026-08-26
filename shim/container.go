@@ -50,6 +50,9 @@ type Container struct {
 	cgroup           any
 	logPath          string
 	scaledDown       bool
+	dryRunScaledDown bool
+	dryRunSince      time.Time
+	dryRunPollTimer  *time.Timer
 	skipStart        bool
 	netNS            ns.NetNS
 	scaleDownTimer   *time.Timer
@@ -300,6 +303,19 @@ func (c *Container) sendFailEvent(phase v1.ContainerPhase, l string) {
 	c.sendEvent(status)
 }
 
+// sendDryRunEvent sends a status event carrying a simulated dry-run action in
+// EventLog, with DryRun set and the real phase left untouched (dry-run never
+// changes it), so the manager can create a distinct Kubernetes Event without
+// affecting phase-based logic like in-place resource scaling or status
+// labels.
+func (c *Container) sendDryRunEvent(eventLog string) {
+	status := c.Status()
+	status.DryRun = true
+	status.EventTime = timestamppb.Now()
+	status.EventLog = eventLog
+	c.sendEvent(status)
+}
+
 func (c *Container) SetSkipStart(skip bool) {
 	c.skipStart = skip
 }
@@ -384,6 +400,7 @@ func (c *Container) DeleteCheckpointedPID(pid int) {
 func (c *Container) Stop(ctx context.Context) {
 	c.cancelInit()
 	c.CancelScaleDown()
+	c.cancelDryRunPoll()
 	status := c.Status()
 	status.Phase = v1.ContainerPhase_STOPPING
 	c.sendEvent(status)
@@ -657,4 +674,6 @@ func (c *Container) clearMetrics() {
 	c.metrics.LastRestoreDuration = nil
 	c.metrics.CheckpointErrors = 0
 	c.metrics.RestoreErrors = 0
+	c.metrics.DryRunScaleDowns = 0
+	c.metrics.DryRunRestores = 0
 }

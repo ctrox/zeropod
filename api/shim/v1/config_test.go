@@ -60,6 +60,20 @@ func TestNewConfig(t *testing.T) {
 				assert.False(t, cfg.DisableCheckpointing)
 			},
 		},
+		"dry run": {
+			annotations: map[string]string{
+				DryRunAnnotationKey: "true",
+			},
+			assertCfg: func(t *testing.T, cfg *Config) {
+				assert.True(t, cfg.DryRun)
+			},
+		},
+		"dry run default false": {
+			annotations: map[string]string{},
+			assertCfg: func(t *testing.T, cfg *Config) {
+				assert.False(t, cfg.DryRun)
+			},
+		},
 		"predump": {
 			annotations: map[string]string{
 				PreDumpAnnotationKey: "true",
@@ -118,4 +132,18 @@ func TestNewConfig(t *testing.T) {
 			tc.assertCfg(t, cfg)
 		})
 	}
+}
+
+func TestNewConfigDryRunMigrateConflict(t *testing.T) {
+	cfg, err := NewConfig(context.Background(), &specs.Spec{
+		Annotations: map[string]string{
+			CRIContainerNameAnnotation: "app",
+			DryRunAnnotationKey:        "true",
+			MigrateAnnotationKey:       "app",
+			LiveMigrateAnnotationKey:   "app",
+		},
+	})
+	require.NoError(t, err)
+	assert.True(t, cfg.DryRun)
+	assert.False(t, cfg.AnyMigrationEnabled())
 }

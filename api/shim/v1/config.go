@@ -26,6 +26,7 @@ const (
 	ContainerNamesAnnotationKey      = "zeropod.ctrox.dev/container-names"
 	ScaleDownDurationAnnotationKey   = "zeropod.ctrox.dev/scaledown-duration"
 	DisableCheckpoiningAnnotationKey = "zeropod.ctrox.dev/disable-checkpointing"
+	DryRunAnnotationKey              = "zeropod.ctrox.dev/dry-run"
 	PreDumpAnnotationKey             = "zeropod.ctrox.dev/pre-dump"
 	MigrateAnnotationKey             = "zeropod.ctrox.dev/migrate"
 	LiveMigrateAnnotationKey         = "zeropod.ctrox.dev/live-migrate"
@@ -63,6 +64,7 @@ var ContainerdAnnotations = []string{
 	ContainerNamesAnnotationKey,
 	ScaleDownDurationAnnotationKey,
 	DisableCheckpoiningAnnotationKey,
+	DryRunAnnotationKey,
 	PreDumpAnnotationKey,
 	MigrateAnnotationKey,
 	LiveMigrateAnnotationKey,
@@ -79,6 +81,7 @@ type AnnotationConfig struct {
 	Ports                 []uint16
 	ScaleDownDuration     time.Duration
 	DisableCheckpointing  bool
+	DryRun                bool
 	PreDump               bool
 	Migrate               []string
 	LiveMigrate           string
@@ -180,6 +183,27 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		migrate = strings.Split(migrateValue, containersDelim)
 	}
 
+	dryRunValue := spec.Annotations[DryRunAnnotationKey]
+	dryRun := false
+	if dryRunValue != "" {
+		dryRun, err = strconv.ParseBool(dryRunValue)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	liveMigrate := spec.Annotations[LiveMigrateAnnotationKey]
+	if dryRun {
+		if slices.Contains(migrate, containerName) {
+			log.G(ctx).Warnf("dry-run (%s) is set, disabling migrate for container %q", DryRunAnnotationKey, containerName)
+			migrate = slices.DeleteFunc(migrate, func(s string) bool { return s == containerName })
+		}
+		if liveMigrate != "" && liveMigrate == containerName {
+			log.G(ctx).Warnf("dry-run (%s) is set, disabling live-migrate for container %q", DryRunAnnotationKey, containerName)
+			liveMigrate = ""
+		}
+	}
+
 	ns, ok := namespaces.Namespace(ctx)
 	if !ok {
 		ns = defaultContainerdNS
@@ -249,9 +273,10 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		Ports:                 containerPorts,
 		ScaleDownDuration:     dur,
 		DisableCheckpointing:  disableCheckpointing,
+		DryRun:                dryRun,
 		PreDump:               preDump,
 		Migrate:               migrate,
-		LiveMigrate:           spec.Annotations[LiveMigrateAnnotationKey],
+		LiveMigrate:           liveMigrate,
 		ZeropodContainerNames: containerNames,
 		ContainerName:         containerName,
 		ContainerType:         containerType,
