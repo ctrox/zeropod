@@ -16,7 +16,7 @@ jobs:
       - uses: dominikh/staticcheck-action@024238d2898c874f26d723e7d0ff4308c35589a2 # v1.4.0
         with:
           install-go: false
-          version: "2025.1.1"
+          version: "2026.2.1"
 
   golangci:
     name: lint
