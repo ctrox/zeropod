@@ -48,6 +48,8 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.16.0
 )
 
+replace github.com/checkpoint-restore/go-criu/v8 => github.com/ctrox/go-criu/v8 v8.0.0-20260912115153-27542971b2c2
+
 require (
 	al.essio.dev/pkg/shellescape v1.5.1 // indirect
 	cyphar.com/go-pathrs v0.2.1 // indirect

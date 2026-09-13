@@ -15,14 +15,23 @@ import (
 	nodev1 "github.com/ctrox/zeropod/api/node/v1"
 )
 
+var (
+	containerID = flag.String("id", "", "target container id")
+	basePath    = flag.String("base-path", "", "override the default snapshot base path")
+)
+
 // netinfo has a single purpose: it extracts the [activator.Listeners] from a
 // criu snapshot for when we migrate from an older version where the snapshot
 // did not contain a zeropod_listeners.json. This is done in a saparate binary
 // as importing the crit grpc defs would balloon the binary and memory usage of
 // the shim.
 func main() {
-	containerID := flag.String("id", "", "target container id")
 	flag.Parse()
+
+	if *basePath != "" {
+		nodev1.SetImageBasePath(*basePath)
+	}
+
 	listeners, err := getListenersFromImage(*containerID)
 	if err != nil {
 		slog.Error("getting listeners", "error", err)
@@ -91,6 +100,7 @@ func getListenersFromImage(containerID string) (activator.Listeners, error) {
 		sockets = append(sockets, activator.Listener{
 			Port:    uint16(isk.GetSrcPort()),
 			Network: network,
+			UID:     uint64(isk.GetUid()),
 		})
 	}
 	return sockets, nil
