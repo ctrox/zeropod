@@ -245,7 +245,7 @@ func (act *Activator) Start(ctx context.Context, pid int, listeners activator.Li
 				}
 			}
 			act.mu.Lock()
-			act.listeners[key] = &listenerGroup{reuse: objs}
+			act.listeners[key] = &listenerGroup{reuse: objs, app: appListener{uid: ln.UID}}
 			act.mu.Unlock()
 		}
 		if err := act.Reset(); err != nil {
