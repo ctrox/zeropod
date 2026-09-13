@@ -42,6 +42,7 @@ var (
 	trackerIgnoreLocalhost = flag.Bool("tracker-ignore-localhost", v1.DefaultTrackerIgnoreLocalhost, "set to ignore traffic from localhost in socket tracker")
 	capacityRequest        = flag.Bool("capacity-request", v1.DefaultCapacityRequest, "enable shim to make a capacity request before restoring")
 	reuseportActivator     = flag.Bool("reuseport-activator", v1.DefaultReuseportActivator, "enable the new reuseport activator")
+	restoreOverhead        = flag.Float64("restore-overhead", v1.DefaultRestoreOverhead, "the amount of memory limit overhead to allow during restores")
 	//lint:ignore U1000 kept for compatibility
 	probeBinaryName = flag.String("probe-binary-name", v1.DefaultProbeBinaryName, "Deprecated: this is no longer used, flag will be removed in future release")
 
@@ -259,6 +260,7 @@ func installRuntime(ctx context.Context, runtime containerRuntime) error {
 	cfg.TrackerIgnoreLocalhost = *trackerIgnoreLocalhost
 	cfg.CapacityRequest = *capacityRequest
 	cfg.ReuseportActivator = *reuseportActivator
+	cfg.RestoreOverhead = *restoreOverhead
 	if err := cfg.Write(opt); err != nil {
 		return fmt.Errorf("writing config: %w", err)
 	}

@@ -15,7 +15,7 @@ func GetSpec(bundlePath string) (*specs.Spec, error) {
 	var bundleSpec specs.Spec
 	bundleConfigContents, err := os.ReadFile(filepath.Join(bundlePath, "config.json"))
 	if err != nil {
-		return nil, fmt.Errorf("failed to read budle: %w", err)
+		return nil, fmt.Errorf("failed to read bundle: %w", err)
 	}
 
 	if err := json.Unmarshal(bundleConfigContents, &bundleSpec); err != nil {
@@ -23,6 +23,20 @@ func GetSpec(bundlePath string) (*specs.Spec, error) {
 	}
 
 	return &bundleSpec, nil
+}
+
+func WriteSpec(spec *specs.Spec, bundlePath string) error {
+	bundleFile, err := os.Create(filepath.Join(bundlePath, "config.json"))
+	if err != nil {
+		return fmt.Errorf("failed to open bundle: %w", err)
+	}
+	defer bundleFile.Close()
+
+	if err := json.NewEncoder(bundleFile).Encode(spec); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // GetNetworkNS reads the bundle's OCI spec and returns the network NS path of

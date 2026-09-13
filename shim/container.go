@@ -71,6 +71,7 @@ type Container struct {
 	metrics          *v1.ContainerMetrics
 	runcVersion      string
 	lastConfigReload time.Time
+	restoreOverhead  restoreOverhead
 }
 
 func New(ctx context.Context, cfg *v1.Config, r *taskAPI.CreateTaskRequest, pt stdio.Platform, events chan *v1.ContainerStatus) (*Container, error) {
@@ -133,6 +134,7 @@ func (c *Container) Register(ctx context.Context, container *runc.Container) err
 	}
 	c.process = p
 	c.initialProcess = p
+	c.restoreOverhead = newRestoreOverhead(ctx, c.cfg, container.Pid())
 
 	if c.SkipStart() {
 		c.setPhaseNotify(v1.ContainerPhase_SCALED_DOWN, 0)
@@ -180,6 +182,7 @@ func (c *Container) reloadConfig(ctx context.Context) error {
 			return err
 		}
 	}
+	c.restoreOverhead = newRestoreOverhead(ctx, c.cfg, c.Pid())
 	c.lastConfigReload = c.cfg.LastModified()
 	return nil
 }

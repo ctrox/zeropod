@@ -70,6 +70,14 @@ func (c *Container) Restore(ctx context.Context) (*runc.Container, process.Proce
 }
 
 func (c *Container) restore(ctx context.Context) (*runc.Container, process.Process, error) {
+	if err := c.restoreOverhead.apply(c.Bundle, c.cfg.Spec); err != nil {
+		log.G(ctx).WithError(err).Error("applying cgroups overhead")
+	}
+	defer func() {
+		if err := c.restoreOverhead.revert(c.Bundle, c.cfg.Spec); err != nil {
+			log.G(ctx).WithError(err).Error("reverting cgroups overhead")
+		}
+	}()
 	// cleanup image regardless of success/failure
 	defer c.deleteImage(ctx)
 	beforeRestore := time.Now()

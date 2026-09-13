@@ -57,6 +57,7 @@ const (
 	DefaultTrackerIgnoreLocalhost = true
 	DefaultCapacityRequest        = false
 	DefaultReuseportActivator     = false
+	DefaultRestoreOverhead        = 1.0
 )
 
 var ContainerdAnnotations = []string{
@@ -100,10 +101,11 @@ type AnnotationConfig struct {
 }
 
 type Config struct {
-	TrackerIgnoreLocalhost bool   `json:"trackerIgnoreLocalhost"`
-	CapacityRequest        bool   `json:"capacityRequest"`
-	ProbeAddress           string `json:"probeAddress"`
-	ReuseportActivator     bool   `json:"reuseportActivator"`
+	TrackerIgnoreLocalhost bool    `json:"trackerIgnoreLocalhost"`
+	CapacityRequest        bool    `json:"capacityRequest"`
+	ProbeAddress           string  `json:"probeAddress"`
+	ReuseportActivator     bool    `json:"reuseportActivator"`
+	RestoreOverhead        float64 `json:"restoreOverhead"`
 	AnnotationConfig       `json:"-"`
 }
 
@@ -257,6 +259,7 @@ func NewConfig(ctx context.Context, spec *specs.Spec) (*Config, error) {
 		TrackerIgnoreLocalhost: DefaultTrackerIgnoreLocalhost,
 		CapacityRequest:        DefaultCapacityRequest,
 		ReuseportActivator:     DefaultReuseportActivator,
+		RestoreOverhead:        DefaultRestoreOverhead,
 	}
 	path, err := relativeConfigFile()
 	if err != nil {
