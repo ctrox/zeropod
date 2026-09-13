@@ -242,7 +242,7 @@ func TestMigration(t *testing.T) {
 				cancel()
 				tc.afterMigration(t, tc)
 				if tc.expectDataNotMigrated {
-					_, err := readPodData(t, migrationPod(t, tc.deploy))
+					_, err := readPodData(migrationPod(t, tc.deploy))
 					assert.Error(t, err)
 				} else {
 					data, err := readPodDataEventually(t, migrationPod(t, tc.deploy))
@@ -276,13 +276,13 @@ func migrationPod(t testing.TB, deploy *appsv1.Deployment) *corev1.Pod {
 
 func writePodData(t testing.TB, pod *corev1.Pod) {
 	assert.Eventually(t, func() bool {
-		_, _, err := podExec(e2e.cfg, pod, fmt.Sprintf("echo %s > /containerdata", t.Name()))
+		_, _, err := podExec(e2e.cfg, pod, fmt.Sprintf("echo %s > containerdata", t.Name()))
 		return err == nil
 	}, time.Second*10, time.Second)
 }
 
-func readPodData(t testing.TB, pod *corev1.Pod) (string, error) {
-	data, _, err := podExec(e2e.cfg, pod, "cat /containerdata")
+func readPodData(pod *corev1.Pod) (string, error) {
+	data, _, err := podExec(e2e.cfg, pod, "cat containerdata")
 	return data, err
 }
 
@@ -290,7 +290,7 @@ func readPodDataEventually(t testing.TB, pod *corev1.Pod) (string, error) {
 	var data string
 	var err error
 	if !assert.Eventually(t, func() bool {
-		data, err = readPodData(t, pod)
+		data, err = readPodData(pod)
 		return err == nil
 	}, time.Second*10, time.Second) {
 		return "", err
